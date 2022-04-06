@@ -1,0 +1,160 @@
+import numpy as np
+from datetime import date
+from mathsom import numerics, solvers
+from .. import rates
+from .. import dates
+
+
+class Coupon:
+    def __init__(self, amortization: float, interest: float, residual: float, start_date: date, end_date: date, accrue_rate_convention: rates.RateConvention):
+        self.amortization = float(amortization)
+        self.interest = float(interest)
+        self.flow = self.amortization + self.interest
+        self.residual = float(residual)
+        if type(start_date)!=date or type(end_date)!=date:
+            try:
+                start_date = start_date.date()
+            except:
+                raise Exception(f'Could not cast start_date format to datetime.date:\n{type(start_date)} type received.')
+            try:
+                end_date = end_date.date()
+            except:
+                raise Exception(f'Could not cast end_date format to datetime.date:\n{type(end_date)} type received.')
+        self.start_date = start_date
+        self.end_date = end_date
+        self.wf = (self.residual + self.interest) / self.residual
+        self.accrue_rate = rates.Rate(accrue_rate_convention, 0)
+        rate_value = self.accrue_rate.get_rate_value_from_wf(self.wf, start_date, end_date)
+        self.accrue_rate.rate_value = rate_value
+        
+    def get_accrued_interest(self, date: date, accrue_rate=None) -> float:
+        accrue_rate = self.accrue_rate if accrue_rate is None else accrue_rate
+        if date >= self.end_date or date <= self.start_date:
+            return 0
+        accrued_interest = accrue_rate.get_accrued_interest(self.residual, self.start_date, date)
+        return accrued_interest
+    
+    
+class Coupons:
+    def __init__(self, coupons: list):
+        self.coupons = coupons
+        self.sort()
+
+    def copy(self):
+        return Coupons(self.coupons)
+
+    def sort(self):
+        self.coupons = sorted(self.coupons, key=lambda c: c.start_date)
+        self.first_start_date = self.coupons[0].start_date
+        self.flows = self.get_flows()
+        self.end_dates = self.get_end_dates()
+    
+    def get_accrue_rate(self) -> float:
+        return self.coupons[0].accrue_rate
+    
+    def get_flows(self) -> np.array(float):
+        return np.array([c.flow for c in self.coupons])
+    
+    def get_flows_between_dates(self, t1, t2) -> np.array(float):
+        return np.array([c.flow for c in self.coupons if t1 < c.end_date <= t2])
+    
+    def get_end_dates(self) -> np.array(date):
+        return np.array([c.end_date for c in self.coupons])
+    
+    def get_flows_maturities(self, date: date):
+        return dates.get_day_count(date, self.end_dates, dates.DayCountConvention.Actual)
+    
+    def get_current_coupon(self, date: date) -> Coupon:
+        for c in self.coupons:
+            if c.start_date <= date and c.end_date > date:
+                return c
+        return None
+    
+    def get_residual_amount(self, date: date) -> float:
+        current_coupon = self.get_current_coupon(date)
+        residual = current_coupon.residual
+        return residual
+
+
+class Bond:
+    def __init__(self, **kwargs):
+        self.coupons = kwargs['coupons']
+        self.currency = kwargs['currency']
+        self.notional = kwargs['notional']
+        self.start_date = self.coupons.first_start_date
+        self.accrue_rate = self.coupons.get_accrue_rate()
+        self.flows_amount = self.coupons.get_flows()
+
+    def copy(self):
+        return Bond({'coupons': self.coupons, 'currency': self.currency, 'notional': self.notional})
+        
+    def get_flows_pv(self, date: date, irr_value: float, rate_convention):
+        irr = rates.Rate(rate_convention, irr_value)
+        end_dates = self.coupons.get_end_dates()
+        future_flows_mask = end_dates > date
+        wealth_factors = irr.get_wealth_factor(date, end_dates)
+        pvs = self.flows_amount  * future_flows_mask / wealth_factors
+        return pvs
+    
+    def get_present_value(self, date: date, irr_value: float, rate_convention) -> float:
+        pvs = self.get_flows_pv(date, irr_value, rate_convention)
+        total_pv = sum(pvs)
+        return total_pv
+    
+    def get_present_value_zc(self, date: date, zc_curve: rates.ZeroCouponCurve) -> float:
+        end_dates = self.coupons.get_end_dates()
+        future_flows_mask = end_dates > date
+        flows_dfs = zc_curve.get_dfs(end_dates) * future_flows_mask
+        pvs = self.flows_amount * flows_dfs 
+        pv = sum(pvs)
+        return pv
+    
+    def get_irr(self, date: date, present_value: float, irr_rate_convention) -> float:
+        irr_initial_guess = self.accrue_rate.rate_value
+        objective_value = present_value
+        args = [date, irr_initial_guess, irr_rate_convention]
+        args_irr_index = 1
+        irr_value = solvers.newton_rhapson_solver(objective_value, self.get_present_value, irr_initial_guess, args, args_irr_index)
+        irr = rates.Rate(irr_rate_convention, irr_value)
+        return irr
+    
+    def get_par_value(self, date: date, decimals: int=8) -> float:
+        current_coupon = self.coupons.get_current_coupon(date)
+        par_value = current_coupon.residual + current_coupon.get_accrued_interest(date)
+        return round(par_value, decimals)
+    
+    def get_price(self, date: date, irr: rates.Rate, price_decimals: int=4, par_value_decimals: int=8) -> float:
+        irr_value = irr.rate_value
+        irr_rate_convention = irr.rate_convention
+        pv  = self.get_present_value(date, irr_value, irr_rate_convention)
+        par_value = self.get_par_value(date, decimals=par_value_decimals)
+        price = round(100.0 * pv/par_value, price_decimals)
+        return price, par_value
+    
+    def get_duration(self, date: date, irr: rates.Rate, day_count_convention: dates.DayCountConvention=dates.DayCountConvention.Actual, time_fraction_base: int=365) -> float:
+        end_dates = self.coupons.get_end_dates()
+        tenors = dates.get_time_fraction(date, end_dates, day_count_convention, time_fraction_base)
+        pvs = self.get_flows_pv(date, irr.rate_value, irr.rate_convention)
+        total_pv = sum(pvs)
+        duration = sum(pvs * tenors) / total_pv
+        return duration
+    
+    def get_dv01_approx(self, date: date, irr: rates.Rate, fx=1.0) -> float:
+        dur = self.get_duration(date, irr)
+        pv = self.get_present_value(date, irr.rate_value, irr.rate_convention) / 100
+        dv01 = - pv * dur * fx / 10_000
+        dv01 *= self.notional 
+        return dv01
+    
+    def get_dv01(self, date: date, irr: rates.Rate, fx=1.0) -> float:
+        irr_value = irr.rate_value
+        irr_rate_convention = irr.rate_convention
+        valuation_parameters = [date, irr_value, irr_rate_convention]
+        valuation_function = self.get_present_value
+        variable_derivation_index = 1
+        slope = numerics.differentiate(valuation_function, irr_value, valuation_parameters, variable_derivation_index)
+        slope /= 100 # Makes flows Notional = 1
+        dv01 = slope / 10_000 # DV01 of Notional = 1
+        dv01 *= self.notional # Adjust to Notional = self.notional
+        dv01 *= fx # Adjust for fx
+        return dv01
