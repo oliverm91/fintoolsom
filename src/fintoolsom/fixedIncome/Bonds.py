@@ -183,7 +183,6 @@ class Bond:
         ----
             duration (float): The bond duration.
         '''
-
         end_dates = self.coupons.get_end_dates()
         tenors = dates.get_time_fraction(date, end_dates, day_count_convention, time_fraction_base)
         pvs = self.get_flows_pv(date, irr.rate_value, irr.rate_convention)
