@@ -1,6 +1,7 @@
 import numpy as np
 from datetime import date
 from fintoolsom.rates.Rates import RateConvention, Rate
+from collections.abc import Sequence
 from mathsom import numerics, solvers
 from .. import rates
 from .. import dates
@@ -37,7 +38,7 @@ class Coupon:
     
     
 class Coupons:
-    def __init__(self, coupons: list):
+    def __init__(self, coupons: Sequence):
         self.coupons = coupons
         self.sort()
 

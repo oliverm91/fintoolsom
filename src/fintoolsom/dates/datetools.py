@@ -2,7 +2,8 @@ from datetime import timedelta, date, datetime
 from dateutil.relativedelta import relativedelta
 from enum import Enum
 import calendar
-from collections.abc import Iterable
+from collections.abc import Sequence
+from typing import Union
 import numpy as np
 
 
@@ -106,18 +107,18 @@ def get_business_day_count(start_date: date, end_date: date, holidays: list=[]) 
             count += 1    
     return count
 
-def get_day_count(start_date:date, end_date:date, day_count_convention: DayCountConvention, holidays: list=[]) -> int:
-    if isinstance(start_date, Iterable) and isinstance(end_date, Iterable):
+def get_day_count(start_date: Union(Sequence, date), end_date:Union(Sequence, date), day_count_convention: DayCountConvention, holidays: list=[]) -> Union(np.ndarray(int), int):
+    if isinstance(start_date, Sequence) and isinstance(end_date, Sequence):
         if len(start_date) == len(end_date):
             start_end_dates = zip(start_date, end_date)
             result = np.array([get_day_count(s, e, day_count_convention) for s, e in start_end_dates])
             return result
         else:
             raise Exception(f'start_date vector length {len(start_date)} and end_date vector length {len(end_date)} mismatch.')
-    if isinstance(start_date, Iterable) and type(end_date)==date:
+    if isinstance(start_date, Sequence) and type(end_date)==date:
         end_date = [end_date for i in range(len(start_date))]
         return get_day_count(start_date, end_date, day_count_convention)
-    if isinstance(end_date, Iterable) and type(start_date)==date:
+    if isinstance(end_date, Sequence) and type(start_date)==date:
         start_date = [start_date for i in range(len(end_date))]
         return get_day_count(start_date, end_date, day_count_convention)
     
@@ -177,7 +178,7 @@ def get_day_count(start_date:date, end_date:date, day_count_convention: DayCount
         count = 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
     return count
 
-def get_time_fraction(start_date: date, end_date: date, day_count_convention: DayCountConvention, base_convention: float=360.0) -> float:
+def get_time_fraction(start_date: Union(Sequence, date), end_date: Union(Sequence, date), day_count_convention: DayCountConvention, base_convention: float=360.0) -> Union(np.ndarray(float), float):
     day_count = get_day_count(start_date, end_date, day_count_convention)
     time_fraction = day_count / base_convention
     return time_fraction
