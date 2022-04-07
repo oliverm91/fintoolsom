@@ -59,14 +59,13 @@ class Rate:
         self.rate_convention = rate_convention
         self.rate_value = self.get_rate_value_from_wf(current_wf, start_date, end_date)
 
-def get_rate_from_df(self, df: Union(np.ndarray(float), float), start_date, end_date, rate_convention: RateConvention) -> Union(Sequence, Rate):
+def get_rate_from_df(df: Union[np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
     wf = 1/df
-    return self.get_rate_from_wf(wf, start_date, end_date, rate_convention)
+    return get_rate_from_wf(wf, start_date, end_date, rate_convention)
 
-def get_rate_from_wf(self, wf: Union(np.ndarray(float), float), start_date, end_date, rate_convention: RateConvention) -> Union(Sequence, Rate):
+def get_rate_from_wf(wf: Union[np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
     time_fraction = dates.get_time_fraction(start_date, end_date, rate_convention.day_count_convention, rate_convention.time_fraction_base)
     
-    rate_value = self.rate_value # variable initialization
     ic = rate_convention.interest_convention
     if ic == InterestConvention.Linear:
         rate_value = (wf - 1) / time_fraction
@@ -75,7 +74,8 @@ def get_rate_from_wf(self, wf: Union(np.ndarray(float), float), start_date, end_
     elif ic == InterestConvention.Exponential:
         rate_value = np.log(wf) / time_fraction
         
-    if isinstance(start_date,  Union(Sequence, np.ndarray)):
+    if isinstance(start_date,  Union[Sequence, np.ndarray]):
         return [Rate(rate_convention, rv) for rv in rate_value]    
     else:
         return Rate(rate_convention, rate_value)
+

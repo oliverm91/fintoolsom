@@ -107,7 +107,7 @@ def get_business_day_count(start_date: date, end_date: date, holidays: list=[]) 
             count += 1    
     return count
 
-def get_day_count(start_date: Union(Sequence, date), end_date:Union(Sequence, date), day_count_convention: DayCountConvention, holidays: list=[]) -> Union(np.ndarray(int), int):
+def get_day_count(start_date: Union[Sequence, date], end_date: Union[Sequence, date], day_count_convention: DayCountConvention, holidays: list=[]) -> Union[np.ndarray, int]:
     if isinstance(start_date, Sequence) and isinstance(end_date, Sequence):
         if len(start_date) == len(end_date):
             start_end_dates = zip(start_date, end_date)
@@ -178,7 +178,7 @@ def get_day_count(start_date: Union(Sequence, date), end_date:Union(Sequence, da
         count = 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
     return count
 
-def get_time_fraction(start_date: Union(Sequence, date), end_date: Union(Sequence, date), day_count_convention: DayCountConvention, base_convention: float=360.0) -> Union(np.ndarray(float), float):
+def get_time_fraction(start_date: Union[Sequence, date], end_date: Union[Sequence, date], day_count_convention: DayCountConvention, base_convention: float=360.0) -> Union[np.ndarray, float]:
     day_count = get_day_count(start_date, end_date, day_count_convention)
     time_fraction = day_count / base_convention
     return time_fraction

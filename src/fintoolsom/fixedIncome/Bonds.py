@@ -54,13 +54,13 @@ class Coupons:
     def get_accrue_rate(self) -> float:
         return self.coupons[0].accrue_rate
     
-    def get_flows(self) -> np.array(float):
+    def get_flows(self) -> np.ndarray:
         return np.array([c.flow for c in self.coupons])
     
-    def get_flows_between_dates(self, t1, t2) -> np.array(float):
+    def get_flows_between_dates(self, t1, t2) -> np.ndarray:
         return np.array([c.flow for c in self.coupons if t1 < c.end_date <= t2])
     
-    def get_end_dates(self) -> np.array(date):
+    def get_end_dates(self) -> np.ndarray:
         return np.array([c.end_date for c in self.coupons])
     
     def get_flows_maturities(self, date: date):
