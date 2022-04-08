@@ -104,7 +104,7 @@ def get_business_day_count(start_date: date, end_date: date, holidays: list=[]) 
     while ref_date < end_date:
         ref_date += timedelta(days=1)
         if is_business_date(ref_date, holidays):
-            count += 1    
+            count += 1
     return count
 
 def get_day_count(start_date: Union[Sequence, date], end_date: Union[Sequence, date], day_count_convention: DayCountConvention, holidays: list=[]) -> Union[np.ndarray, int]:
