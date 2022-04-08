@@ -61,7 +61,7 @@ class ZeroCouponCurve:
         dfs = dfs*future_tenors_mask + 1 * np.invert(future_tenors_mask)
         return dfs
 
-    def get_dfs_fwds(self, start_dates, end_dates) -> Union(np.ndarray(float), float):
+    def get_dfs_fwds(self, start_dates, end_dates) -> Union[np.ndarray(float), float]:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         end_dfs = self.get_dfs(end_dates)
@@ -69,17 +69,17 @@ class ZeroCouponCurve:
         fwds = end_dfs/start_dfs
         return fwds
 
-    def get_wfs(self, dates) -> Union(np.ndarray(float), float):
+    def get_wfs(self, dates) -> Union[np.ndarray(float), float]:
         return 1 / self.get_dfs(dates)
 
-    def get_wfs_fwds(self, start_dates, end_dates) -> Union(np.ndarray(float), float):
+    def get_wfs_fwds(self, start_dates, end_dates) -> Union[np.ndarray(float), float]:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         df_fwds = self.get_dfs_fwds(start_dates, end_dates)
         wfs_fwds = 1 / df_fwds
         return wfs_fwds
     
-    def get_forward_rates(self, start_dates: Union(Sequence, np.ndarray), end_dates: Union(Sequence, np.ndarray), rate_convention: rates.RateConvention) -> Sequence:
+    def get_forward_rates(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention) -> Sequence:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         start_wfs = self.get_wfs(start_dates)
@@ -88,7 +88,7 @@ class ZeroCouponCurve:
         fwd_rates = rates.get_rate_from_wf(fwd_wfs, start_dates, end_dates, rate_convention)
         return fwd_rates
 
-    def get_forward_rates_values(self, start_dates: Union(Sequence, np.ndarray), end_dates: Union(Sequence, np.ndarray), rate_convention: rates.RateConvention=None) -> np.ndarray(float):
+    def get_forward_rates_values(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention=None) -> np.ndarray(float):
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")        
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention)
