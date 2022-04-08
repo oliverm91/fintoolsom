@@ -1,10 +1,10 @@
 import numpy as np
 from datetime import date
-from fintoolsom.rates.Rates import RateConvention, Rate
 from collections.abc import Sequence
 from mathsom import numerics, solvers
 from .. import rates
 from .. import dates
+from ..rates import Rate, RateConvention, get_rate_from_wf
 
 
 class Coupon:
@@ -25,9 +25,7 @@ class Coupon:
         self.start_date = start_date
         self.end_date = end_date
         self.wf = (self.residual + self.interest) / self.residual
-        self.accrue_rate = rates.Rate(accrue_rate_convention, 0)
-        rate_value = self.accrue_rate.get_rate_value_from_wf(self.wf, start_date, end_date)
-        self.accrue_rate.rate_value = rate_value
+        self.accrue_rate = get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
         
     def get_accrued_interest(self, date: date, accrue_rate=None) -> float:
         accrue_rate = self.accrue_rate if accrue_rate is None else accrue_rate

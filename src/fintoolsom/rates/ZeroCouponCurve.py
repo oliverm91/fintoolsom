@@ -31,7 +31,7 @@ class ZeroCouponCurve:
     def set_tenors(self):
         self.tenors = self.get_tenors()
     
-    def get_tenors(self) -> np.ndarray(int):
+    def get_tenors(self) -> np.ndarray:
         points_dates = [cp.date for cp in self.curve_points]
         tenors = dates.get_day_count(self.curve_date, points_dates, dates.DayCountConvention.Actual)
         return tenors
@@ -54,14 +54,14 @@ class ZeroCouponCurve:
         self.curve_points.append(curve_point)
         self.sort()
     
-    def get_dfs(self, dates: Union[Sequence, np.ndarray]) -> np.ndarray(float):
+    def get_dfs(self, dates: Union[Sequence, np.ndarray]) -> np.ndarray:
         tenors = dates.get_day_count(self.curve_date, dates, dates.DayCountConvention.Actual)
         future_tenors_mask = tenors > 0
         dfs = interps.interpolate(tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
         dfs = dfs*future_tenors_mask + 1 * np.invert(future_tenors_mask)
         return dfs
 
-    def get_dfs_fwds(self, start_dates, end_dates) -> np.ndarray(float):
+    def get_dfs_fwds(self, start_dates, end_dates) -> np.ndarray:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         end_dfs = self.get_dfs(end_dates)
@@ -69,10 +69,10 @@ class ZeroCouponCurve:
         fwds = end_dfs/start_dfs
         return fwds
 
-    def get_wfs(self, dates) -> np.ndarray(float):
+    def get_wfs(self, dates) -> np.ndarray:
         return 1 / self.get_dfs(dates)
 
-    def get_wfs_fwds(self, start_dates, end_dates) -> np.ndarray(float):
+    def get_wfs_fwds(self, start_dates, end_dates) -> np.ndarray:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         df_fwds = self.get_dfs_fwds(start_dates, end_dates)
@@ -88,7 +88,7 @@ class ZeroCouponCurve:
         fwd_rates = rates.get_rate_from_wf(fwd_wfs, start_dates, end_dates, rate_convention)
         return fwd_rates
 
-    def get_forward_rates_values(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention=None) -> np.ndarray(float):
+    def get_forward_rates_values(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention=None) -> np.ndarray:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")        
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention)
@@ -108,6 +108,6 @@ class ZeroCouponCurve:
                     rates_obj.append(r)
             return rates_obj
 
-    def get_zero_rates_values(self, rate_convention: rates.RateConvention=None) -> np.ndarray(float):
+    def get_zero_rates_values(self, rate_convention: rates.RateConvention=None) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
         return np.array([r.rate_value for r in rates_obj])

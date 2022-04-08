@@ -3,7 +3,7 @@ from dateutil.relativedelta import relativedelta
 from enum import Enum
 import calendar
 from collections.abc import Sequence
-from typing import Union
+from typing import Union, get_args
 import numpy as np
 
 
@@ -108,19 +108,21 @@ def get_business_day_count(start_date: date, end_date: date, holidays: list=[]) 
     return count
 
 def get_day_count(start_date: Union[Sequence, date], end_date: Union[Sequence, date], day_count_convention: DayCountConvention, holidays: list=[]) -> Union[np.ndarray, int]:
-    if isinstance(start_date, Sequence) and isinstance(end_date, Sequence):
+    if isinstance(start_date, get_args(Union[Sequence, np.ndarray])) and isinstance(end_date, get_args(Union[Sequence, np.ndarray])):
         if len(start_date) == len(end_date):
             start_end_dates = zip(start_date, end_date)
             result = np.array([get_day_count(s, e, day_count_convention) for s, e in start_end_dates])
             return result
         else:
             raise Exception(f'start_date vector length {len(start_date)} and end_date vector length {len(end_date)} mismatch.')
-    if isinstance(start_date, Sequence) and type(end_date)==date:
+    if isinstance(start_date, get_args(Union[Sequence, np.ndarray])) and type(end_date)==date:
         end_date = [end_date for i in range(len(start_date))]
         return get_day_count(start_date, end_date, day_count_convention)
-    if isinstance(end_date, Sequence) and type(start_date)==date:
+    if isinstance(end_date, get_args(Union[Sequence, np.ndarray])) and type(start_date)==date:
         start_date = [start_date for i in range(len(end_date))]
         return get_day_count(start_date, end_date, day_count_convention)
+    if not (isinstance(start_date, date) and isinstance(end_date, date)):
+        raise Exception(f'start_date and end_date must be date objects. start_date: {start_date} {type(start_date)}, end_date: {end_date} {type(end_date)}')
     
     if day_count_convention == DayCountConvention.Actual:
         if type(start_date)==np.datetime64:

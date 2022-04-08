@@ -2,7 +2,7 @@ from enum import Enum
 from datetime import date
 import numpy as np
 from collections.abc import Sequence
-from typing import Union
+from typing import Union, get_args
 
 from .. import dates
 
@@ -74,8 +74,7 @@ def get_rate_from_wf(wf: Union[np.ndarray, float], start_date, end_date, rate_co
     elif ic == InterestConvention.Exponential:
         rate_value = np.log(wf) / time_fraction
         
-    if isinstance(start_date,  Union[Sequence, np.ndarray]):
+    if isinstance(start_date,  get_args(Union[Sequence, np.ndarray])):
         return [Rate(rate_convention, rv) for rv in rate_value]    
     else:
         return Rate(rate_convention, rate_value)
-
