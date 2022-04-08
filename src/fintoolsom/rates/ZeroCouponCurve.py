@@ -31,7 +31,7 @@ class ZeroCouponCurve:
     def set_tenors(self):
         self.tenors = self.get_tenors()
     
-    def get_tenors(self) -> Union(np.ndarray(int), int):
+    def get_tenors(self) -> Union[np.ndarray(int), int]:
         points_dates = [cp.date for cp in self.curve_points]
         tenors = dates.get_day_count(self.curve_date, points_dates, dates.DayCountConvention.Actual)
         return tenors
