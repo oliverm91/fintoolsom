@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from mathsom import numerics, solvers
 from .. import rates
 from .. import dates
-from ..rates import Rate, RateConvention, get_rate_from_wf
+from ..rates import Rate, RateConvention
 
 
 class Coupon:
@@ -25,9 +25,9 @@ class Coupon:
         self.start_date = start_date
         self.end_date = end_date
         self.wf = (self.residual + self.interest) / self.residual
-        self.accrue_rate = get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
+        self.accrue_rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
         
-    def get_accrued_interest(self, date: date, accrue_rate=None) -> float:
+    def get_accrued_interest(self, date: date, accrue_rate: Rate=None) -> float:
         accrue_rate = self.accrue_rate if accrue_rate is None else accrue_rate
         if date >= self.end_date or date <= self.start_date:
             return 0
@@ -75,6 +75,10 @@ class Coupons:
         residual = current_coupon.residual
         return residual
 
+    def get_accrued_interest(self, date: date, rate: Rate=None) -> float:
+        cc = self.get_current_coupon(date)
+        return cc.get_accrued_interest(date, rate)
+
 
 class Bond:
     def __init__(self, **kwargs):
@@ -82,11 +86,22 @@ class Bond:
         self.currency = kwargs['currency']
         self.notional = kwargs['notional']
         self.start_date = self.coupons.first_start_date
+        self.end_dates = self.coupons.end_dates
         self.accrue_rate = self.coupons.get_accrue_rate()
         self.flows_amount = self.coupons.get_flows()
 
     def copy(self):
         return Bond({'coupons': self.coupons, 'currency': self.currency, 'notional': self.notional})
+
+    def get_maturity_date(self) -> date:
+        '''
+        Returns the maturity date of the bond.
+        '''
+        return max(self.end_dates)
+
+    def get_accrued_interest(self, date: date, rate: Rate=None) -> float:
+        accrued_interest = self.coupons.get_accrued_interest(date, rate)
+        return accrued_interest
         
     def get_flows_pv(self, date: date, irr_value: float, rate_convention):
         irr = rates.Rate(rate_convention, irr_value)

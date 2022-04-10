@@ -1,2 +1,2 @@
-from .Rates import Rate, RateConvention, InterestConvention, get_rate_from_df, get_rate_from_wf
+from .Rates import Rate, RateConvention, InterestConvention
 from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint

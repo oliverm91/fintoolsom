@@ -85,7 +85,7 @@ class ZeroCouponCurve:
         start_wfs = self.get_wfs(start_dates)
         end_wfs = self.get_wfs(end_dates)
         fwd_wfs = (end_wfs/start_wfs)
-        fwd_rates = rates.get_rate_from_wf(fwd_wfs, start_dates, end_dates, rate_convention)
+        fwd_rates = rates.Rate.get_rate_from_wf(fwd_wfs, start_dates, end_dates, rate_convention)
         return fwd_rates
 
     def get_forward_rates_values(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention=None) -> np.ndarray:
