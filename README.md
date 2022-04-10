@@ -1,4 +1,4 @@
-# fintools
+# fintoolsom
 
 Finantial calculations related library meant for personal use.
 
