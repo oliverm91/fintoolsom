@@ -2,7 +2,6 @@ from datetime import timedelta, date, datetime
 from dateutil.relativedelta import relativedelta
 from enum import Enum
 import calendar
-from collections import Counter
 from collections.abc import Sequence
 from typing import Union, get_args
 import numpy as np
@@ -101,18 +100,18 @@ def add_tenor(date: date, tenor: str, holidays: list=[], adj_convention: Adjustm
     return end_date
 
 @multimethod
-def _get_day_count_actual(start_date: Union[date, datetime], end_date: Union[date, datetime], holidays: set=None) -> int:
+def _get_day_count_actual(start_date: date, end_date: date, holidays: set=None) -> int:
     return (end_date - start_date).days
 
 @multimethod
-def _get_day_count_actual(start_date: Union[date, datetime], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
+def _get_day_count_actual(start_date: date, end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
     end_date_np = np.array(end_date)
     count = (end_date_np - start_date).astype('timedelta64[D]')/np.timedelta64(1, 'D')
     return count
 
 @multimethod
 def _get_day_count_actual(start_date: Union[Sequence, np.ndarray], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
-    if Counter(start_date) != Counter(end_date):
+    if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     start_date_np = np.array(start_date)
     end_date_np = np.array(end_date)
@@ -120,13 +119,13 @@ def _get_day_count_actual(start_date: Union[Sequence, np.ndarray], end_date: Uni
     return count
 
 @multimethod
-def _get_day_count_actual(start_date: Union[Sequence, np.ndarray], end_date: Union[date, datetime], holidays: set=None) -> np.ndarray:
+def _get_day_count_actual(start_date: Union[Sequence, np.ndarray], end_date: date, holidays: set=None) -> np.ndarray:
     start_date_np = np.array(start_date)
     count = (end_date - start_date_np).astype('timedelta64[D]')/np.timedelta64(1, 'D')
     return count
 
 @multimethod
-def _get_day_count_bus_days(start_date: Union[datetime, date], end_date: Union[datetime, date], holidays: set=None) -> int:
+def _get_day_count_bus_days(start_date: date, end_date: date, holidays: set=None) -> int:
     count = 0
     if start_date > end_date:
         raise ValueError(f'Start date {start_date} must be before end date {end_date}.')
@@ -138,24 +137,24 @@ def _get_day_count_bus_days(start_date: Union[datetime, date], end_date: Union[d
     return count
 
 @multimethod
-def _get_day_count_bus_days(start_date: Union[datetime, date], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
+def _get_day_count_bus_days(start_date: date, end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
     count = [_get_day_count_bus_days(start_date, ed, holidays) for ed in end_date]
     return np.array(count)
 
 @multimethod
 def _get_day_count_bus_days(start_date: Union[Sequence, np.ndarray], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
-    if Counter(start_date) != Counter(end_date):
+    if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_bus_days(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
 @multimethod
-def _get_day_count_bus_days(start_date: Union[Sequence, np.ndarray], end_date: Union[datetime, date], holidays: set=None) -> np.ndarray:
+def _get_day_count_bus_days(start_date: Union[Sequence, np.ndarray], end_date: date, holidays: set=None) -> np.ndarray:
     count = [_get_day_count_bus_days(sd, end_date, holidays) for sd in start_date]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30a(start_date: Union[datetime, date], end_date: Union[datetime, date], holidays: set=None) -> int:
+def _get_day_count_30a(start_date: date, end_date: date, holidays: set=None) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -166,23 +165,24 @@ def _get_day_count_30a(start_date: Union[datetime, date], end_date: Union[dateti
     return count
 
 @multimethod
-def _get_day_count_30a(start_date: Union[datetime, date], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
+def _get_day_count_30a(start_date: date, end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30a(start_date, ed, holidays) for ed in end_date]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30a(start_date: Union[Sequence, np.ndarray], end_date: Union[datetime, date], holidays: set=None) -> np.ndarray:
+def _get_day_count_30a(start_date: Union[Sequence, np.ndarray], end_date: date, holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30a(sd, end_date, holidays) for sd in start_date]
     return np.array(count)
 
 @multimethod
 def _get_day_count_30a(start_date: Union[Sequence, np.ndarray], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
-    if Counter(start_date) != Counter(end_date):
+    if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30a(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
-def _get_day_count_30u(start_date: Union[datetime, date], end_date: Union[datetime, date], holidays: set=None) -> int:
+@multimethod
+def _get_day_count_30u(start_date: date, end_date: date, holidays: set=None) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -207,25 +207,24 @@ def _get_day_count_30u(start_date: Union[datetime, date], end_date: Union[dateti
     return count
 
 @multimethod
-def _get_day_count_30u(start_date: Union[datetime, date], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
+def _get_day_count_30u(start_date: date, end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30u(start_date, ed, holidays) for ed in end_date]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30u(start_date: Union[Sequence, np.ndarray], end_date: Union[datetime, date], holidays: set=None) -> np.ndarray:
+def _get_day_count_30u(start_date: Union[Sequence, np.ndarray], end_date: date, holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30u(sd, end_date, holidays) for sd in start_date]
     return np.array(count)
 
 @multimethod
 def _get_day_count_30u(start_date: Union[Sequence, np.ndarray], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
-    if Counter(start_date) != Counter(end_date):
+    if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30u(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
-
 @multimethod
-def _get_day_count_30e(start_date: Union[datetime, date], end_date: Union[datetime, date], holidays: set=None) -> int:
+def _get_day_count_30e(start_date: date, end_date: date, holidays: set=None) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -237,24 +236,24 @@ def _get_day_count_30e(start_date: Union[datetime, date], end_date: Union[dateti
     return count
 
 @multimethod
-def _get_day_count_30e(start_date: Union[datetime, date], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
+def _get_day_count_30e(start_date: date, end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30e(start_date, ed, holidays) for ed in end_date]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30e(start_date: Union[Sequence, np.ndarray], end_date: Union[datetime, date], holidays: set=None) -> np.ndarray:
+def _get_day_count_30e(start_date: Union[Sequence, np.ndarray], end_date: date, holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30e(sd, end_date, holidays) for sd in start_date]
     return np.array(count)
 
 @multimethod
 def _get_day_count_30e(start_date: Union[Sequence, np.ndarray], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
-    if Counter(start_date) != Counter(end_date):
+    if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30e(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30e_isda(start_date: Union[datetime, date], end_date: Union[datetime, date], holidays: set=None) -> int:
+def _get_day_count_30e_isda(start_date: date, end_date: date, holidays: set=None) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -270,18 +269,18 @@ def _get_day_count_30e_isda(start_date: Union[datetime, date], end_date: Union[d
     return count
 
 @multimethod
-def _get_day_count_30e_isda(start_date: Union[datetime, date], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
+def _get_day_count_30e_isda(start_date: date, end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30e_isda(start_date, ed, holidays) for ed in end_date]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30e_isda(start_date: Union[Sequence, np.ndarray], end_date: Union[datetime, date], holidays: set=None) -> np.ndarray:
+def _get_day_count_30e_isda(start_date: Union[Sequence, np.ndarray], end_date: date, holidays: set=None) -> np.ndarray:
     count = [_get_day_count_30e_isda(sd, end_date, holidays) for sd in start_date]
     return np.array(count)
 
 @multimethod
 def _get_day_count_30e_isda(start_date: Union[Sequence, np.ndarray], end_date: Union[Sequence, np.ndarray], holidays: set=None) -> np.ndarray:
-    if Counter(start_date) != Counter(end_date):
+    if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30e_isda(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
@@ -299,7 +298,7 @@ def get_day_count(start_date: Union[Sequence, np.ndarray, date], end_date: Union
     func = _day_count_router[day_count_convention]
     return func(start_date, end_date, holidays)
 
-def get_time_fraction(start_date: Union[Sequence, date], end_date: Union[Sequence, date], day_count_convention: DayCountConvention, base_convention: float=360.0) -> Union[np.ndarray, float]:
+def get_time_fraction(start_date: Union[Sequence, np.ndarray, date], end_date: Union[Sequence, np.ndarray, date], day_count_convention: DayCountConvention, base_convention: float=360.0) -> Union[np.ndarray, float]:
     day_count = get_day_count(start_date, end_date, day_count_convention)
     time_fraction = day_count / base_convention
     return time_fraction
