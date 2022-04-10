@@ -47,7 +47,7 @@ class ZeroCouponCurve:
         self.sort()       
         
     def add_point(self, curve_point: ZeroCouponCurvePoint):
-        if curve_point.date <= self.curve_date:
+        if curve_point.date < self.curve_date:
             raise ValueError(f"Cannot add point with date before curve date. Curve date: {self.curve_date}, point date: {curve_point.date}")
         
         self.delete_point(curve_point.date)
@@ -96,7 +96,7 @@ class ZeroCouponCurve:
 
     def get_zero_rates(self, rate_convention: rates.RateConvention=None) -> Sequence:
         if rate_convention is None:
-            return [cp for cp in self.curve_points]
+            return [cp.copy() for cp in self.curve_points]
         else:
             rates_obj = []
             for cp in self.curve_points:
