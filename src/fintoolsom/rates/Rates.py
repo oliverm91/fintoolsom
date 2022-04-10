@@ -79,11 +79,11 @@ class Rate:
         self.rate_value = new_rate.rate_value
         
 
-def get_rate_from_df(df: Union[np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
+def get_rate_from_df(df: Union[Sequence, np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
     wf = 1/df
     return get_rate_from_wf(wf, start_date, end_date, rate_convention)
 
-def get_rate_from_wf(wf: Union[np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
+def get_rate_from_wf(wf: Union[Sequence, np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
     time_fraction = dates.get_time_fraction(start_date, end_date, rate_convention.day_count_convention, rate_convention.time_fraction_base)
     
     ic = rate_convention.interest_convention
