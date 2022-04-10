@@ -103,15 +103,29 @@ class Bond:
         accrued_interest = self.coupons.get_accrued_interest(date, rate)
         return accrued_interest
         
-    def get_flows_pv(self, date: date, irr_value: float, rate_convention):
-        irr = rates.Rate(rate_convention, irr_value)
-        end_dates = self.coupons.get_end_dates()
-        future_flows_mask = end_dates > date
-        wealth_factors = irr.get_wealth_factor(date, end_dates)
+    def get_flows_pv(self, date: date, irr: Rate) -> np.ndarray:
+        future_flows_mask = self.end_dates > date
+        wealth_factors = irr.get_wealth_factor(date, self.end_dates)
         pvs = self.flows_amount  * future_flows_mask / wealth_factors
         return pvs
     
-    def get_present_value(self, date: date, irr_value: float, rate_convention: RateConvention) -> float:
+    def get_present_value(self, date: date, irr: Rate) -> float:
+        '''
+        Returns the present value of the bond at a given date.
+        ----------
+            date (date): date at which the present value is calculated.
+            irr_value (float): irr value of the bond.
+            rate_convention (RateConvention): rate convention of the bond.
+        ----
+        Returns:
+        ----
+            present_value (float): present value of the bond at the given date.
+        '''
+        pvs = self.get_flows_pv(date, irr)
+        total_pv = sum(pvs)
+        return total_pv
+
+    def _get_present_value_rate_value(self, date: date, irr_value: float, rate_convention: RateConvention) -> float:
         '''
         Returns the present value of the bond at a given date.
         ----------
@@ -135,7 +149,7 @@ class Bond:
         pv = sum(pvs)
         return pv
     
-    def get_irr(self, date: date, present_value: float, irr_rate_convention: RateConvention) -> Rate:
+    def get_irr_from_present_value(self, date: date, present_value: float, irr_rate_convention: RateConvention) -> Rate:
         '''
         Calculates the internal rate of return of a bond for a given present value.
         --------
@@ -152,7 +166,7 @@ class Bond:
         objective_value = present_value
         args = [date, irr_initial_guess, irr_rate_convention]
         args_irr_index = 1
-        irr_value = solvers.newton_rhapson_solver(objective_value, self.get_present_value, irr_initial_guess, args, args_irr_index)
+        irr_value = solvers.newton_rhapson_solver(objective_value, self._get_present_value_rate_value, irr_initial_guess, args, args_irr_index)
         irr = rates.Rate(irr_rate_convention, irr_value)
         return irr
     

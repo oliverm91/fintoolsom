@@ -1,5 +1,8 @@
+from fintoolsom.rates.Rates import RateConvention
 from .Bonds import Bond
 from datetime import date
+from mathsom import solvers
+
 from .. import rates
 from .. import dates
 
@@ -18,7 +21,7 @@ class CLBond(Bond):
             tera (Rate): The TERA of the Chilean bond.
         '''
         tera_rate_convention = rates.RateConvention(rates.InterestConvention.Compounded, dates.DayCountConvention.Actual, 365)
-        tera = self.get_irr(self.start_date, 100.0, tera_rate_convention)
+        tera = self.get_pv_irr(self.start_date, 100.0, tera_rate_convention)
         tera.rate_value = round(tera.rate_value, 6)
         self.tera = tera
         return tera
@@ -43,6 +46,47 @@ class CLBond(Bond):
             amount = round(amount, 8)
         amount = round(amount * fx, 0)
         return amount
+
+    def _get_amount_value_rate_value(self, date: date, rate_value: float, rate_convention: RateConvention, fx: float=1.0) -> float:
+        '''
+        Calculates the amount to pay of the Chilean bond based on the given rate value.
+        --------
+        Parameters:
+        ----
+            date (date): The date to calculate the amount to pay.
+            rate_value (float): The rate value to calculate the amount to pay.
+            rate_convention (RateConvention): The rate convention to calculate the amount to pay.
+            fx (float): Optional. The foreign exchange rate to calculate the amount to pay. Default is 1.0.
+        ----
+        Returns:
+        ----
+            float: The amount to pay.
+        '''
+        rate = rates.Rate(rate_value, rate_convention)
+        return self.get_amount_value(date, rate, fx)
+
+    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention, fx: float=1.0) -> rates.Rate:
+        '''
+        Calculates the IRR of the Chilean bond based on the given amount.
+        --------
+        Parameters:
+        ----
+            date (date): The date to calculate the IRR.
+            amount (float): The amount to calculate the IRR.
+            fx (float): Optional. The foreign exchange rate to calculate the IRR. Default is 1.0.
+        ----
+        Returns:
+        ----
+            irr (Rate): The IRR of the bond.
+        '''
+        func = self._get_amount_value_rate_value
+        initial_guess = self.tera.rate_value
+        args = [date, initial_guess, irr_rate_convention, fx]
+        arg_index = 1
+        rate_value = solvers.newton_raphson_solver(amount, func, initial_guess, args=args, argument_index=arg_index, max_steps=50, epsilon=0.000001)
+        rate_value = round(rate_value, 6)
+        irr = rates.Rate(irr_rate_convention, rate_value)
+        return irr
     
     def get_par_value(self, date: date, decimals: int=8) -> float:
         '''
