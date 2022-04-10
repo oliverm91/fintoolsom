@@ -24,32 +24,50 @@ class Rate:
     def __init__(self, rate_convention: RateConvention, rate_value: float):
         self.rate_value = rate_value
         self.rate_convention = rate_convention
+        self._wf_router = {
+            InterestConvention.Linear: self._get_wf_from_linear_rate,
+            InterestConvention.Compounded: self._get_wf_from_compounded_rate,
+            InterestConvention.Exponential: self._get_wf_from_exponential_rate
+        }
         
     def copy(self):
         return Rate(self.rate_convention, self.rate_value)
-        
-    def get_wealth_factor(self, start_date, end_date) -> float:
-        time_fraction = dates.get_time_fraction(start_date, end_date, self.rate_convention.day_count_convention, self.rate_convention.time_fraction_base)
-        wf = None
-        if self.rate_convention.interest_convention == InterestConvention.Linear:
-            wf = (1 + self.rate_value * time_fraction)
-        elif self.rate_convention.interest_convention == InterestConvention.Compounded:
-            wf = (1 + self.rate_value) ** time_fraction
-        elif self.rate_convention.interest_convention == InterestConvention.Exponential:
-            wf = np.exp(self.rate_value * time_fraction)
 
+    def _get_wf_from_linear_rate(self, rate_value, start_date, end_date):
+        time_fraction = self.get_time_fraction(start_date, end_date)
+        wf = (1 + rate_value * time_fraction)
         return wf
+
+    def _get_wf_from_compounded_rate(self, rate_value, start_date, end_date):
+        time_fraction = self.get_time_fraction(start_date, end_date)
+        wf = (1 + rate_value) ** time_fraction
+        return wf
+
+    def _get_wf_from_exponential_rate(self, rate_value, start_date, end_date):
+        time_fraction = self.get_time_fraction(start_date, end_date)
+        wf = np.exp(rate_value * time_fraction)
+        return wf
+        
+    def get_wealth_factor(self, start_date, end_date) -> Union[np.ndarray, float]:
+        func = self._wf_router[self.rate_convention.interest_convention]
+        wf = func(self.rate_value, start_date, end_date)
+        return wf
+
+    def get_discount_factor(self, start_date, end_date) ->  Union[np.ndarray, float]:
+        wf = self.get_wealth_factor(start_date, end_date)
+        df = 1 / wf
+        return df
     
-    def get_days_count(self, start_date, end_date) -> int:
+    def get_days_count(self, start_date, end_date) -> Union[np.ndarray, int]:
         days_count = dates.get_day_count(start_date, end_date, self.rate_convention.day_count_convention)
         return days_count
     
-    def get_time_fraction(self, start_date, end_date) -> float:
+    def get_time_fraction(self, start_date, end_date) -> Union[np.ndarray, float]:
         days_count = self.get_days_count(start_date, end_date)
         time_fraction = days_count / self.rate_convention.time_fraction_base
         return time_fraction
         
-    def get_accrued_interest(self, n: float, start_date: date, end_date: date) -> float:
+    def get_accrued_interest(self, n: float, start_date: date, end_date: date) -> Union[np.ndarray, float]:
         wf = self.get_wealth_factor(start_date, end_date)
         interest = n * (wf - 1)
         return interest
@@ -57,7 +75,9 @@ class Rate:
     def convert_rate_conventions(self, rate_convention: RateConvention, start_date: date, end_date: date):
         current_wf = self.get_wealth_factor(start_date, end_date)        
         self.rate_convention = rate_convention
-        self.rate_value = self.get_rate_value_from_wf(current_wf, start_date, end_date)
+        new_rate = get_rate_from_wf(current_wf, self.rate_convention)
+        self.rate_value = new_rate.rate_value
+        
 
 def get_rate_from_df(df: Union[np.ndarray, float], start_date, end_date, rate_convention: RateConvention) -> Union[Sequence, Rate]:
     wf = 1/df
