@@ -137,7 +137,7 @@ class Bond:
         ----
             present_value (float): present value of the bond at the given date.
         '''
-        pvs = self.get_flows_pv(date, irr_value, rate_convention)
+        pvs = self.get_flows_pv(date, Rate(rate_convention, irr_value))
         total_pv = sum(pvs)
         return total_pv
     
@@ -188,9 +188,7 @@ class Bond:
         return round(par_value, decimals)
     
     def get_price(self, date: date, irr: rates.Rate, price_decimals: int=4, par_value_decimals: int=8) -> float:
-        irr_value = irr.rate_value
-        irr_rate_convention = irr.rate_convention
-        pv  = self.get_present_value(date, irr_value, irr_rate_convention)
+        pv = self.get_present_value(date, irr)
         par_value = self.get_par_value(date, decimals=par_value_decimals)
         price = round(100.0 * pv/par_value, price_decimals)
         return price, par_value
