@@ -3,7 +3,6 @@ from datetime import date
 import numpy as np
 from collections.abc import Sequence
 from typing import Union, get_args
-from multimethod import multimethod
 
 from .. import dates
 
