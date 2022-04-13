@@ -62,7 +62,7 @@ class CLBond(Bond):
         ----
             float: The amount to pay.
         '''
-        rate = rates.Rate(rate_value, rate_convention)
+        rate = rates.Rate(rate_convention, rate_value)
         return self.get_amount_value(date, rate, fx)
 
     def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention, fx: float=1.0) -> rates.Rate:
@@ -83,7 +83,9 @@ class CLBond(Bond):
         initial_guess = self.tera.rate_value
         args = [date, initial_guess, irr_rate_convention, fx]
         arg_index = 1
-        rate_value = solvers.newton_raphson_solver(amount, func, initial_guess, args=args, argument_index=arg_index, max_steps=50, epsilon=0.000001)
+        min_step = 0.02 / 10_000.0
+        min_diff_step = 0.01 / 10_000.0
+        rate_value = solvers.newton_raphson_solver(amount, func, initial_guess, args=args, argument_index=arg_index, max_steps=50, epsilon=min_step, differentiation_step=min_diff_step)
         rate_value = round(rate_value, 6)
         irr = rates.Rate(irr_rate_convention, rate_value)
         return irr
