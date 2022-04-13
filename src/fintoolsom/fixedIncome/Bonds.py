@@ -166,7 +166,7 @@ class Bond:
         objective_value = present_value
         args = [date, irr_initial_guess, irr_rate_convention]
         args_irr_index = 1
-        irr_value = solvers.newton_rhapson_solver(objective_value, self._get_present_value_rate_value, irr_initial_guess, args, args_irr_index)
+        irr_value = solvers.newton_raphson_solver(objective_value, self._get_present_value_rate_value, irr_initial_guess, args, args_irr_index)
         irr = rates.Rate(irr_rate_convention, irr_value)
         return irr
     
@@ -210,7 +210,7 @@ class Bond:
         '''
         end_dates = self.coupons.get_end_dates()
         tenors = dates.get_time_fraction(date, end_dates, day_count_convention, time_fraction_base)
-        pvs = self.get_flows_pv(date, irr.rate_value, irr.rate_convention)
+        pvs = self.get_flows_pv(date, irr)
         total_pv = sum(pvs)
         duration = sum(pvs * tenors) / total_pv
         return duration
@@ -230,7 +230,7 @@ class Bond:
             dv01 (float): The dv01 of the bond.
         '''
         dur = self.get_duration(date, irr)
-        pv = self.get_present_value(date, irr.rate_value, irr.rate_convention) / 100
+        pv = self.get_present_value(date, irr) / 100
         dv01 = - pv * dur * fx / 10_000
         dv01 *= self.notional 
         return dv01
@@ -252,7 +252,7 @@ class Bond:
         irr_value = irr.rate_value
         irr_rate_convention = irr.rate_convention
         valuation_parameters = [date, irr_value, irr_rate_convention]
-        valuation_function = self.get_present_value
+        valuation_function = self._get_present_value_rate_value
         variable_derivation_index = 1
         slope = numerics.differentiate(valuation_function, irr_value, valuation_parameters, variable_derivation_index)
         slope /= 100 # Makes flows Notional = 1
