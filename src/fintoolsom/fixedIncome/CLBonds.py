@@ -21,7 +21,7 @@ class CLBond(Bond):
             tera (Rate): The TERA of the Chilean bond.
         '''
         tera_rate_convention = rates.RateConvention(rates.InterestConvention.Compounded, dates.DayCountConvention.Actual, 365)
-        tera = self.get_pv_irr(self.start_date, 100.0, tera_rate_convention)
+        tera = self.get_irr_from_present_value(self.start_date, 100.0, tera_rate_convention)
         tera.rate_value = round(tera.rate_value, 6)
         self.tera = tera
         return tera
