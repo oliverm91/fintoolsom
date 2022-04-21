@@ -83,8 +83,8 @@ class CLBond(Bond):
         initial_guess = self.tera.rate_value
         args = [date, initial_guess, irr_rate_convention, fx]
         arg_index = 1
-        min_step = 0.02 / 10_000.0
-        min_diff_step = 0.01 / 10_000.0
+        min_step = 2 / 10_000.0
+        min_diff_step = 1 / 10_000.0
         rate_value = solvers.newton_raphson_solver(amount, func, initial_guess, args=args, argument_index=arg_index, max_steps=50, epsilon=min_step, differentiation_step=min_diff_step)
         rate_value = round(rate_value, 6)
         irr = rates.Rate(irr_rate_convention, rate_value)
