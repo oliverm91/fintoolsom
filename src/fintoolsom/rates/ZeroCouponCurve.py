@@ -17,7 +17,7 @@ class ZeroCouponCurvePoint:
         
 
 class ZeroCouponCurve:
-    def __init__(self, curve_date, curve_points: List[ZeroCouponCurvePoint]):
+    def __init__(self, curve_date: date, curve_points: List[ZeroCouponCurvePoint]):
         self.curve_date = curve_date
         self.curve_points = curve_points
         self.sort()
@@ -56,13 +56,33 @@ class ZeroCouponCurve:
         self.delete_point(curve_point.date)
         self.curve_points.append(curve_point)
         self.sort()
+
+    def get_df(self, date: date):
+        return self.get_dfs[[date]][0]
     
     def get_dfs(self, dates_t: Union[List[date], np.ndarray]) -> np.ndarray:
         tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
-        future_tenors_mask = tenors > 0
-        dfs = interps.interpolate(tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
-        dfs = dfs*future_tenors_mask + 1 * np.invert(future_tenors_mask)
-        return dfs
+        min_tenor = min(self.get_tenors())
+        max_tenor = max(self.get_tenors())
+        tenors_smaller_than_min = tenors[tenors<min_tenor]
+        tenors_greater_than_max = tenors[tenors>max_tenor]
+        normal_tenors = tenors[(tenors >= min_tenor) & (tenors <= max_tenor)]
+        small_tenors_amount = len(tenors_smaller_than_min)
+        greater_tenors_amount = len(tenors_greater_than_max)
+        normal_tenors_amount = len(normal_tenors)
+        first_dfs = np.zeros(len(tenors))
+        last_dfs = np.zeros(len(tenors))
+        normal_dfs = np.zeros(len(tenors))
+        for ix in range(small_tenors_amount):
+            first_dfs[ix] = self.curve_points[0].rate.get_discount_factor(self.curve_date, dates_t[ix])
+        for ix in range(greater_tenors_amount):
+            index = small_tenors_amount + normal_tenors_amount + ix
+            last_dfs[index] = self.curve_points[-1].rate.get_discount_factor(self.curve_date, dates_t[index])
+        
+        dfs = interps.interpolate(normal_tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
+        normal_dfs[small_tenors_amount:small_tenors_amount+normal_tenors_amount] = dfs
+
+        return first_dfs + normal_dfs + last_dfs
 
     def get_dfs_fwds(self, start_dates, end_dates) -> np.ndarray:
         if len(start_dates) != len(end_dates):
