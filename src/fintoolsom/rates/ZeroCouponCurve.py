@@ -54,8 +54,8 @@ class ZeroCouponCurve:
         self.curve_points.append(curve_point)
         self.sort()
     
-    def get_dfs(self, dates: Union[Sequence, np.ndarray]) -> np.ndarray:
-        tenors = dates.get_day_count(self.curve_date, dates, dates.DayCountConvention.Actual)
+    def get_dfs(self, dates_t: Union[Sequence, np.ndarray]) -> np.ndarray:
+        tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
         future_tenors_mask = tenors > 0
         dfs = interps.interpolate(tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
         dfs = dfs*future_tenors_mask + 1 * np.invert(future_tenors_mask)
