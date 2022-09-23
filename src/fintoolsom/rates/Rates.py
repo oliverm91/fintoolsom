@@ -137,3 +137,8 @@ class Rate:
     def get_rate_from_df(df: Union[List[float], np.ndarray, float], start_date: Union[List[date], np.ndarray, date], end_date: Union[List[date], np.ndarray, date], rate_convention: RateConvention) -> Union[List[object], object]:
         wf = 1/df
         return Rate.get_rate_from_wf(wf, start_date, end_date, rate_convention)
+
+
+def df_to_rate(discount_factor: float, start_date: date, end_date: date, rate_convention: RateConvention) -> Rate:
+    r_aux = Rate(RateConvention(), 0)
+    return r_aux.get_rate_from_df(discount_factor, start_date, end_date, rate_convention)
