@@ -58,7 +58,7 @@ class ZeroCouponCurve:
         self.sort()
 
     def get_df(self, date: date):
-        return self.get_dfs[[date]][0]
+        return self.get_dfs([date])[0]
     
     def get_dfs(self, dates_t: Union[List[date], np.ndarray]) -> np.ndarray:
         tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
