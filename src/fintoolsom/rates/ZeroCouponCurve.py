@@ -1,20 +1,23 @@
 import numpy as np
-from collections.abc import Sequence
-from typing import Union
+from typing import List, Union
 import mathsom.interpolations as interps
+from datetime import date
+from dataclasses import dataclass
 
 from .. import rates
 from .. import dates
 
-
+@dataclass
 class ZeroCouponCurvePoint:
-    def __init__(self, date, rate: rates.Rate):
-        self.date = date
-        self.rate = rate
+    date: date
+    rate: rates.Rate
+    
+    def copy(self):
+        return ZeroCouponCurvePoint(self.date, self.rate.copy())
         
-        
+
 class ZeroCouponCurve:
-    def __init__(self, curve_date, curve_points: Sequence):
+    def __init__(self, curve_date: date, curve_points: List[ZeroCouponCurvePoint]):
         self.curve_date = curve_date
         self.curve_points = curve_points
         self.sort()
@@ -53,13 +56,33 @@ class ZeroCouponCurve:
         self.delete_point(curve_point.date)
         self.curve_points.append(curve_point)
         self.sort()
+
+    def get_df(self, date: date):
+        return self.get_dfs[[date]][0]
     
-    def get_dfs(self, dates_t: Union[Sequence, np.ndarray]) -> np.ndarray:
+    def get_dfs(self, dates_t: Union[List[date], np.ndarray]) -> np.ndarray:
         tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
-        future_tenors_mask = tenors > 0
-        dfs = interps.interpolate(tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
-        dfs = dfs*future_tenors_mask + 1 * np.invert(future_tenors_mask)
-        return dfs
+        min_tenor = min(self.get_tenors())
+        max_tenor = max(self.get_tenors())
+        tenors_smaller_than_min = tenors[tenors<min_tenor]
+        tenors_greater_than_max = tenors[tenors>max_tenor]
+        normal_tenors = tenors[(tenors >= min_tenor) & (tenors <= max_tenor)]
+        small_tenors_amount = len(tenors_smaller_than_min)
+        greater_tenors_amount = len(tenors_greater_than_max)
+        normal_tenors_amount = len(normal_tenors)
+        first_dfs = np.zeros(len(tenors))
+        last_dfs = np.zeros(len(tenors))
+        normal_dfs = np.zeros(len(tenors))
+        for ix in range(small_tenors_amount):
+            first_dfs[ix] = self.curve_points[0].rate.get_discount_factor(self.curve_date, dates_t[ix])
+        for ix in range(greater_tenors_amount):
+            index = small_tenors_amount + normal_tenors_amount + ix
+            last_dfs[index] = self.curve_points[-1].rate.get_discount_factor(self.curve_date, dates_t[index])
+        
+        dfs = interps.interpolate(normal_tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
+        normal_dfs[small_tenors_amount:small_tenors_amount+normal_tenors_amount] = dfs
+
+        return first_dfs + normal_dfs + last_dfs
 
     def get_dfs_fwds(self, start_dates, end_dates) -> np.ndarray:
         if len(start_dates) != len(end_dates):
@@ -79,7 +102,7 @@ class ZeroCouponCurve:
         wfs_fwds = 1 / df_fwds
         return wfs_fwds
     
-    def get_forward_rates(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention) -> Sequence:
+    def get_forward_rates(self, start_dates: Union[List[date], np.ndarray], end_dates: Union[List[date], np.ndarray], rate_convention: rates.RateConvention) -> List[float]:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         start_wfs = self.get_wfs(start_dates)
@@ -88,13 +111,13 @@ class ZeroCouponCurve:
         fwd_rates = rates.Rate.get_rate_from_wf(fwd_wfs, start_dates, end_dates, rate_convention)
         return fwd_rates
 
-    def get_forward_rates_values(self, start_dates: Union[Sequence, np.ndarray], end_dates: Union[Sequence, np.ndarray], rate_convention: rates.RateConvention=None) -> np.ndarray:
+    def get_forward_rates_values(self, start_dates: Union[List[date], np.ndarray], end_dates: Union[List[date], np.ndarray], rate_convention: rates.RateConvention=None) -> np.ndarray:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")        
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention)
         return np.array([r.rate_value for r in rates_obj])
 
-    def get_zero_rates(self, rate_convention: rates.RateConvention=None) -> Sequence:
+    def get_zero_rates(self, rate_convention: rates.RateConvention=None) -> List[rates.Rate]:
         if rate_convention is None:
             return [cp.copy() for cp in self.curve_points]
         else:
