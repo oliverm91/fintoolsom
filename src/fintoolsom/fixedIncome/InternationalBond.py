@@ -6,6 +6,7 @@ from ..rates import Rate
 from Bonds import Bond
 from Coupons import InternationalBondFixedRateCoupon
 
+
 class InternationalBond(Bond):
     def __init__(self, **kwargs):
         coupons = kwargs['coupons']
