@@ -21,5 +21,5 @@ Easly install with **pip**. See https://pypi.org/project/fintoolsom/
 `pip install fintoolsom`
 
 ## Requirements:
-- Python: >=3.8
+- Python: >=3.11
 - Packages: numpy python-dateutil mathsom
