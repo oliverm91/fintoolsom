@@ -22,4 +22,4 @@ Easly install with **pip**. See https://pypi.org/project/fintoolsom/
 
 ## Requirements:
 - Python: >=3.11
-- Packages: numpy python-dateutil mathsom
+- Packages: numpy scipy
