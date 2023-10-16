@@ -1,7 +1,7 @@
 import numpy as np
 from datetime import date
 from collections.abc import Sequence
-from mathsom import numerics, solvers
+from scipy.optimize import newton
 from .. import rates
 from .. import dates
 from ..rates import Rate, RateConvention
@@ -163,10 +163,9 @@ class Bond:
         ----
             irr (float): The internal rate of return of the bond.'''
         irr_initial_guess = self.accrue_rate.rate_value
-        objective_value = present_value
-        args = [date, irr_initial_guess, irr_rate_convention]
-        args_irr_index = 1
-        irr_value = solvers.newton_raphson_solver(objective_value, self._get_present_value_rate_value, irr_initial_guess, args, args_irr_index)
+        def objective_function(irr_value: float):
+            return self._get_present_value_rate_value(date, irr_value, irr_rate_convention)
+        irr_value = newton(objective_function, present_value, irr_initial_guess, tol=1e-6)
         irr = rates.Rate(irr_rate_convention, irr_value)
         return irr
     
@@ -233,30 +232,4 @@ class Bond:
         pv = self.get_present_value(date, irr) / 100
         dv01 = - pv * dur * fx / 10_000
         dv01 *= self.notional 
-        return dv01
-    
-    def get_dv01(self, date: date, irr: rates.Rate, fx=1.0) -> float:
-        '''
-        Calculate dv01 of the bond with numeric differentiation.
-        ----------
-        Parameters:
-        ----
-            date (date): The date for which the dv01 is calculated.
-            irr (Rate): The interest rate.
-            fx (float): Optional. The foreign exchange rate. Default is 1.
-        ----
-        Returns:
-        ----
-            dv01 (float): The dv01 of the bond.
-        '''
-        irr_value = irr.rate_value
-        irr_rate_convention = irr.rate_convention
-        valuation_parameters = [date, irr_value, irr_rate_convention]
-        valuation_function = self._get_present_value_rate_value
-        variable_derivation_index = 1
-        slope = numerics.differentiate(valuation_function, irr_value, valuation_parameters, variable_derivation_index)
-        slope /= 100 # Makes flows Notional = 1
-        dv01 = slope / 10_000 # DV01 of Notional = 1
-        dv01 *= self.notional # Adjust to Notional = self.notional
-        dv01 *= fx # Adjust for fx
         return dv01
