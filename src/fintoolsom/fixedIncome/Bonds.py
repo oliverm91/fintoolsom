@@ -165,7 +165,7 @@ class Bond:
         irr_initial_guess = self.accrue_rate.rate_value
         def objective_function(irr_value: float) -> float:
             return self._get_present_value_rate_value(date, irr_value, irr_rate_convention) - present_value
-        irr_value = newton(objective_function, x0=irr_initial_guess, tol=1e-6)
+        irr_value = newton(objective_function, x0=irr_initial_guess, tol=1e-8, maxiter=100)
         irr = rates.Rate(irr_rate_convention, irr_value)
         return irr
     
