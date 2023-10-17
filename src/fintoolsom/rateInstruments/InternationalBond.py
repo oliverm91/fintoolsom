@@ -21,8 +21,13 @@ class InternationalBond(Bond):
         wild_guess = (c.interest / c.residual) * 365 / (c.accrue_end_date - c.accrue_end_date).days
         return wild_guess
     
-    def get_flows_pv(self, date: date, irr: Rate) -> np.ndarray:
-        raise NotImplementedError('Subclass must implement get_flows_pv')
+    def get_flows_pv(self, date: date, annual_rate_value: float) -> np.ndarray:
+        rate_value = annual_rate_value / self.freq
+        w: float = self.coupons.get_current_coupon(date).get_w(date)
+        remaining_coupons = self.coupons.get_remaining_coupons(date)
+        df_exponents = np.array(range(len(remaining_coupons))) + w
+        dfs = np.power(1 + rate_value, df_exponents)
+        return remaining_coupons.flows * dfs
     
     def get_dirty_price(self, date, irr: Rate, current_par_value: float) -> float:
         return self.get_present_value(date, irr) * 100 / current_par_value

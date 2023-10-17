@@ -19,6 +19,7 @@ class DayCountConvention(Enum):
     Days30E = 'days 30e'
     Days30E_ISDA = 'days 30e isda'
     BUS_DAYS = 'business days'
+
     
 def is_business_date(date: date, holidays: Optional[Iterable[date]]=None) -> bool:
     if holidays is None:
@@ -303,7 +304,5 @@ def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | 
     func = _day_count_router[day_count_convention]
     return func(start_date, end_date, holidays)
 
-def get_time_fraction(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, base_convention: int=360) -> np.ndarray | float:
-    day_count = get_day_count(start_date, end_date, day_count_convention)
-    time_fraction = day_count / base_convention
-    return time_fraction
+def get_time_fraction(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, base_convention: int=360, holidays: Optional[Iterable[date]]=None) -> np.ndarray | float:
+    return get_day_count(start_date, end_date, day_count_convention, holidays=holidays) / base_convention

@@ -44,6 +44,7 @@ class ABCFixedRateCoupon(Coupon):
     def __init__(self, amortization: float, residual: float, accrue_start_date: date, accrue_end_date: date, payment_date: date, interest: float):
         super().__init__(amortization, residual, accrue_start_date, accrue_end_date, payment_date)
         self.interest = interest
+        self.flow = self.amortization + self.interest
 
 class FixedRateCoupon(ABCFixedRateCoupon):
     def __init__(self, amortization: float, residual: float, accrue_start_date: date, accrue_end_date: date, payment_date: date, interest: float, coupon_rate_convention: RateConvention=_default_fixed_rate_conv_linact360):

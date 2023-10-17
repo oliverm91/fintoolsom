@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import date
+from typing import Self
 
 import numpy as np
 
@@ -18,7 +19,7 @@ class Coupons(ABC):
         self.payment_dates = self.get_payment_dates()
         self.amortizations = self.get_amortizations()
 
-    def copy(self):
+    def copy(self) -> Self:
         return Coupons(self.coupons.copy())
 
     def _sort(self):
@@ -59,7 +60,7 @@ class Coupons(ABC):
                 return c
         return None
     
-    def get_remaining_coupons(self, date: date) -> list[Coupon]:
+    def get_remaining_coupons(self, date: date) -> Self:
         return Coupons([c for c in self.coupons if c.payment_date >= date])
     
     def get_residual_amount(self, date: date) -> float:
@@ -82,7 +83,7 @@ class FixedRateCoupons(Coupons):
         return np.array([c.interest for c in self.coupons if c.payment_date >= start_date and c.payment_date <= end_date])
     
     def get_flows(self, start_date: date=_min_date, end_date: date=_max_date) -> np.ndarray:
-        return self.get_amortizations(start_date=start_date, end_date=end_date) + self.get_interests(start_date=start_date, end_date=end_date)
-    
+        return np.array([c.flow for c in self.coupons if c.payment_date >= start_date and c.payment_date <= end_date])
+        
     def get_accrued_interest(self, date: date, accrue_rate: Rate=None) -> float:
         return self.get_current_coupon(date).get_accrued_interest(date, accrue_rate=accrue_rate)
