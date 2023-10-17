@@ -1,6 +1,5 @@
 import numpy as np
 from datetime import date
-from collections.abc import Sequence
 from scipy.optimize import newton
 from .. import rates
 from .. import dates
@@ -22,10 +21,10 @@ class Coupon:
                 end_date = end_date.date()
             except:
                 raise Exception(f'Could not cast end_date format to datetime.date:\n{type(end_date)} type received.')
-        self.start_date = start_date
-        self.end_date = end_date
+        self.start_date: date = start_date
+        self.end_date: date = end_date
         self.wf = (self.residual + self.interest) / self.residual
-        self.accrue_rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
+        self.accrue_rate: Rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
         
     def get_accrued_interest(self, date: date, accrue_rate: Rate=None) -> float:
         accrue_rate = self.accrue_rate if accrue_rate is None else accrue_rate
@@ -36,7 +35,7 @@ class Coupon:
     
     
 class Coupons:
-    def __init__(self, coupons: Sequence):
+    def __init__(self, coupons: list[Coupon]):
         self.coupons = coupons
         self.sort()
 
@@ -49,7 +48,7 @@ class Coupons:
         self.flows = self.get_flows()
         self.end_dates = self.get_end_dates()
     
-    def get_accrue_rate(self) -> float:
+    def get_accrue_rate(self) -> Rate:
         return self.coupons[0].accrue_rate
     
     def get_flows(self) -> np.ndarray:
@@ -82,9 +81,9 @@ class Coupons:
 
 class Bond:
     def __init__(self, **kwargs):
-        self.coupons = kwargs['coupons']
-        self.currency = kwargs['currency']
-        self.notional = kwargs['notional']
+        self.coupons: Coupons = kwargs['coupons']
+        self.currency: str = kwargs['currency']
+        self.notional: int = kwargs['notional']
         self.start_date = self.coupons.first_start_date
         self.end_dates = self.coupons.end_dates
         self.accrue_rate = self.coupons.get_accrue_rate()
@@ -214,7 +213,7 @@ class Bond:
         duration = sum(pvs * tenors) / total_pv
         return duration
     
-    def get_dv01_approx(self, date: date, irr: rates.Rate, fx=1.0) -> float:
+    def get_dv01_approx(self, date: date, irr: rates.Rate, fx: int=1.0) -> float:
         '''
         Calculate dv01 of the bond with approximation formula: - present_value * duration / 10.000
         ----------

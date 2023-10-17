@@ -9,7 +9,7 @@ class Deposit:
         self.payment = payment  
         self.nemo = nemo
 
-    def get_value(self, t, rate_value, fx=1) -> float:
+    def get_value(self, t: date, rate_value: float, fx: int=1) -> float:
         ic = rates.InterestConvention.Linear
         dcc = dates.DayCountConvention.Actual
         base = 30 if self.currency=='clp' else 360
@@ -22,7 +22,7 @@ class Deposit:
         
         return value
     
-    def get_dv01(self, t, rate_value: float, fx=1) -> float:
+    def get_dv01(self, t: date, rate_value: float, fx: int=1) -> float:
         bp = 0.01/100.0
         bp /= 12 if self.currency=='clp' else 1
         value_plus1bp = self.get_value(t, rate_value + bp, fx)
@@ -31,6 +31,6 @@ class Deposit:
         dv01 = (value_plus1bp - value_minus1bp) / 2
         return dv01
     
-    def get_duration(self, t, base_year_fraction: int=365) -> float:
+    def get_duration(self, t: date, base_year_fraction: int=365) -> float:
         dur = (self.payment_date - t).days / base_year_fraction        
         return dur
