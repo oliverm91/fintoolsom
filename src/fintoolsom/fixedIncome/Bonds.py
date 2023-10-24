@@ -213,9 +213,9 @@ class Bond:
         duration = sum(pvs * tenors) / total_pv
         return duration
     
-    def get_dv01_approx(self, date: date, irr: rates.Rate, fx: int=1.0) -> float:
+    def get_dv01(self, date: date, irr: rates.Rate, fx: int=1.0) -> float:
         '''
-        Calculate dv01 of the bond with approximation formula: - present_value * duration / 10.000
+        Calculate dv01 of the bond with: - present_value * duration / 10.000
         ----------
         Parameters:
         ----
