@@ -22,13 +22,11 @@ class Deposit:
         
         return value
     
-    def get_dv01(self, t: date, rate_value: float, fx: int=1) -> float:
-        bp = 0.01/100.0
-        bp /= 12 if self.currency=='clp' else 1
-        value_plus1bp = self.get_value(t, rate_value + bp, fx)
-        value_minus1bp = self.get_value(t, rate_value - bp, fx)
-        
-        dv01 = (value_plus1bp - value_minus1bp) / 2
+    def get_dv01(self, t: date, rate_value: float) -> float:
+        dur = self.get_duration(t, rate_value)
+        pv = self.get_value(t, rate_value) / 100
+        dv01 = - pv * dur / 10_000
+        dv01 *= self.payment
         return dv01
     
     def get_duration(self, t: date, base_year_fraction: int=365) -> float:

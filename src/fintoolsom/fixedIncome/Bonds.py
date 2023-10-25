@@ -213,7 +213,7 @@ class Bond:
         duration = sum(pvs * tenors) / total_pv
         return duration
     
-    def get_dv01(self, date: date, irr: rates.Rate, fx: int=1.0) -> float:
+    def get_dv01(self, date: date, irr: rates.Rate) -> float:
         '''
         Calculate dv01 of the bond with: - present_value * duration / 10.000
         ----------
@@ -229,6 +229,6 @@ class Bond:
         '''
         dur = self.get_duration(date, irr)
         pv = self.get_present_value(date, irr) / 100
-        dv01 = - pv * dur * fx / 10_000
+        dv01 = - pv * dur / 10_000
         dv01 *= self.notional 
         return dv01
