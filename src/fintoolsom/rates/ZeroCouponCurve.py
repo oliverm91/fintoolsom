@@ -21,6 +21,7 @@ class ZeroCouponCurve:
         self.curve_date = curve_date
         self.curve_points = curve_points
         self.sort()
+        self._cashed_dfs: [str, np.ndarray] = {}
   
     def copy(self) -> Self:
         return ZeroCouponCurve(self.curve_date, self.curve_points)
@@ -35,8 +36,7 @@ class ZeroCouponCurve:
         self.tenors = self.get_tenors()
     
     def get_tenors(self) -> np.ndarray:
-        points_dates = [cp.date for cp in self.curve_points]
-        tenors = dates.get_day_count(self.curve_date, points_dates, dates.DayCountConvention.Actual)
+        tenors = dates.get_day_count(self.curve_date, self.dates, dates.DayCountConvention.Actual)
         return tenors
     
     def sort(self):
@@ -61,6 +61,9 @@ class ZeroCouponCurve:
         return self.get_dfs([date])[0]
     
     def get_dfs(self, dates_t: list[date] | np.ndarray) -> np.ndarray:
+        hashed_inputs = str(dates_t) + str(self.dates) + str(self.dfs)
+        if hashed_inputs in self._cashed_dfs:
+            return self._cashed_dfs[hashed_inputs]
         tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
         min_tenor = min(self.get_tenors())
         max_tenor = max(self.get_tenors())
@@ -82,7 +85,9 @@ class ZeroCouponCurve:
         dfs = interps.interpolate(normal_tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
         normal_dfs[small_tenors_amount:small_tenors_amount+normal_tenors_amount] = dfs
 
-        return first_dfs + normal_dfs + last_dfs
+        total_dfs = first_dfs + normal_dfs + last_dfs
+        self._cashed_dfs[hashed_inputs] = total_dfs
+        return total_dfs
 
     def get_dfs_fwds(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray) -> np.ndarray:
         if len(start_dates) != len(end_dates):
