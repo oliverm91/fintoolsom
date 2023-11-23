@@ -244,6 +244,10 @@ _day_count_router = {
 }
 
 @lru_cache(maxsize=500)
+def _get_day_count(start_date: tuple[date] | date, end_date: tuple[date] | date, day_count_convention: DayCountConvention, holidays: Optional[tuple[date]]=None) -> np.ndarray | int:
+    days = _day_count_router[day_count_convention](start_date, end_date, day_count_convention, holidays)
+    return days
+
 def get_day_count(start_date: tuple[date] | date, end_date: tuple[date] | date, day_count_convention: DayCountConvention, holidays: Optional[tuple[date]]=None) -> np.ndarray | int:
     if type(start_date) not in (tuple, date):
         raise TypeError(f'start_date type received is {type(start_date)}. Only allowed types are tuple[date] and date')
@@ -252,7 +256,7 @@ def get_day_count(start_date: tuple[date] | date, end_date: tuple[date] | date, 
     if holidays is not None and type(holidays) != tuple:
         raise TypeError(f'holidays type received is {type(holidays)}. Only allowed types are NoneType and tuple[date]')
 
-    days = _day_count_router[day_count_convention](start_date, end_date, day_count_convention, holidays)
+    days = _get_day_count(start_date, end_date, day_count_convention, holidays)
     return days
 
 def get_time_fraction(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, base_convention: int=360) -> np.ndarray | float:
