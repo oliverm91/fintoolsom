@@ -243,20 +243,13 @@ _day_count_router = {
     DayCountConvention.Days30E_ISDA: _get_day_count_30e_isda    
 }
 
-@lru_cache(maxsize=500)
-def _get_day_count(start_date: tuple[date] | date, end_date: tuple[date] | date, day_count_convention: DayCountConvention, holidays: Optional[tuple[date]]=None) -> np.ndarray | int:
+_day_count_cache: dict[str, np.ndarray | int] = {}
+def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, holidays: Iterable[tuple[date]]=None) -> np.ndarray | int:
+    hashable_input = str(start_date)+str(end_date)+str(day_count_convention.value)+str(holidays)
+    if hashable_input in _day_count_cache:
+        return _day_count_cache[hashable_input]
     days = _day_count_router[day_count_convention](start_date, end_date, day_count_convention, holidays)
-    return days
-
-def get_day_count(start_date: tuple[date] | date, end_date: tuple[date] | date, day_count_convention: DayCountConvention, holidays: Optional[tuple[date]]=None) -> np.ndarray | int:
-    if type(start_date) not in (tuple, date):
-        raise TypeError(f'start_date type received is {type(start_date)}. Only allowed types are tuple[date] and date')
-    if type(end_date) not in (tuple, date):
-        raise TypeError(f'end_date type received is {type(end_date)}. Only allowed types are tuple[date] and date')
-    if holidays is not None and type(holidays) != tuple:
-        raise TypeError(f'holidays type received is {type(holidays)}. Only allowed types are NoneType and tuple[date]')
-
-    days = _get_day_count(start_date, end_date, day_count_convention, holidays)
+    _day_count_cache[hashable_input] = days
     return days
 
 def get_time_fraction(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, base_convention: int=360) -> np.ndarray | float:
