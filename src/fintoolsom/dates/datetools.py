@@ -91,7 +91,7 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     elif tenor_unit in ('m', 'y'):
         month_mult = 1 if tenor_unit == 'm' else 12
         adding_months = int(adding_units * month_mult)
-        end_date += relativedelta(months=adding_months)
+        end_date = date + relativedelta(months=adding_months)
     else:
         raise NotImplementedError(f'Tenor unit {tenor_unit} not implemented. Only d, m, y are accepted.')
         
