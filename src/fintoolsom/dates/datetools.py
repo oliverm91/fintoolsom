@@ -99,8 +99,6 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     end_date = adjust_date(end_date, adj_convention=adj_convention)
     return end_date
 
-@multimethod
-@lru_cache(maxsize=500)
 def _get_day_count_actual(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
     return (end_date - start_date).days
 
@@ -138,20 +136,10 @@ def _get_day_count_bus_days(start_date: date, end_date: date, holidays: Optional
     return count
 
 @multimethod
-def _get_day_count_bus_days(start_date: date, end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_bus_days(start_date, ed, holidays) for ed in end_date]
-    return np.array(count)
-
-@multimethod
 def _get_day_count_bus_days(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_bus_days(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
-    return np.array(count)
-
-@multimethod
-def _get_day_count_bus_days(start_date: Iterable[date], end_date: date, holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_bus_days(sd, end_date, holidays) for sd in start_date]
     return np.array(count)
 
 @multimethod
@@ -164,16 +152,6 @@ def _get_day_count_30a(start_date: date, end_date: date, holidays: Optional[Iter
     d2 = min(d2, 30) if d1 > 29 else d2
     count = 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
     return count
-
-@multimethod
-def _get_day_count_30a(start_date: date, end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30a(start_date, ed) for ed in end_date]
-    return np.array(count)
-
-@multimethod
-def _get_day_count_30a(start_date: Iterable[date], end_date: date, holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30a(sd, end_date) for sd in start_date]
-    return np.array(count)
 
 @multimethod
 def _get_day_count_30a(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
@@ -208,16 +186,6 @@ def _get_day_count_30u(start_date: date, end_date: date, holidays: Optional[Iter
     return count
 
 @multimethod
-def _get_day_count_30u(start_date: date, end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30u(start_date, ed) for ed in end_date]
-    return np.array(count)
-
-@multimethod
-def _get_day_count_30u(start_date: Iterable[date], end_date: date, holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30u(sd, end_date) for sd in start_date]
-    return np.array(count)
-
-@multimethod
 def _get_day_count_30u(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
@@ -235,16 +203,6 @@ def _get_day_count_30e(start_date: date, end_date: date, holidays: Optional[Iter
 
     count = 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
     return count
-
-@multimethod
-def _get_day_count_30e(start_date: date, end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30e(start_date, ed) for ed in end_date]
-    return np.array(count)
-
-@multimethod
-def _get_day_count_30e(start_date: Iterable[date], end_date: date, holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30e(sd, end_date) for sd in start_date]
-    return np.array(count)
 
 @multimethod
 def _get_day_count_30e(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
@@ -270,16 +228,6 @@ def _get_day_count_30e_isda(start_date: date, end_date: date, holidays: Optional
     return count
 
 @multimethod
-def _get_day_count_30e_isda(start_date: date, end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30e_isda(start_date, ed) for ed in end_date]
-    return np.array(count)
-
-@multimethod
-def _get_day_count_30e_isda(start_date: Iterable[date], end_date: date, holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    count = [_get_day_count_30e_isda(sd, end_date) for sd in start_date]
-    return np.array(count)
-
-@multimethod
 def _get_day_count_30e_isda(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
@@ -295,11 +243,19 @@ _day_count_router = {
     DayCountConvention.Days30E_ISDA: _get_day_count_30e_isda    
 }
 
-def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, holidays: Optional[Iterable[date]]=None) -> np.ndarray | int:
-    func = _day_count_router[day_count_convention]
-    return func(start_date, end_date, holidays)
+@lru_cache(maxsize=500)
+def get_day_count(start_date: tuple[date] | date, end_date: tuple[date] | date, day_count_convention: DayCountConvention, holidays: Optional[tuple[date]]=None) -> np.ndarray | int:
+    if type(start_date) not in (tuple, date):
+        raise TypeError(f'start_date type received is {type(start_date)}. Only allowed types are tuple[date] and date')
+    if type(end_date) not in (tuple, date):
+        raise TypeError(f'end_date type received is {type(end_date)}. Only allowed types are tuple[date] and date')
+    if holidays is not None and type(holidays) != tuple:
+        raise TypeError(f'holidays type received is {type(holidays)}. Only allowed types are NoneType and tuple[date]')
+
+    days = _day_count_router[day_count_convention](start_date, end_date, day_count_convention, holidays)
+    return days
 
 def get_time_fraction(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, base_convention: int=360) -> np.ndarray | float:
     day_count = get_day_count(start_date, end_date, day_count_convention)
     time_fraction = day_count / base_convention
-    return time_fraction   
+    return time_fraction
