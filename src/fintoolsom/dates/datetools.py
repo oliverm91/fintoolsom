@@ -1,6 +1,7 @@
 from datetime import timedelta, date
 from enum import Enum
 import calendar
+from dateutil.relativedelta import relativedelta
 from typing import Iterable, Optional
 import numpy as np
 from multimethod import multimethod
@@ -75,18 +76,11 @@ def adjust_date(date: date, holidays: Optional[Iterable[date]]=None, adj_convent
         raise NotImplementedError(f'Adjustment Date Convention {adj_convention} has no implemented method.')
     return date
 
-def add_months(date: date, months: int) -> date:
-    month = date.month - 1 + months
-    year = date.year + month // 12
-    month = month % 12 + 1
-    day = min(date.day, calendar.monthrange(year, month)[1])
-    return date.replace(year=year, month=month, day=day)
-
 def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, adj_convention: AdjustmentDateConvention=None) -> date:
-    tenor = tenor.replace('/', '')
-    tenor = tenor.replace('ON', '1D')
-    tenor = tenor.replace('TN', '2D')
-    tenor_unit = tenor[-1:].lower()
+    tenor = tenor.replace('/', '').lower()
+    tenor = tenor.replace('on', '1D')
+    tenor = tenor.replace('tn', '2D')
+    tenor_unit = tenor[-1:]
     adding_units = int(tenor[:-(len(tenor)-1)])
     if tenor_unit == 'd':
         end_date = date + add_business_days(date, adding_units, holidays=holidays)
@@ -97,7 +91,7 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     elif tenor_unit in ('m', 'y'):
         month_mult = 1 if tenor_unit == 'm' else 12
         adding_months = int(adding_units * month_mult)
-        end_date = add_months(date, adding_months)
+        end_date += relativedelta(months=adding_months)
     else:
         raise NotImplementedError(f'Tenor unit {tenor_unit} not implemented. Only d, m, y are accepted.')
         
