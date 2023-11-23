@@ -1,6 +1,7 @@
 from datetime import timedelta, date
 from enum import Enum
 import calendar
+from functools import lru_cache
 from dateutil.relativedelta import relativedelta
 from typing import Iterable, Optional
 import numpy as np
@@ -293,6 +294,7 @@ _day_count_router = {
     DayCountConvention.Days30E_ISDA: _get_day_count_30e_isda    
 }
 
+@lru_cache(maxsize=500)
 def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, holidays: Optional[Iterable[date]]=None) -> np.ndarray | int:
     func = _day_count_router[day_count_convention]
     return func(start_date, end_date, holidays)
