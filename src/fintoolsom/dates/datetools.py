@@ -99,6 +99,7 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     end_date = adjust_date(end_date, adj_convention=adj_convention)
     return end_date
 
+@multimethod
 def _get_day_count_actual(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
     return (end_date - start_date).days
 
@@ -248,7 +249,7 @@ def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | 
     hashable_input = str(start_date)+str(end_date)+str(day_count_convention.value)+str(holidays)
     if hashable_input in _day_count_cache:
         return _day_count_cache[hashable_input]
-    days = _day_count_router[day_count_convention](start_date, end_date, day_count_convention, holidays)
+    days = _day_count_router[day_count_convention](start_date, end_date, holidays)
     _day_count_cache[hashable_input] = days
     return days
 
