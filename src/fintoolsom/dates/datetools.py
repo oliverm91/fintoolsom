@@ -95,7 +95,7 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     else:
         raise NotImplementedError(f'Tenor unit {tenor_unit} not implemented. Only d, m, y are accepted.')
         
-    end_date = adjust_date(date, adj_convention=adj_convention)
+    end_date = adjust_date(end_date, adj_convention=adj_convention)
     return end_date
 
 @multimethod
