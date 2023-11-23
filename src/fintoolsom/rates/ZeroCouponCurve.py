@@ -44,6 +44,7 @@ class ZeroCouponCurve:
         self.dates, self.rates = list(map(list, zip(*[(cp.date, cp.rate) for cp in self.curve_points])))
         self.tenors = self.get_tenors()
         self.set_df_curve()
+        self._str_dates_rates = str(self.dates)+str(self.rates)
         
     def delete_point(self, date: date):
         self.curve_points = list(filter(lambda cp: cp.date != date, self.curve_points))
@@ -61,7 +62,7 @@ class ZeroCouponCurve:
         return self.get_dfs([date])[0]
     
     def get_dfs(self, dates_t: list[date] | np.ndarray) -> np.ndarray:
-        hashed_inputs = str(dates_t) + str(self.dates) + str(self.dfs)
+        hashed_inputs = self._str_dates_rates + str(dates_t)
         if hashed_inputs in self._cashed_dfs:
             return self._cashed_dfs[hashed_inputs]
         tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
