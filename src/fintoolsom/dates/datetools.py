@@ -82,7 +82,7 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     tenor = tenor.replace('on', '1D')
     tenor = tenor.replace('tn', '2D')
     tenor_unit = tenor[-1:]
-    adding_units = int(tenor[:-(len(tenor)-1)])
+    adding_units = int(tenor[:-1])
     if tenor_unit == 'd':
         end_date = date + add_business_days(date, adding_units, holidays=holidays)
         return end_date
