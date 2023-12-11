@@ -1,3 +1,4 @@
+from copy import copy
 from enum import Enum
 from datetime import date
 from typing import Self
@@ -18,14 +19,16 @@ class RateConvention:
         self.day_count_convention = day_count_convention
         self.time_fraction_base = time_fraction_base
 
+    def __copy__(self):
+        return RateConvention(interest_convention=self.interest_convention, day_count_convention=self.day_count_convention, time_fraction_base=self.time_fraction_base)
 
 class Rate:
     def __init__(self, rate_convention: RateConvention, rate_value: float):
         self.rate_value = rate_value
         self.rate_convention = rate_convention
         
-    def copy(self) -> Self:
-        return Rate(self.rate_convention, self.rate_value)
+    def __copy__(self) -> Self:
+        return copy(Rate(self.rate_convention, self.rate_value))
 
     def _get_wf_from_linear_rate(self, rate_value: float, start_date: date, end_date: date) -> np.ndarray | float:
         time_fraction = self.get_time_fraction(start_date, end_date)

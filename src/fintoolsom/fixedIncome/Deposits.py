@@ -32,3 +32,6 @@ class Deposit:
     def get_duration(self, t: date, base_year_fraction: int=365) -> float:
         dur = (self.payment_date - t).days / base_year_fraction        
         return dur
+
+    def __copy__(self):
+        return Deposit(self.nemo, self.currency, self.payment_date, self.payment)

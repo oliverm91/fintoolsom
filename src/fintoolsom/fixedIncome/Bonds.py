@@ -1,6 +1,9 @@
-import numpy as np
+from copy import copy, deepcopy
 from datetime import date
+
+import numpy as np
 from scipy.optimize import newton
+
 from .. import rates
 from .. import dates
 from ..rates import Rate, RateConvention
@@ -33,14 +36,17 @@ class Coupon:
         accrued_interest = accrue_rate.get_accrued_interest(self.residual, self.start_date, date)
         return accrued_interest
     
+    def __copy__(self):
+        return Coupon(self.amortization, self.interest, self.residual, self.start_date, self.end_date, deepcopy(self.accrue_rate))
+    
     
 class Coupons:
     def __init__(self, coupons: list[Coupon]):
         self.coupons = coupons
         self.sort()
 
-    def copy(self):
-        return Coupons(self.coupons)
+    def __copy__(self):
+        return Coupons(deepcopy(self.coupons))
 
     def sort(self):
         self.coupons = sorted(self.coupons, key=lambda c: c.start_date)
@@ -89,8 +95,8 @@ class Bond:
         self.accrue_rate = self.coupons.get_accrue_rate()
         self.flows_amount = self.coupons.get_flows()
 
-    def copy(self):
-        return Bond({'coupons': self.coupons, 'currency': self.currency, 'notional': self.notional})
+    def __copy__(self):
+        return Bond({'coupons': deepcopy(self.coupons), 'currency': self.currency, 'notional': self.notional})
 
     def get_maturity_date(self) -> date:
         '''
