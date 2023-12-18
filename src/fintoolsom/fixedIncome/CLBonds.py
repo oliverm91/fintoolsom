@@ -15,7 +15,7 @@ class CLBond(Bond):
         self.tera = tera if tera is not None else self.calculate_tera()
 
     def __copy__(self):
-        return CLBond({'coupons': deepcopy(self.coupons), 'currency': self.currency, 'notional': self.notional, 'tera': self.tera})
+        return CLBond(**{'coupons': copy(self.coupons), 'currency': self.currency, 'notional': self.notional, 'tera': self.tera})
         
     def calculate_tera(self) -> rates.Rate:
         '''
