@@ -1,4 +1,4 @@
-from copy import deepcopy
+from copy import copy
 from datetime import date
 from scipy.optimize import newton
 
