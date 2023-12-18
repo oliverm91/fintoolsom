@@ -4,7 +4,6 @@ from scipy.optimize import newton
 
 from fintoolsom.rates.Rates import RateConvention
 from .Bonds import Bond
-from mathsom import solvers
 
 from .. import rates
 from .. import dates
