@@ -1,6 +1,9 @@
+from copy import deepcopy
+from datetime import date
+from scipy.optimize import newton
+
 from fintoolsom.rates.Rates import RateConvention
 from .Bonds import Bond
-from datetime import date
 from mathsom import solvers
 
 from .. import rates
@@ -11,6 +14,9 @@ class CLBond(Bond):
         super().__init__(**kwargs)
         tera = kwargs.get('tera', None)
         self.tera = tera if tera is not None else self.calculate_tera()
+
+    def __copy__(self):
+        return Bond({'coupons': deepcopy(self.coupons), 'currency': self.currency, 'notional': self.notional, 'tera': tera})
         
     def calculate_tera(self) -> rates.Rate:
         '''
@@ -79,13 +85,9 @@ class CLBond(Bond):
         ----
             irr (Rate): The IRR of the bond.
         '''
-        func = self._get_amount_value_rate_value
-        initial_guess = self.tera.rate_value
-        args = [date, initial_guess, irr_rate_convention, fx]
-        arg_index = 1
-        min_step = 0.06 / 10_000.0
-        min_diff_step = 0.03 / 10_000.0
-        rate_value = solvers.newton_raphson_solver(amount, func, initial_guess, args=args, argument_index=arg_index, max_steps=50, epsilon=min_step, differentiation_step=min_diff_step)
+        def objective_function(irr_value: float) -> float:
+            return self._get_amount_value_rate_value(date, irr_value, irr_rate_convention, fx=fx) - amount
+        irr_value = newton(objective_function, x0=self.tera.rate_value, tol=1e-8, maxiter=100)
         rate_value = round(rate_value, 6)
         irr = rates.Rate(irr_rate_convention, rate_value)
         return irr
