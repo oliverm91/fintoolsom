@@ -15,7 +15,7 @@ class CLBond(Bond):
         self.tera = tera if tera is not None else self.calculate_tera()
 
     def __copy__(self):
-        return Bond({'coupons': deepcopy(self.coupons), 'currency': self.currency, 'notional': self.notional, 'tera': tera})
+        return CLBond({'coupons': deepcopy(self.coupons), 'currency': self.currency, 'notional': self.notional, 'tera': self.tera})
         
     def calculate_tera(self) -> rates.Rate:
         '''
@@ -87,7 +87,7 @@ class CLBond(Bond):
         def objective_function(irr_value: float) -> float:
             return self._get_amount_value_rate_value(date, irr_value, irr_rate_convention, fx=fx) - amount
         irr_value = newton(objective_function, x0=self.tera.rate_value, tol=1e-8, maxiter=100)
-        rate_value = round(rate_value, 6)
+        rate_value = round(irr_value, 6)
         irr = rates.Rate(irr_rate_convention, rate_value)
         return irr
     
