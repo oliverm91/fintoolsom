@@ -61,7 +61,7 @@ class Option(ABC):
                 return_vol_sqrt_yf: bool=False) -> float | dict[str, float]:
         yf = self._get_yf(t)
         r, q = self._get_rates(t, domestic_curve, foreign_curve)
-        vol = volatility_surface.get_volatility(self.maturity, spot)
+        vol = volatility_surface.get_volatility(self.maturity, self.strike)
         vol_sqrt_yf = vol*math.sqrt(yf)
         d1 = (math.log(spot/self.strike)+(r-q+vol*vol/2)*yf)/vol_sqrt_yf
         if not return_vol_sqrt_yf:
