@@ -24,9 +24,8 @@ class Deposit:
     
     def get_dv01(self, t: date, rate_value: float) -> float:
         dur = self.get_duration(t)
-        pv = self.get_value(t, rate_value) / 100
+        pv = self.get_value(t, rate_value)
         dv01 = - pv * dur / 10_000
-        dv01 *= self.payment
         return dv01
     
     def get_duration(self, t: date, base_year_fraction: int=365) -> float:
