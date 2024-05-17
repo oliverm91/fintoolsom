@@ -21,6 +21,7 @@ class VolatilitySurface:
     def __post_init__(self):
         # Check that indexes in all vol_surface_strike_columns are the same.
         # Sort them by strike
+        pass
 
     def get_volatility(t: date, spot: float):
         raise NotImplementedError()
