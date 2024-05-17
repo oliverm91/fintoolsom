@@ -58,7 +58,7 @@ class ZeroCouponCurve:
         self.curve_points.append(curve_point)
         self.sort()
 
-    def get_df(self, date: date):
+    def get_df(self, date: date) -> float:
         return self.get_dfs([date])[0]
     
     def get_dfs(self, dates_t: list[date] | np.ndarray) -> np.ndarray:
@@ -89,6 +89,9 @@ class ZeroCouponCurve:
         total_dfs = first_dfs + normal_dfs + last_dfs
         self._cashed_dfs[hashed_inputs] = total_dfs
         return total_dfs
+    
+    def get_df_fwd(self, start_date: date, end_date: date) -> float:
+        return self.get_df(end_date) / self.get_df(start_date)
 
     def get_dfs_fwds(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray) -> np.ndarray:
         if len(start_dates) != len(end_dates):
@@ -97,9 +100,15 @@ class ZeroCouponCurve:
         start_dfs = self.get_dfs(start_dates)
         fwds = end_dfs/start_dfs
         return fwds
+    
+    def get_wf(self, date: date) -> float:
+        return 1 / self.get_df(date)
 
     def get_wfs(self, dates: list[date] | np.ndarray) -> np.ndarray:
         return 1 / self.get_dfs(dates)
+    
+    def get_wf_fwd(self, start_date: date, end_date: date) -> float:
+        return 1 / self.get_df_fwd(start_date, end_date)
 
     def get_wfs_fwds(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray) -> np.ndarray:
         if len(start_dates) != len(end_dates):
