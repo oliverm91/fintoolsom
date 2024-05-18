@@ -1,7 +1,6 @@
 from datetime import timedelta, date
 from enum import Enum
 import calendar
-from functools import lru_cache
 from dateutil.relativedelta import relativedelta
 from typing import Iterable, Optional
 import numpy as np
@@ -62,20 +61,16 @@ def modified_preceding(date: date, holidays: Optional[Iterable[date]]=None) -> d
         following(date, holidays=holidays)
     return date
 
+_adjust_date_mapper = {
+    AdjustmentDateConvention.Following: following,
+    AdjustmentDateConvention.ModifiedFollowing: modified_following,
+    AdjustmentDateConvention.Preceding: preceding,
+    AdjustmentDateConvention.ModifiedPreceding: modified_preceding,
+}
 def adjust_date(date: date, holidays: Optional[Iterable[date]]=None, adj_convention: AdjustmentDateConvention=AdjustmentDateConvention.Following) -> date:
-    if adj_convention==AdjustmentDateConvention.Following:
-        date = following(date, holidays=holidays)
-    elif adj_convention==AdjustmentDateConvention.Preceding:
-        date = preceding(date, holidays=holidays)
-    elif adj_convention==AdjustmentDateConvention.ModifiedFollowing:
-        date = modified_following(date, holidays=holidays)
-    elif adj_convention==AdjustmentDateConvention.ModifiedPreceding:
-        date = modified_preceding(date, holidays=holidays)
-    elif adj_convention is None:
-        return date
-    else:
-        raise NotImplementedError(f'Adjustment Date Convention {adj_convention} has no implemented method.')
-    return date
+    func = _adjust_date_mapper.get(adj_convention)
+    adjusted_date = func(date, holidays=holidays)
+    return adjusted_date
 
 def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, adj_convention: AdjustmentDateConvention=None) -> date:
     tenor = tenor.replace('/', '').lower()
@@ -87,8 +82,8 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
         end_date = date + add_business_days(date, adding_units, holidays=holidays)
         return end_date
     elif tenor_unit == 'w':
-        tenor = str(7 * adding_units) + 'd'
-        end_date = add_tenor(date, tenor, holidays=holidays, adj_convention=adj_convention)
+        days_to_add = 7 * tenor_unit
+        end_date = date + relativedelta(days=days_to_add)
     elif tenor_unit in ('m', 'y'):
         month_mult = 1 if tenor_unit == 'm' else 12
         adding_months = int(adding_units * month_mult)
@@ -100,17 +95,17 @@ def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, a
     return end_date
 
 @multimethod
-def _get_day_count_actual(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
+def _get_day_count_actual(start_date: date, end_date: date) -> int:
     return (end_date - start_date).days
 
 @multimethod
-def _get_day_count_actual(start_date: date, end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_actual(start_date: date, end_date: Iterable[date]) -> np.ndarray:
     end_date_np = np.array(end_date)
     count = (end_date_np - start_date).astype('timedelta64[D]')/np.timedelta64(1, 'D')
     return count
 
 @multimethod
-def _get_day_count_actual(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_actual(start_date: Iterable[date], end_date: Iterable[date]) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     start_date_np = np.array(start_date)
@@ -119,32 +114,13 @@ def _get_day_count_actual(start_date: Iterable[date], end_date: Iterable[date], 
     return count
 
 @multimethod
-def _get_day_count_actual(start_date: Iterable[date], end_date: date, holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_actual(start_date: Iterable[date], end_date: date) -> np.ndarray:
     start_date_np = np.array(start_date)
     count = (end_date - start_date_np).astype('timedelta64[D]')/np.timedelta64(1, 'D')
     return count
 
 @multimethod
-def _get_day_count_bus_days(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
-    count = 0
-    if start_date > end_date:
-        raise ValueError(f'Start date {start_date} must be before end date {end_date}.')
-    ref_date = start_date
-    while ref_date < end_date:
-        ref_date += timedelta(days=1)
-        if is_business_date(ref_date, holidays):
-            count += 1
-    return count
-
-@multimethod
-def _get_day_count_bus_days(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
-    if len(start_date) != len(end_date):
-        raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
-    count = [_get_day_count_bus_days(sd, ed, holidays) for sd, ed in zip(start_date, end_date)]
-    return np.array(count)
-
-@multimethod
-def _get_day_count_30a(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
+def _get_day_count_30a(start_date: date, end_date: date) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -155,14 +131,14 @@ def _get_day_count_30a(start_date: date, end_date: date, holidays: Optional[Iter
     return count
 
 @multimethod
-def _get_day_count_30a(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_30a(start_date: Iterable[date], end_date: Iterable[date]) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30a(sd, ed) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30u(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
+def _get_day_count_30u(start_date: date, end_date: date) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -187,14 +163,14 @@ def _get_day_count_30u(start_date: date, end_date: date, holidays: Optional[Iter
     return count
 
 @multimethod
-def _get_day_count_30u(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_30u(start_date: Iterable[date], end_date: Iterable[date]) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30u(sd, ed) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30e(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
+def _get_day_count_30e(start_date: date, end_date: date) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -206,14 +182,14 @@ def _get_day_count_30e(start_date: date, end_date: date, holidays: Optional[Iter
     return count
 
 @multimethod
-def _get_day_count_30e(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_30e(start_date: Iterable[date], end_date: Iterable[date]) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30e(sd, ed) for sd, ed in zip(start_date, end_date)]
     return np.array(count)
 
 @multimethod
-def _get_day_count_30e_isda(start_date: date, end_date: date, holidays: Optional[Iterable[date]]=None) -> int:
+def _get_day_count_30e_isda(start_date: date, end_date: date) -> int:
     d1, d2 = start_date.day, end_date.day
     m1, m2 = start_date.month, end_date.month
     y1, y2 = start_date.year, end_date.year
@@ -229,7 +205,7 @@ def _get_day_count_30e_isda(start_date: date, end_date: date, holidays: Optional
     return count
 
 @multimethod
-def _get_day_count_30e_isda(start_date: Iterable[date], end_date: Iterable[date], holidays: Optional[Iterable[date]]=None) -> np.ndarray:
+def _get_day_count_30e_isda(start_date: Iterable[date], end_date: Iterable[date]) -> np.ndarray:
     if len(start_date) != len(end_date):
         raise ValueError(f'Start and end dates must have the same length. Start date length: {len(start_date)}, end date length: {len(end_date)}')
     count = [_get_day_count_30e_isda(sd, ed) for sd, ed in zip(start_date, end_date)]
@@ -237,19 +213,17 @@ def _get_day_count_30e_isda(start_date: Iterable[date], end_date: Iterable[date]
 
 _day_count_router = {
     DayCountConvention.Actual: _get_day_count_actual,
-    DayCountConvention.BUS_DAYS: _get_day_count_bus_days,
     DayCountConvention.Days30A: _get_day_count_30a,
     DayCountConvention.Days30E: _get_day_count_30e,
     DayCountConvention.Days30U: _get_day_count_30u,
     DayCountConvention.Days30E_ISDA: _get_day_count_30e_isda    
 }
-
 _day_count_cache: dict[str, np.ndarray | int] = {}
-def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention, holidays: Iterable[tuple[date]]=None) -> np.ndarray | int:
-    hashable_input = str(start_date)+str(end_date)+str(day_count_convention.value)+str(holidays)
+def get_day_count(start_date: Iterable[date] | date, end_date: Iterable[date] | date, day_count_convention: DayCountConvention) -> np.ndarray | int:
+    hashable_input = str(start_date)+str(end_date)+str(day_count_convention.value)
     if hashable_input in _day_count_cache:
         return _day_count_cache[hashable_input]
-    days = _day_count_router[day_count_convention](start_date, end_date, holidays)
+    days = _day_count_router[day_count_convention](start_date, end_date)
     _day_count_cache[hashable_input] = days
     return days
 
