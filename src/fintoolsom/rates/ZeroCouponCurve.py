@@ -1,6 +1,4 @@
 import numpy as np
-from typing import List, Self, Union
-import mathsom.interpolations as interps
 from datetime import date
 from dataclasses import dataclass
 
@@ -12,19 +10,19 @@ class ZeroCouponCurvePoint:
     date: date
     rate: rates.Rate
     
-    def copy(self) -> Self:
+    def copy(self):
         return ZeroCouponCurvePoint(self.date, self.rate.copy())
         
 
 class ZeroCouponCurve:
-    def __init__(self, curve_date: date, curve_points: List[ZeroCouponCurvePoint]):
+    def __init__(self, curve_date: date, curve_points: list[ZeroCouponCurvePoint]):
         self.curve_date = curve_date
         self.curve_points = curve_points
         self.sort()
-        self._cashed_dfs: [str, np.ndarray] = {}
+        self._cashed_dfs: dict[str, np.ndarray] = {}
   
-    def copy(self) -> Self:
-        return ZeroCouponCurve(self.curve_date, self.curve_points)
+    def copy(self):
+        return ZeroCouponCurve(self.curve_date, [zccp.copy() for zccp in self.curve_points])
     
     def set_df_curve(self):
         self.wfs = np.array([cp.rate.get_wealth_factor(self.curve_date, cp.date) 
@@ -32,17 +30,17 @@ class ZeroCouponCurve:
                              for cp in self.curve_points])
         self.dfs = 1 / self.wfs
         
-    def set_tenors(self):
-        self.tenors = self.get_tenors()
+    def set_days(self):
+        self.days = self.get_days()
     
-    def get_tenors(self) -> np.ndarray:
-        tenors = dates.get_day_count(self.curve_date, self.dates, dates.DayCountConvention.Actual)
-        return tenors
+    def get_days(self) -> np.ndarray:
+        days = dates.get_day_count(self.curve_date, self.dates, dates.DayCountConvention.Actual)
+        return days
     
     def sort(self):
         self.curve_points = sorted(self.curve_points, key=lambda cp: cp.date)
         self.dates, self.rates = list(map(list, zip(*[(cp.date, cp.rate) for cp in self.curve_points])))
-        self.tenors = self.get_tenors()
+        self.days = self.get_days()
         self.set_df_curve()
         self._str_dates_rates = str(self.dates)+str(self.rates)
         
@@ -66,8 +64,8 @@ class ZeroCouponCurve:
         if hashed_inputs in self._cashed_dfs:
             return self._cashed_dfs[hashed_inputs]
         tenors = dates.get_day_count(self.curve_date, dates_t, dates.DayCountConvention.Actual)
-        min_tenor = min(self.get_tenors())
-        max_tenor = max(self.get_tenors())
+        min_tenor = min(self.get_days())
+        max_tenor = max(self.get_days())
         tenors_smaller_than_min = tenors[tenors<min_tenor]
         tenors_greater_than_max = tenors[tenors>max_tenor]
         normal_tenors = tenors[(tenors >= min_tenor) & (tenors <= max_tenor)]
@@ -83,7 +81,7 @@ class ZeroCouponCurve:
             index = small_tenors_amount + normal_tenors_amount + ix
             last_dfs[index] = self.curve_points[-1].rate.get_discount_factor(self.curve_date, dates_t[index])
         
-        dfs = interps.interpolate(normal_tenors, self.tenors, self.dfs, interps.InterpolationMethod.LOGLINEAR)
+        dfs = np.exp(np.interp(normal_tenors, self.days, np.log(self.dfs))) # Log-Linear interpolation of discount factors
         normal_dfs[small_tenors_amount:small_tenors_amount+normal_tenors_amount] = dfs
 
         total_dfs = first_dfs + normal_dfs + last_dfs
@@ -117,7 +115,7 @@ class ZeroCouponCurve:
         wfs_fwds = 1 / df_fwds
         return wfs_fwds
     
-    def get_forward_rates(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray, rate_convention: rates.RateConvention) -> List[float]:
+    def get_forward_rates(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray, rate_convention: rates.RateConvention) -> list[float]:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         start_wfs = self.get_wfs(start_dates)
@@ -132,7 +130,7 @@ class ZeroCouponCurve:
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention)
         return np.array([r.rate_value for r in rates_obj])
 
-    def get_zero_rates(self, rate_convention: rates.RateConvention=None) -> List[rates.Rate]:
+    def get_zero_rates(self, rate_convention: rates.RateConvention=None) -> list[rates.Rate]:
         if rate_convention is None:
             return [cp.copy() for cp in self.curve_points]
         else:
