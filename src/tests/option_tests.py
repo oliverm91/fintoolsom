@@ -3,4 +3,3 @@ from fintoolsom.derivatives.options.volatility_surface import VolatilitySurface,
 
 def run_tests():
     t = date(2024, 5, 15)
-    
