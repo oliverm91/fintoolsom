@@ -1,11 +1,15 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import timedelta
 from enum import Enum
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline
 from scipy.optimize import minimize
+
+from fintoolsom.rates import ZeroCouponCurve
+from fintoolsom.derivatives.options.options import Put
 
 
 class InterpolationMethod(Enum):
@@ -17,8 +21,36 @@ class InterpolationMethod(Enum):
 @dataclass
 class InterpolationModel(ABC):
     vol_surface_df: pd.DataFrame = field(repr=False)
-    log_moneyness_columns: list[float] = field(repr=True)
+    spot: float
+    domestic_curve: ZeroCouponCurve
+    foreign_curve: ZeroCouponCurve
+
     interpolation_method: InterpolationMethod
+
+    log_moneyness_df: pd.DataFrame = field(repr=False, init=False)
+    delta_puts: np.ndarray = field(init=False)
+    days: np.ndarray = field(init=False)
+    def __post_init__(self):
+        self.delta_puts = self.vol_surface_df.columns.to_numpy()
+        self.days = self.vol_surface_df.index.to_numpy()
+
+        log_moneyness_np = np.zeros((len(self.days), len(self.vol_surface_df.columns)))
+        for row in range(log_moneyness_np.shape[0]):
+            for column in range(log_moneyness_np.shape[1]):
+                days = self.days[row]
+                delta = self.delta_puts[column]
+                
+                maturity = self.domestic_curve.curve_date + timedelta(days=days)
+                df_r = self.domestic_curve.get_df(maturity)
+                df_q = self.foreign_curve.get_df(maturity)
+                fwd_price = self.spot * df_q / df_r
+
+                volatility = self.log_moneyness_df.values[row, column]
+                k = Put.get_strike_from_delta(delta, self.spot, volatility, self.domestic_curve, self.foreign_curve, maturity)
+                log_moneyness = np.log(k / fwd_price)
+                log_moneyness_np[row, column] = log_moneyness
+        
+        self.log_moneyness_df = pd.DataFrame(log_moneyness_np, columns=self.delta_puts, index=self.vol_surface_df.index)
 
     @abstractmethod
     def interpolate_surface(self, log_moneyness: float, days: int) -> float:
@@ -30,26 +62,35 @@ class DoubleInterpolationModel(InterpolationModel, ABC):
         if self.interpolation_method not in [InterpolationMethod.DoubleLinear, InterpolationMethod.DoubleCubicSpline]:
             raise ValueError(f'DoubleInterpolationModel can not implement InterpolationMethod {self.interpolation_method}.')
 
-    @abstractmethod
     def interpolate_surface(self, log_moneyness: float, days: int | np.ndarray) -> float | np.ndarray:
+        smile = self.get_smile_t(days) # First interpolation
+        smile_moneynesses = self.get_smile_log_moneynesses(days)
+        vol = self._second_interp(log_moneyness, smile_moneynesses, smile) # Second interpolation
+        return vol
+    
+    @abstractmethod
+    def _second_interp(log_moneyness: float, smile_moneynesses: np.ndarray, smile: np.ndarray) -> float:
         pass
+
+    def get_smile_log_moneynesses(self, days: int) -> np.ndarray:
+        df: pd.DataFrame =self.log_moneyness_df.reindex(self.log_moneyness_df.index.tolist()+[days]).interpolate(method=self.interpolation_method.value)
+        return df.loc[days].to_numpy()
 
     def get_smile_t(self, days: int) -> np.ndarray:
         df: pd.DataFrame =self.vol_surface_df.reindex(self.vol_surface_df.index.tolist()+[days]).interpolate(method=self.interpolation_method.value)
         return df.loc[days].to_numpy()
 
 class DoubleInterpolationLinear(DoubleInterpolationModel):
-    def interpolate_surface(self, log_moneyness: float, days: int | np.ndarray) -> float | np.ndarray:
-        smile = self.get_smile_t(days)
-        vol = np.interp(log_moneyness, self.log_moneyness_columns, smile)
+    def _second_interp(self, log_moneyness: float, smile_moneynesses: np.ndarray, smile: np.ndarray) -> float:
+        vol = np.interp(log_moneyness, smile_moneynesses, smile)
         return vol
     
 class DoubleInterpolationCubicSpline(DoubleInterpolationModel):
-    def interpolate_surface(self, log_moneyness: float, days: int | np.ndarray) -> float | np.ndarray:
-        smile = self.get_smile_t(days)
-        cs = CubicSpline(self.log_moneyness_columns, smile)
+    def _second_interp(self, log_moneyness: float, smile_moneynesses: np.ndarray, smile: np.ndarray) -> float:
+        cs = CubicSpline(smile_moneynesses, smile)
         vol = cs(log_moneyness)
         return vol
+
 
 @dataclass
 class eSSVI(InterpolationModel):
@@ -73,26 +114,27 @@ class eSSVI(InterpolationModel):
         vol = np.sqrt(total_variance / days)
         return vol
     
-    def _get_total_variance(self, log_moneyness: float | np.ndarray, days: int | np.ndarray, *params) -> float | np.ndarray:
-        # Ensure log_moneyness and days are numpy arrays for easier manipulation
-        if isinstance(log_moneyness, float):
-            log_moneyness = np.array([log_moneyness])
-        if isinstance(days, float):
-            days = np.array([days])
-        
-        # Check if both log_moneyness and days are arrays
-        if isinstance(log_moneyness, np.ndarray) and isinstance(days, np.ndarray):
-            if log_moneyness.ndim == 1 and days.ndim == 1:
-                # Both are simple arrays, no need to reshape
-                pass
-            elif log_moneyness.ndim == 1 and days.ndim == 2:
-                if days.shape[0] == len(log_moneyness) and days.shape[1] == 1:
-                    # log_moneyness is an array and days is a matrix of size len(log_moneyness)x1
+    def _get_total_variance(self, log_moneyness: float | np.ndarray, days: int | np.ndarray, *params, validate_shapes: bool=True) -> float | np.ndarray:
+        if validate_shapes:
+            # Ensure log_moneyness and days are numpy arrays for easier manipulation
+            if isinstance(log_moneyness, float):
+                log_moneyness = np.array([log_moneyness])
+            if isinstance(days, float):
+                days = np.array([days])
+            
+            # Check if both log_moneyness and days are arrays
+            if isinstance(log_moneyness, np.ndarray) and isinstance(days, np.ndarray):
+                if log_moneyness.ndim == 1 and days.ndim == 1:
+                    # Both are simple arrays, no need to reshape
                     pass
+                elif log_moneyness.ndim == 1 and days.ndim == 2:
+                    if days.shape[0] == len(log_moneyness) and days.shape[1] == 1:
+                        # log_moneyness is an array and days is a matrix of size len(log_moneyness)x1
+                        pass
+                    else:
+                        raise ValueError("When both log_moneyness and days are arrays, days must be of shape (len(log_moneyness), 1).")
                 else:
-                    raise ValueError("When both log_moneyness and days are arrays, days must be of shape (len(log_moneyness), 1).")
-            else:
-                raise ValueError("Invalid dimensions for log_moneyness and days.")
+                    raise ValueError("Invalid dimensions for log_moneyness and days.")
 
         theta_0, theta_1, rho_0, rho_1, phi_0, phi_1 = params
         theta = self.exponential_formula(theta_0, theta_1, days)
@@ -122,7 +164,7 @@ class eSSVI(InterpolationModel):
         ]
 
         def objective_func(params):
-            model_total_variances = self._get_total_variance(self.log_moneyness_columns, days, *params)
+            model_total_variances = self._get_total_variance(self.log_moneyness_df.values, days, *params, validate_shapes=False)
             return np.sum((model_total_variances - mkt_total_variances_matrix)**2)
 
         result = minimize(objective_func, initial_params, bounds=bounds)
