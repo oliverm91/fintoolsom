@@ -55,7 +55,7 @@ class Rate:
         return wf
 
     def get_wealth_factor(self, start_date: date, end_date: date) -> np.ndarray | float:
-        wf = self._wf_router[self.rate_convention.interest_convention](self, self.rate_value, start_date, end_date)
+        wf = self._wf_router[self.rate_convention.interest_convention](self.rate_value, start_date, end_date)
         return wf
 
     def get_discount_factor(self, start_date: date, end_date: date) ->  np.ndarray | float:

@@ -18,7 +18,7 @@ class Option(ABC):
     _valuation_rate_convention: RateConvention = field(default=RateConvention(interest_convention=InterestConvention.Exponential,
                                                                               day_count_convention=DayCountConvention.Actual,
                                                                               time_fraction_base=365))
-    
+
     def get_mtm(self, t: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve):
         d1, d2 = self._get_both_ds(t, spot, volatility, domestic_curve, foreign_curve)
         r, q = self._get_rates(t, domestic_curve, foreign_curve)
@@ -82,7 +82,7 @@ class Option(ABC):
         return self._get_d2(t, spot, volatility, domestic_curve, foreign_curve, return_both_ds=True)
     
     @staticmethod
-    def get_strike_from_delta(delta: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve, maturity: date) -> float:
+    def get_strike_from_delta(delta: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve, maturity: date, sign: int) -> float:
         rate_convention = RateConvention(interest_convention=InterestConvention.Exponential, day_count_convention=DayCountConvention.Actual, time_fraction_base=365)
         df_r = domestic_curve.get_df(maturity)
         t = domestic_curve.curve_date
@@ -91,11 +91,15 @@ class Option(ABC):
         df_q = foreign_curve.get_df(maturity)
         q = Rate.get_rate_from_df(df_q, t, maturity, rate_convention).rate_value
 
-        k = spot * np.exp(-(Option._sign*norm.ppf(Option._sign*delta*(1/df_q)) * volatility * np.sqrt(yf) - (r - q + volatility*volatility/2)*yf))
+        k = spot * np.exp(-(sign*norm.ppf(sign*delta*(1/df_q)) * volatility * np.sqrt(yf) - (r - q + volatility*volatility/2)*yf))
         return k
 
 class Call(Option):
-    pass
-    
+    @staticmethod
+    def get_strike_from_delta(delta: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve, maturity: date) -> float:
+        return Option.get_strike_from_delta(delta, spot, volatility, domestic_curve, foreign_curve, maturity, 1)
+
 class Put(Option):
-    _sign: int = -1
+    @staticmethod
+    def get_strike_from_delta(delta: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve, maturity: date) -> float:
+        return Option.get_strike_from_delta(delta, spot, volatility, domestic_curve, foreign_curve, maturity, -1)
