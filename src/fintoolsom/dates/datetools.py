@@ -68,8 +68,11 @@ _adjust_date_mapper = {
     AdjustmentDateConvention.ModifiedPreceding: modified_preceding,
 }
 def adjust_date(date: date, holidays: Optional[Iterable[date]]=None, adj_convention: AdjustmentDateConvention=AdjustmentDateConvention.Following) -> date:
-    func = _adjust_date_mapper.get(adj_convention)
-    adjusted_date = func(date, holidays=holidays)
+    try:
+        func = _adjust_date_mapper[adj_convention]
+        adjusted_date = func(date, holidays=holidays)
+    except KeyError as _:
+        adjusted_date = date
     return adjusted_date
 
 def add_tenor(date: date, tenor: str, holidays: Optional[Iterable[date]]=None, adj_convention: AdjustmentDateConvention=None) -> date:

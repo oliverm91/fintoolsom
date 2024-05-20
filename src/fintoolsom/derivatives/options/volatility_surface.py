@@ -1,81 +1,181 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import date
 from enum import Enum
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline
+from scipy.optimize import minimize
 
 
 class InterpolationMethod(Enum):
-    Linear = 'linear'
-    CubicSpline = 'spline'
-
+    DoubleLinear = 'linear'
+    DoubleCubicSpline = 'cubicspline'
+    eSSVI = 'essvi'
 
 @dataclass
-class VolatilitySurfaceStrikeColumn:
-    t: date
-    strike: float
-    vol_surface_column: pd.Series
+class InterpolationModel(ABC):
+    vol_surface_df: pd.DataFrame = field(repr=False)
+    log_moneyness_columns: list[float] = field(repr=True)
+    interpolation_method: InterpolationMethod
+
+    log_moneyness_columns_np: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        for t in self.vol_surface_column.index:
-            if not isinstance(t, date):
-                raise TypeError(f'All indexes in vol_surface_column must be of type date')
-            
-        self.vol_surface_column.index = [(t_i - self.t).days for t_i in self.vol_surface_column.index]
-        self.vol_surface_column.sort_index(ascending=True)
+        self.log_moneyness_columns_np = np.array(self.log_moneyness_columns)[:, None]
 
-    def get_volatility(self, maturity: date, interpolation_type: InterpolationMethod) -> float:
-        days = (maturity - self.t).days
-        x, y = self.vol_surface_column.index, self.vol_surface_column.values
-        if interpolation_type==InterpolationMethod.Linear:
-            vol = np.interp(days, x, y)
-        elif interpolation_type==InterpolationMethod.CubicSpline:
-            cs = CubicSpline(x, y)
-            vol = cs(days)
+    @abstractmethod
+    def interpolate_surface(self, log_moneyness: float, days: int) -> float:
+        pass
 
+@dataclass
+class DoubleInterpolationModel(InterpolationModel, ABC):
+    def __post_init__(self):
+        if self.interpolation_method not in [InterpolationMethod.DoubleLinear, InterpolationMethod.DoubleCubicSpline]:
+            raise ValueError(f'DoubleInterpolationModel can not implement InterpolationMethod {self.interpolation_method}.')
+
+    @abstractmethod
+    def interpolate_surface(self, log_moneyness: float, days: int | np.ndarray) -> float | np.ndarray:
+        pass
+
+    def get_smile_t(self, days: int) -> np.ndarray:
+        df: pd.DataFrame =self.vol_surface_df.reindex(self.vol_surface_df.index.tolist()+[days]).interpolate(method=self.interpolation_method.value)
+        return df.loc[days].to_numpy()
+
+class DoubleInterpolationLinear(DoubleInterpolationModel):
+    def interpolate_surface(self, log_moneyness: float, days: int | np.ndarray) -> float | np.ndarray:
+        smile = self.get_smile_t(days)
+        vol = np.interp(log_moneyness, self.log_moneyness_columns, smile)
         return vol
     
+class DoubleInterpolationCubicSpline(DoubleInterpolationModel):
+    def interpolate_surface(self, log_moneyness: float, days: int | np.ndarray) -> float | np.ndarray:
+        smile = self.get_smile_t(days)
+        cs = CubicSpline(self.log_moneyness_columns, smile)
+        vol = cs(log_moneyness)
+        return vol
+    
+class eSSVI(InterpolationModel):
+    theta_0: float
+    theta_1: float
+
+    rho_0: float
+    rho_1: float
+
+    phi_0: float
+    phi_1: float
+
+    def __post_init__(self):
+        self.calibrate()
+
+    def exponential_formula(self, base_multiplier: float, exponent_multiplier: float, days: int | np.ndarray) -> float | np.ndarray:
+        return base_multiplier * np.exp(exponent_multiplier * days)
+    
+    def interpolate_surface(self, log_moneyness: float | np.ndarray, days: int | np.ndarray) -> float | np.ndarray:
+        total_variance = self._get_total_variance(log_moneyness, days, self.theta_0, self.theta_1, self.rho_0, self.rho_1, self.phi_0, self.phi_1)
+        vol = np.sqrt(total_variance / days)
+        return vol
+    
+    def _get_total_variance(self, log_moneyness: float | np.ndarray, days: int | np.ndarray, *params) -> float | np.ndarray:
+        # Ensure log_moneyness and days are numpy arrays for easier manipulation
+        if isinstance(log_moneyness, float):
+            log_moneyness = np.array([log_moneyness])
+        if isinstance(days, float):
+            days = np.array([days])
+        
+        # Check if both log_moneyness and days are arrays
+        if isinstance(log_moneyness, np.ndarray) and isinstance(days, np.ndarray):
+            if log_moneyness.ndim == 1 and days.ndim == 1:
+                # Both are simple arrays, no need to reshape
+                pass
+            elif log_moneyness.ndim == 1 and days.ndim == 2:
+                if days.shape[0] == len(log_moneyness) and days.shape[1] == 1:
+                    # log_moneyness is an array and days is a matrix of size len(log_moneyness)x1
+                    pass
+                else:
+                    raise ValueError("When both log_moneyness and days are arrays, days must be of shape (len(log_moneyness), 1).")
+            else:
+                raise ValueError("Invalid dimensions for log_moneyness and days.")
+
+        theta_0, theta_1, rho_0, rho_1, phi_0, phi_1 = params
+        theta = self.exponential_formula(theta_0, theta_1, days)
+        rho = self.exponential_formula(rho_0, rho_1, days)
+        phi = self.exponential_formula(phi_0, phi_1, days)
+
+        phi_k = phi * log_moneyness
+        total_variance = (theta / 2) * (1 + rho * phi_k + np.sqrt((phi_k + rho)**2 + 1 - rho**2))
+        
+        return total_variance
+    
+    def calibrate(self):
+        days = self.vol_surface_df.index.to_numpy()[:, None]
+        mkt_vol_surface_matrix = self.vol_surface_df.values
+        mkt_total_variances_matrix = days * mkt_vol_surface_matrix**2
+
+        #Initial guesses for theta, rho and phi. Initial guess for rho_0 is positive as is thought to be used in FX markets. Change to -0.4 for Equity markets.
+        initial_params = [
+            mkt_total_variances_matrix.mean(), 0,
+            0.4, 0, 
+            0.3, 0
+        ]
+        bounds = [
+            (0, None), (None, None),
+            (-1, 1), (None, None),
+            (0, None), (None, None)
+        ]
+
+        def objective_func(params):
+            model_total_variances = self._get_total_variance(self.log_moneyness_columns, days, *params)
+            return np.sum((model_total_variances - mkt_total_variances_matrix)**2)
+
+        result = minimize(objective_func, initial_params, bounds=bounds)
+
+        if result.success:
+            fitted_params = result.x
+            print("Fitted parameters:", fitted_params)
+            self.theta_0, self.theta_1, self.rho_0, self.rho_1, self.phi_0, self.phi_1 = fitted_params
+        else:
+            raise ValueError("Fitting failed")
+
 
 @dataclass
 class VolatilitySurface:
-    t: date
-    vol_surface_strike_columns: list[VolatilitySurfaceStrikeColumn]
+    vol_surface_df: pd.DataFrame = field(repr=False)
+    log_moneyness_columns: list[float] = field(repr=True)
 
-    strikes_cols: list[float] = field(init=False)
+    interpolation_method: InterpolationMethod = field(default=InterpolationMethod.eSSVI, repr=True)
+    vol_surface_np: np.ndarray = field(init=False)
+
+    _interpolation_model: InterpolationModel = field(init=False)
     def __post_init__(self):
-        if not all(vssc.vol_surface_column.index.tolist()==self.vol_surface_strike_columns[0].vol_surface_column.index.tolist() 
-                   for vssc in self.vol_surface_strike_columns):
-            raise ValueError(f'All maturities index in vol_surface_strike_columns must be the same')
-        self.vol_surface_strike_columns.sort(key=lambda x: x.strike)
-        self.strikes = [vssc.strike for vssc in self.vol_surface_strike_columns]
-        
+        for t in self.vol_surface_df.index:
+            if not isinstance(t, int):
+                raise TypeError(f'All indexes in vol_surface_df must be of type int, representing days to maturity.')
+        self.vol_surface_df.sort_index(inplace=True, ascending=True)
 
-    def get_volatility(self, t: date, strike: float, interpolation_type: InterpolationMethod=InterpolationMethod.CubicSpline) -> float:
-        interpolated_vol_column = self._interpolate_column(strike, interpolation_type)
-        vol = interpolated_vol_column.get_volatility(t, interpolation_type)
+        for col in self.vol_surface_df.columns:
+            for t in self.vol_surface_df.index:
+                if not isinstance(self.vol_surface_df[col][t], float):
+                    raise TypeError(f'All values in vol_surface_df must be of type float. Ex: 14% is 0.14')
+
+        if len(self.log_moneyness_columns)!=len(self.vol_surface_df.columns):
+            raise ValueError(f'Length of log_moneyness_columns must match the amount of columns in vol_surface_df.')
+        for log_moneyness in self.log_moneyness_columns:
+            if not isinstance(log_moneyness, float):
+                raise TypeError(f'All log_moneyness_columns items must be of type float.')
+
+        self.vol_surface_np = self.vol_surface_df.values
+        self.log_moneyness_columns = np.array(self.log_moneyness_columns)
+
+        if self.interpolation_method==InterpolationMethod.eSSVI:
+            self._interpolation_model = eSSVI(self.vol_surface_df, self.log_moneyness_columns, self.interpolation_method)
+        elif self.interpolation_method==InterpolationMethod.DoubleLinear:
+            self._interpolation_model = DoubleInterpolationLinear(self.vol_surface_df, self.log_moneyness_columns, self.interpolation_method)
+        elif self.interpolation_method==InterpolationMethod.DoubleCubicSpline:
+            self._interpolation_model = DoubleInterpolationCubicSpline(self.vol_surface_df, self.log_moneyness_columns, self.interpolation_method)
+        else:
+            raise NotImplementedError(f'Interpolation method: {self.interpolation_method} not implemented.')
+
+    def get_volatility(self, log_moneyness: float, days: int) -> float:
+        vol = self._interpolation_model.interpolate_surface(log_moneyness, days)
         return vol
-    
-    def _interpolate_column(self, strike: float, interpolation_method: InterpolationMethod) -> VolatilitySurfaceStrikeColumn:
-        days = [d for d in self.vol_surface_strike_columns[0].vol_surface_column.index]
-        vol_column = []
-        for d in days:
-            vols_row = [vssc.vol_surface_column[d] for vssc in self.vol_surface_strike_columns]
-            x, y = self.strikes, vols_row
-            if strike < min(x):
-                vol = min(x)
-            elif strike > max(x):
-                vol = max(x)
-            elif interpolation_method==InterpolationMethod.Linear:
-                vol = np.interp(strike, x, y)
-            elif interpolation_method==InterpolationMethod.CubicSpline:
-                cs = CubicSpline(x, y)
-                vol = cs(strike)
-            else:
-                raise NotImplementedError(f'InterpolationMethod {interpolation_method} not implemented.')
-            vol_column.append(vol)
-        srs = pd.Series(vol_column)
-        srs.index = [self.t + d for d in days]
-        vssc = VolatilitySurfaceStrikeColumn(self.t, strike, srs)
-        return vssc
