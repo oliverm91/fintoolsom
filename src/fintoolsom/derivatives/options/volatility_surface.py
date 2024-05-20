@@ -13,16 +13,12 @@ class InterpolationMethod(Enum):
     DoubleCubicSpline = 'cubicspline'
     eSSVI = 'essvi'
 
+
 @dataclass
 class InterpolationModel(ABC):
     vol_surface_df: pd.DataFrame = field(repr=False)
     log_moneyness_columns: list[float] = field(repr=True)
     interpolation_method: InterpolationMethod
-
-    log_moneyness_columns_np: np.ndarray = field(init=False)
-
-    def __post_init__(self):
-        self.log_moneyness_columns_np = np.array(self.log_moneyness_columns)[:, None]
 
     @abstractmethod
     def interpolate_surface(self, log_moneyness: float, days: int) -> float:
@@ -54,7 +50,8 @@ class DoubleInterpolationCubicSpline(DoubleInterpolationModel):
         cs = CubicSpline(self.log_moneyness_columns, smile)
         vol = cs(log_moneyness)
         return vol
-    
+
+@dataclass
 class eSSVI(InterpolationModel):
     theta_0: float
     theta_1: float
