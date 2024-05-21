@@ -6,7 +6,7 @@ import pandas as pd
 #from PropTools.data.external_data.bbg.bbgInterAPI import get_vol_surface, bdp, get_curve, get_fwd_points
 
 from fintoolsom.derivatives.options.volatility_surface import VolatilitySurface, InterpolationMethod
-from fintoolsom.derivatives.options.options import Put
+from fintoolsom.derivatives.options.options import Put, Call
 from fintoolsom.dates.datetools import add_tenor, AdjustmentDateConvention, DayCountConvention
 from fintoolsom.rates import ZeroCouponCurve, ZeroCouponCurvePoint, RateConvention, InterestConvention, Rate
 
@@ -88,6 +88,12 @@ def run_tests():
     vol2 = vs.get_volatility(0.1, 300)
     print(vol1, vol2)
 
+    print('eSSVI functional-polynomial(9) vols:')
+    vs = VolatilitySurface(vol_surf_df, spot, local_zcc, foreign_zcc, InterpolationMethod.eSSVI, parameter_type='functional_form', function_type='polynomial', polynomial_order=9)
+    vol1 = vs.get_volatility(0, 200)
+    vol2 = vs.get_volatility(0.1, 300)
+    print(vol1, vol2)
+
     print('eSSVI parametric vols (linear parameter interpolation):')
     vs = VolatilitySurface(vol_surf_df, spot, local_zcc, foreign_zcc, InterpolationMethod.eSSVI, parameter_type='parametric', parameters_interpolation_method='linear')
     vol1 = vs.get_volatility(0, 200)
@@ -99,3 +105,17 @@ def run_tests():
     vol1 = vs.get_volatility(0, 200)
     vol2 = vs.get_volatility(0.1, 300)
     print(vol1, vol2)
+
+
+    vs = VolatilitySurface(vol_surf_df, spot, local_zcc, foreign_zcc, InterpolationMethod.DoubleCubicSpline)
+    option = Call(100_000, 970, date(2024, 11, 12))
+    option_log_moneyness = option.get_log_moneyness(spot, local_zcc, foreign_zcc)
+    vol = vs.get_volatility(option_log_moneyness, (option.maturity - t).days)
+    mtm = option.get_mtm(t, spot, vol, local_zcc, foreign_zcc)
+    print(f'Call MtM: {mtm}')
+
+    option = Put(100_000, 970, date(2024, 11, 12))
+    option_log_moneyness = option.get_log_moneyness(spot, local_zcc, foreign_zcc)
+    vol = vs.get_volatility(option_log_moneyness, (option.maturity - t).days)
+    mtm = option.get_mtm(t, spot, vol, local_zcc, foreign_zcc)
+    print(f'Put MtM: {mtm}')

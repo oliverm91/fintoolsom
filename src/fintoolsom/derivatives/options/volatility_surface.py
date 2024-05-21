@@ -211,6 +211,11 @@ class eSSVI(InterpolationModel):
                     initial_params[2][i] = 0
 
         flatten_initial_params = list(itertools.chain(*initial_params))
+
+        # Idea for better bounds.
+        #  Thetas must grow on time. Exponential => theta_0 & theta_1 > 0. Polynomial => first 2 orders are greater than 0. Parametric => each theta is greater than previous.
+        #  Set limit to negative side of rho.
+
         bounds = [(-1, 1)] * len(flatten_initial_params)
         log_moneyness_np = self.log_moneyness_df.values        
         def objective_func(flatten_params):

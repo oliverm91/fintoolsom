@@ -72,7 +72,7 @@ class Option(ABC):
         if not return_both_ds:
             return d2
         else:
-            d1, d2
+            return d1, d2
         
     def _get_yf(self, t: date):
         return get_time_fraction(t, self.maturity, DayCountConvention.Actual, base_convention=365)
@@ -101,7 +101,7 @@ class Option(ABC):
         k = spot * np.exp(-(sign*norm.ppf(sign*delta*(1/df_q)) * volatility * np.sqrt(yf) - (r - q + volatility*volatility/2)*yf))
         return k
 
-
+@dataclass
 class Call(Option):
     def __post_init__(self):
         self._sign = 1
@@ -110,6 +110,7 @@ class Call(Option):
     def get_strike_from_delta(delta: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve, maturity: date) -> float:
         return Option.get_strike_from_delta(delta, spot, volatility, domestic_curve, foreign_curve, maturity, 1)
 
+@dataclass
 class Put(Option):
     def __post_init__(self):
         self._sign = -1
