@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline, interp1d
-from scipy.optimize import minimize
+from scipy.optimize import minimize, LinearConstraint
 
 from fintoolsom.rates import ZeroCouponCurve
 from fintoolsom.derivatives.options.options import Put
@@ -187,13 +187,38 @@ class eSSVI(InterpolationModel):
         mkt_total_variances_matrix = (days / 360) * mkt_vol_surface_matrix**2
 
         #Initial guesses for theta, rho and phi. Independently of parameter form. theta represents level, rho correlation (positive for FX) and phi skewness (slightly positive for FX)
-        initial_params = self._all_params.copy() # Until now params are all None
+        # Bounds:.
+        #  Thetas must grow on time. Exponential => theta_0 & theta_1 > 0. Polynomial => first 2 orders are greater than 0. Parametric => theta and rho are greater than 0.
+        #  Set limit to negative side of rho and phi.
+
+        # Constraints:
+        #  Theta function must grow on time. That is achieved with bounds in exponential and polynomial form (first and second parameter are positive).
+        #  For parametric a constraint is needed. That is, theta_0 < theta_1 < theta_n.
+
+        
+        initial_params = self._all_params.copy() # Until now params are all None. Lets set average level for theta, 0.3 for rho and 0.3 to skew as starting point. Rest params no related to level set to 0.
+        constraints = None
         if self.parameters_type=='parametric':
             average_vols_per_tenor = np.mean(mkt_total_variances_matrix, axis=1)
+            bounds = []
             for i in range(mkt_total_variances_matrix.shape[0]):
+                bounds.append((0, 1)) # thetas are positive
                 initial_params[0][i] = average_vols_per_tenor[i] # Thetas
                 initial_params[1][i] = 0.3 # rhos
                 initial_params[2][i] = 0.3 # phis
+            for i in range(mkt_total_variances_matrix.shape[0]):
+                bounds.append((-0.3, 1)) # rhos are positively biased
+            for i in range(mkt_total_variances_matrix.shape[0]):
+                bounds.append((0, 1)) # phis are positive
+
+            m = mkt_total_variances_matrix.shape[0] - 1
+            A = np.zeros((m-1, 3 * mkt_total_variances_matrix.shape[0]))
+            for i in range(m-1):
+                A[i, i] = -1
+                A[i, i+1] = 1
+
+            # Create a LinearConstraint object
+            constraints = LinearConstraint(A, 0, np.inf)
         else:
             if self._function_type=='exponential':
                 initial_params = [
@@ -201,10 +226,31 @@ class eSSVI(InterpolationModel):
                     [0.3, 0], 
                     [0.3, 0]
                 ]
+                # Theta level and slope is positive. Rho level is positively biased. phi is positive
+                bounds = [
+                    (0, 1), (0, 1),
+                    (-0.3, 1), (-1, 1),
+                    (0, 1), (-1, 1)
+                ]                
             if self._function_type=='polynomial':
                 initial_params[0][0] = mkt_total_variances_matrix.mean() # Thetas
                 initial_params[1][0] = 0.3 # rhos
                 initial_params[2][0] = 0.3 # phis
+                bounds = [
+                    (0, None), (0, None) # theta level and slope is positive 
+                ]
+                theta_bounds_to_add = (1+self.polynomial_order - 2)
+                for _ in range(theta_bounds_to_add):
+                    bounds.append((-1,1))
+                bounds.append((-0.3, 1)) # rho level is positively biased
+                rho_bounds_to_add = (1+self.polynomial_order - 1)
+                for _ in range(rho_bounds_to_add):
+                    bounds.append((-1,1))
+
+                bounds.append((0, 1)) # phi is positive
+                phi_bounds_to_add = (1+self.polynomial_order - 1) 
+                for _ in range(phi_bounds_to_add):
+                    bounds.append((-1,1))
                 for i in range(1, 1 + self.polynomial_order):
                     initial_params[0][i] = 0
                     initial_params[1][i] = 0
@@ -212,11 +258,9 @@ class eSSVI(InterpolationModel):
 
         flatten_initial_params = list(itertools.chain(*initial_params))
 
-        # Idea for better bounds.
-        #  Thetas must grow on time. Exponential => theta_0 & theta_1 > 0. Polynomial => first 2 orders are greater than 0. Parametric => each theta is greater than previous.
-        #  Set limit to negative side of rho.
-
-        bounds = [(-1, 1)] * len(flatten_initial_params)
+        if len(bounds) != len(flatten_initial_params):
+            raise ValueError(f'Length of flatten params is {len(flatten_initial_params)}. But set bounds for {len(bounds)} params.')
+        #bounds = [(-1,1)] * len(flatten_initial_params)
         log_moneyness_np = self.log_moneyness_df.values        
         def objective_func(flatten_params):
             model_total_variances = self._get_total_variance(log_moneyness_np, days, *flatten_params, validate_shapes=False)
@@ -224,10 +268,10 @@ class eSSVI(InterpolationModel):
 
         initial_model_total_variances = self._get_total_variance(log_moneyness_np, days, *flatten_initial_params, validate_shapes=False)
         print(f'\tStarting calibration... Initial error: {np.sum((initial_model_total_variances - mkt_total_variances_matrix)**2)}')
-        result = minimize(objective_func, flatten_initial_params, bounds=bounds, method='trust-constr')
+        result = minimize(objective_func, flatten_initial_params, bounds=bounds, constraints=constraints, method='trust-constr')
 
         if result.success:
-            print(f'\tCalibration worked. Error achieved: {result.fun}\n')
+            print(f'\tCalibration worked. Error achieved: {result.fun}')
             fitted_params = result.x
             params_amount = int(len(fitted_params) / 3)
             #print("Fitted parameters:", fitted_params)
