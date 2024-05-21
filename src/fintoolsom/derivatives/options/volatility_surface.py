@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
+import itertools
 from typing import Any
 
 import numpy as np
@@ -87,30 +88,66 @@ class DoubleInterpolationCubicSpline(DoubleInterpolationModel):
         self._interpolator1d = CubicSpline
     
 
-@dataclass
 class eSSVI(InterpolationModel):
-    theta_0: float = field(init=False)
-    theta_1: float = field(init=False)
-
-    rho_0: float = field(init=False)
-    rho_1: float = field(init=False)
-
-    phi_0: float = field(init=False)
-    phi_1: float = field(init=False)
-
-    def __post_init__(self):
-        super().__post_init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args)
+        self.theta_params = []
+        self.rho_params = []
+        self.phi_params = []
+        self._all_params = [self.theta_params, self.rho_params, self.phi_params]
+        self.do_kwargs(**kwargs)
+        
         self.calibrate()
 
-    def exponential_formula(self, base_multiplier: float, exponent_multiplier: float, t: float | np.ndarray) -> float | np.ndarray:
-        return base_multiplier * np.exp(exponent_multiplier * t)
+    def do_kwargs(self, **kwargs):
+        self.parameters_type = kwargs.get('parameter_type', 'parametric')
+        if self.parameters_type=='functional_form':
+            self._function_type = kwargs.get('function_type', 'exponential')
+            if self._function_type=='exponential':
+                self.parameter_formula = self.exponential_formula
+                for i in range(3):
+                    for _ in range(2):
+                        self._all_params[i].append(None)
+            elif self._function_type=='polynomial':
+                self.parameter_formula = self.polynomial_formula
+                self.polynomial_order = kwargs.get('polynomial_order', 2)
+                for i in range(3):
+                    for _ in range(1 + self.polynomial_order):
+                        self._all_params[i].append(None)
+            else:
+                raise ValueError(f'function_type value {self._function_type} not valid.')
+        elif self.parameters_type=='parametric':
+            self.parameter_formula = self.parametric_formula
+            parameter_interpolation_method = kwargs.get('parameters_interpolation_method', 'linear')
+            if parameter_interpolation_method=='linear':
+                self._parameter_interpolator = interp1d
+            elif parameter_interpolation_method=='cubic-spline':
+                self._parameter_interpolator = CubicSpline
+            else:
+                raise ValueError(f'parameters_interpolation_method value {parameter_interpolation_method} not valid. Try "linear" or "cubic-spline".')
+            for i in range(3):
+                for _ in range(len(self.vol_surface_df.index)):
+                    self._all_params[i].append(None)
+        else:
+            raise ValueError(f'parameter_type value {self.parameters_type} not valid.')
+
+    def exponential_formula(self, t: float | np.ndarray, *params) -> float | np.ndarray:
+        return params[0] * np.exp(params[1] * t)
+    
+    def polynomial_formula(self, t: float | np.ndarray, *params) -> float | np.ndarray:
+        ixs = np.arange(len(params))
+        return np.sum(np.array(params)[ixs] * t.reshape(-1,1) ** ixs, axis=1)
+    
+    def parametric_formula(self, t: float | np.ndarray, *params) -> float | np.ndarray:
+        return self._parameter_interpolator(self.vol_surface_df.index / 360, params)(t)
     
     def interpolate_surface(self, log_moneyness: float | np.ndarray, days: int | np.ndarray) -> float | np.ndarray:
-        total_variance = self._get_total_variance(log_moneyness, days, self.theta_0, self.theta_1, self.rho_0, self.rho_1, self.phi_0, self.phi_1)
+        flatten_params = list(itertools.chain(*self._all_params))
+        total_variance = self._get_total_variance(log_moneyness, days, *flatten_params)
         vol = np.sqrt(total_variance / (days/360))
         return vol
     
-    def _get_total_variance(self, log_moneyness: float | np.ndarray, days: int | np.ndarray, *params, validate_shapes: bool=True) -> float | np.ndarray:
+    def _get_total_variance(self, log_moneyness: float | np.ndarray, days: int | np.ndarray, *flatten_params: list[float], validate_shapes: bool=True) -> float | np.ndarray:
         t = days / 360
         if validate_shapes:
             # Ensure log_moneyness and days are numpy arrays for easier manipulation
@@ -133,10 +170,11 @@ class eSSVI(InterpolationModel):
                 else:
                     raise ValueError("Invalid dimensions for log_moneyness and days.")
 
-        theta_0, theta_1, rho_0, rho_1, phi_0, phi_1 = params
-        theta = self.exponential_formula(theta_0, theta_1, t)
-        rho = self.exponential_formula(rho_0, rho_1, t)
-        phi = self.exponential_formula(phi_0, phi_1, t)
+        params_amount = int(len(flatten_params) / 3)
+
+        theta = self.parameter_formula(t, *flatten_params[0:params_amount])
+        rho = self.parameter_formula(t, *flatten_params[params_amount:2*params_amount])
+        phi = self.parameter_formula(t, *flatten_params[2*params_amount:3*params_amount])
 
         phi_k = phi * log_moneyness
         total_variance = (theta / 2) * (1 + rho * phi_k + np.sqrt((phi_k + rho)**2 + 1 - rho**2))
@@ -148,45 +186,59 @@ class eSSVI(InterpolationModel):
         mkt_vol_surface_matrix = self.vol_surface_df.values
         mkt_total_variances_matrix = (days / 360) * mkt_vol_surface_matrix**2
 
-        #Initial guesses for theta, rho and phi. Initial guess for rho_0 is positive as is thought to be used in FX markets. Change to -0.4 for Equity markets.
-        initial_params = [
-            mkt_total_variances_matrix.mean(), 0,
-            0.4, 0, 
-            0.3, 0
-        ]
-        bounds = [
-            (0, 1), (-1, 1),
-            (-1, 1), (-1, 1),
-            (0, 1), (-1, 1)
-        ]
+        #Initial guesses for theta, rho and phi. Independently of parameter form. theta represents level, rho correlation (positive for FX) and phi skewness (slightly positive for FX)
+        initial_params = self._all_params.copy() # Until now params are all None
+        if self.parameters_type=='parametric':
+            average_vols_per_tenor = np.mean(mkt_total_variances_matrix, axis=1)
+            for i in range(mkt_total_variances_matrix.shape[0]):
+                initial_params[0][i] = average_vols_per_tenor[i] # Thetas
+                initial_params[1][i] = 0.3 # rhos
+                initial_params[2][i] = 0.3 # phis
+        else:
+            if self._function_type=='exponential':
+                initial_params = [
+                    [mkt_total_variances_matrix.mean(), 0],
+                    [0.3, 0], 
+                    [0.3, 0]
+                ]
+            if self._function_type=='polynomial':
+                initial_params[0][0] = mkt_total_variances_matrix.mean() # Thetas
+                initial_params[1][0] = 0.3 # rhos
+                initial_params[2][0] = 0.3 # phis
+                for i in range(1, 1 + self.polynomial_order):
+                    initial_params[0][i] = 0
+                    initial_params[1][i] = 0
+                    initial_params[2][i] = 0
 
-        log_moneyness_np = self.log_moneyness_df.values
-        def objective_func(params):
-            model_total_variances = self._get_total_variance(log_moneyness_np, days, *params, validate_shapes=False)
+        flatten_initial_params = list(itertools.chain(*initial_params))
+        bounds = [(-1, 1)] * len(flatten_initial_params)
+        log_moneyness_np = self.log_moneyness_df.values        
+        def objective_func(flatten_params):
+            model_total_variances = self._get_total_variance(log_moneyness_np, days, *flatten_params, validate_shapes=False)
             return np.sum((model_total_variances - mkt_total_variances_matrix)**2)
 
-        result = minimize(objective_func, initial_params, bounds=bounds, method='trust-constr')
+        initial_model_total_variances = self._get_total_variance(log_moneyness_np, days, *flatten_initial_params, validate_shapes=False)
+        print(f'\tStarting calibration... Initial error: {np.sum((initial_model_total_variances - mkt_total_variances_matrix)**2)}')
+        result = minimize(objective_func, flatten_initial_params, bounds=bounds, method='trust-constr')
 
         if result.success:
+            print(f'\tCalibration worked. Error achieved: {result.fun}\n')
             fitted_params = result.x
-            print("Fitted parameters:", fitted_params)
-            self.theta_0, self.theta_1, self.rho_0, self.rho_1, self.phi_0, self.phi_1 = fitted_params
+            params_amount = int(len(fitted_params) / 3)
+            #print("Fitted parameters:", fitted_params)
+            self._all_params = [fitted_params[0:params_amount], fitted_params[params_amount:2*params_amount], fitted_params[2*params_amount:3*params_amount]]
         else:
             raise ValueError("Fitting failed")
 
 
-@dataclass
 class VolatilitySurface:
-    vol_surface_df: pd.DataFrame = field(repr=False)
-    spot: float
-    domestic_curve: ZeroCouponCurve = field(repr=False)
-    foreign_curve: ZeroCouponCurve = field(repr=False)
-    
-    interpolation_method: InterpolationMethod = field(default=InterpolationMethod.eSSVI, repr=True)
-    vol_surface_np: np.ndarray = field(init=False)
-
-    _interpolation_model: InterpolationModel = field(init=False)
-    def __post_init__(self):
+    def __init__(self, vol_surface_df: pd.DataFrame, spot: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve,
+                        interpolation_method: InterpolationMethod=InterpolationMethod.eSSVI, **kwargs):
+        self.vol_surface_df = vol_surface_df
+        self.spot = spot
+        self.domestic_curve = domestic_curve
+        self.foreign_curve = foreign_curve
+        self.interpolation_method = interpolation_method
         for t in self.vol_surface_df.index:
             if not isinstance(t, int):
                 raise TypeError(f'All indexes in vol_surface_df must be of type int, representing days to maturity.')
@@ -200,7 +252,7 @@ class VolatilitySurface:
         self.vol_surface_np = self.vol_surface_df.values
         
         if self.interpolation_method==InterpolationMethod.eSSVI:
-            self._interpolation_model = eSSVI(self.vol_surface_df, self.spot, self.domestic_curve, self.foreign_curve)
+            self._interpolation_model = eSSVI(self.vol_surface_df, self.spot, self.domestic_curve, self.foreign_curve, **kwargs)
         elif self.interpolation_method==InterpolationMethod.DoubleLinear:
             self._interpolation_model = DoubleInterpolationLinear(self.vol_surface_df, self.spot, self.domestic_curve, self.foreign_curve)
         elif self.interpolation_method==InterpolationMethod.DoubleCubicSpline:
