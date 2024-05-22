@@ -282,7 +282,7 @@ class eSSVI(InterpolationModel):
 
 class VolatilitySurface:
     def __init__(self, vol_surface_df: pd.DataFrame, spot: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve,
-                        interpolation_method: InterpolationMethod=InterpolationMethod.eSSVI, **kwargs):
+                        interpolation_method: InterpolationMethod=InterpolationMethod.DoubleCubicSpline, **kwargs):
         self.vol_surface_df = vol_surface_df
         self.spot = spot
         self.domestic_curve = domestic_curve
