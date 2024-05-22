@@ -1,6 +1,6 @@
 import numpy as np
 from datetime import date
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .. import rates
 from .. import dates
@@ -13,11 +13,21 @@ class ZeroCouponCurvePoint:
     def copy(self):
         return ZeroCouponCurvePoint(self.date, self.rate.copy())
         
-
+@dataclass
 class ZeroCouponCurve:
-    def __init__(self, curve_date: date, curve_points: list[ZeroCouponCurvePoint]):
-        self.curve_date = curve_date
-        self.curve_points = curve_points
+    curve_date: date
+
+    curve_points: list[ZeroCouponCurvePoint] = field(default=None)
+    date_dfs: list[tuple[date, float]] = field(default=None)
+    _rate_conv_for_dfs_init: rates.RateConvention = field(default=rates.RateConvention())
+    def __post_init__(self,):
+        if self.curve_points is None:
+            if self.date_dfs is not None:
+                self.curve_points = [ZeroCouponCurvePoint(t_i, rates.Rate.get_rate_from_df(df, self.curve_date, t_i, self._rate_conv_for_dfs_init)) 
+                                    for t_i, df in self.date_dfs]
+            else:
+                raise ValueError(f'If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set.')
+        
         self.sort()
         self._cashed_dfs: dict[str, np.ndarray] = {}
   
