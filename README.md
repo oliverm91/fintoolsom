@@ -20,6 +20,8 @@ Easly install with **pip**. See https://pypi.org/project/fintoolsom/
 
 `pip install fintoolsom`
 
+`pip install git+https://github.com/oliverm91/fintoolsom.git --upgrade`
+
 ## Requirements:
 - Python: >=3.11
 - Packages: numpy scipy
