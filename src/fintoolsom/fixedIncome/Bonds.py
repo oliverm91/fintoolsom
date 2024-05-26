@@ -1,4 +1,4 @@
-from copy import copy, deepcopy
+from copy import deepcopy
 from datetime import date
 
 import numpy as np
@@ -146,9 +146,9 @@ class Bond:
         total_pv = sum(pvs)
         return total_pv
     
-    def get_present_value_zc(self, date: date, zc_curve: rates.ZeroCouponCurve) -> float:
+    def get_present_value_zc(self, zc_curve: rates.ZeroCouponCurve) -> float:
         end_dates = self.coupons.get_end_dates()
-        future_flows_mask = end_dates > date
+        future_flows_mask = end_dates > zc_curve.curve_date
         flows_dfs = zc_curve.get_dfs(end_dates) * future_flows_mask
         pvs = self.flows_amount * flows_dfs 
         pv = sum(pvs)
@@ -238,3 +238,25 @@ class Bond:
         dv01 = - pv * dur / 10_000
         dv01 *= self.notional 
         return dv01
+    
+    def get_z_spread(self, zcc: rates.ZeroCouponCurve, bond_value: float=None, irr: rates.Rate=None) -> float:
+        if bond_value is None and irr is None:
+            raise ValueError(f"Both bond_value and irr can't be None, one must be set.")
+        
+        if irr is None:
+            irr = self.get_irr_from_present_value(bond_value, RateConvention())
+        
+        bond_value = self.get_present_value(zcc.curve_date, irr)
+        zcc_value = self.get_present_value_zc(zcc)
+        initial_difference = zcc_value - bond_value
+        
+        dv01 = self.get_dv01(zcc.curve_date, irr)
+        initial_guess = - initial_difference / dv01
+
+        def get_zcc_bond_difference(z_spread: float) -> float:
+            zcc.parallel_shift(z_spread)
+            zcc_value = self.get_present_value_zc(zcc)
+            return (zcc_value - bond_value)**2
+        
+        result = newton(get_zcc_bond_difference, initial_guess)
+        return result
