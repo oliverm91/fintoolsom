@@ -101,7 +101,6 @@ def run_tests():
     print(vol1, vol2, '\n')
 
 
-
     vs = VolatilitySurface(vol_surf_df, spot, local_zcc, foreign_zcc, InterpolationMethod.DoubleCubicSpline)
     option = Call(100_000, 970, date(2024, 11, 12))
     option_log_moneyness = option.get_log_moneyness(spot, local_zcc, foreign_zcc)

@@ -3,7 +3,6 @@ from datetime import date
 
 from ...rates import ZeroCouponCurve
 
-@dataclass
 class Forward:
     notional: float
     strike: float
@@ -23,8 +22,7 @@ class Forward:
 
         mtm = self.sign * (notional_leg_vp - strike_leg_vp)
         return mtm
-
-@dataclass
+    
 class NDF(Forward):
     fixing_date: date
 
@@ -38,7 +36,6 @@ class NDF(Forward):
         mtm = fv * domestic_curve.get_df(self.payment_date)
         return mtm
     
-@dataclass
 class IndexedNDF(NDF):
     def get_mtm(self, indexes: dict[date, float], domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> float:
         valid_dates = [t for t in indexes.keys() if t <= self.fixing_date]
