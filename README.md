@@ -6,8 +6,8 @@ Fully implemented in Python.
 
 ## Contents:
 - Fixed Income:
-  - Bonds (get tir, get pv, get dv01)
-  - Chilean Bonds (get amount, get tera)
+  - Bonds (`get_irr`, `get_pv`, `get_dv01`)
+  - Chilean Bonds (`get_amount`, `get_tera`)
   - Chilean Deposits
 - Rates:
   - Rate object: interest calculation, rate convention convertions
@@ -15,7 +15,7 @@ Fully implemented in Python.
 - Dates:
   - Add standard tenors (1D, 1M, 1W, 2Y, ...)
   - Day Count conventions (Actual, Days30, Days30E, Days30U, Days30ISDA, etc...)
-  - Generic Holidays: MonthDayRule (4th of july), OrdinalWeekWeekdayRule (Third monday of february), easter and others...
+  - Generic Holidays: `MonthDayRule` (4th of july), `OrdinalWeekWeekdayRule` (Third monday of february), `easter` and others...
   - Date Adjustment methods (Following, Modified Following, Preceding, Modified Preceding)
   - Calendars
     - NY and Chilean Calendar pre-built
@@ -23,6 +23,7 @@ Fully implemented in Python.
 - Derivatives:
   - FX Forwards
   - Options
+    - MtM and greeks
     - Volatility Surface interpolation models (DoubleLinear, DoubleCubicSpline, eSSVI)
 
 
