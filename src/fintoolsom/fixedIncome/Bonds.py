@@ -1,5 +1,6 @@
-from copy import deepcopy
+from copy import copy
 from datetime import date
+from typing import Self
 
 import numpy as np
 from scipy.optimize import newton, minimize
@@ -28,6 +29,9 @@ class Coupon:
         self.end_date: date = end_date
         self.wf = (self.residual + self.interest) / self.residual
         self.accrue_rate: Rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
+
+    def copy(self) -> Self:
+        return Coupon(self.amortization, self.interest, self.residual, self.start_date, self.end_date, self.accrue_rate.rate_convention.copy())
         
     def get_accrued_interest(self, date: date, accrue_rate: Rate=None) -> float:
         accrue_rate = self.accrue_rate if accrue_rate is None else accrue_rate
@@ -36,8 +40,8 @@ class Coupon:
         accrued_interest = accrue_rate.get_accrued_interest(self.residual, self.start_date, date)
         return accrued_interest
     
-    def __copy__(self):
-        return Coupon(self.amortization, self.interest, self.residual, self.start_date, self.end_date, deepcopy(self.accrue_rate))
+    def __copy__(self) -> Self:
+        return self.copy()
     
     
 class Coupons:
@@ -45,8 +49,11 @@ class Coupons:
         self.coupons = coupons
         self.sort()
 
-    def __copy__(self):
-        return Coupons(deepcopy(self.coupons))
+    def copy(self) -> Self:
+        return Coupons([copy(c) for c in self.coupons])
+
+    def __copy__(self) -> Self:
+        return self.copy()
 
     def sort(self):
         self.coupons = sorted(self.coupons, key=lambda c: c.start_date)
@@ -95,8 +102,11 @@ class Bond:
         self.accrue_rate = self.coupons.get_accrue_rate()
         self.flows_amount = self.coupons.get_flows()
 
-    def __copy__(self):
-        return Bond({'coupons': deepcopy(self.coupons), 'currency': self.currency, 'notional': self.notional})
+    def copy(self) -> Self:
+        return Bond(coupons=copy(self.coupons), currency=self.currency, notional=self.notional)
+
+    def __copy__(self) -> Self:
+        return self.copy()
 
     def get_maturity_date(self) -> date:
         '''
@@ -166,7 +176,8 @@ class Bond:
     
     def get_z_spread(self, date: date, irr: rates.Rate, zc_curve: rates.ZeroCouponCurve) -> int:
         '''
-        Returns the z-spread given the internal rate of return (IRR) and a Zero Coupon Curve. This is, basis points to do a parallel bump to the Zero Coupon Curve so IRR value == ZCC value.
+        Returns the z-spread given the internal rate of return (IRR) and a Zero Coupon Curve.
+        This is, basis points to do a parallel bump to the Zero Coupon Curve so that IRR_value == ZCC_value.
         ----------
             date (date): date at which the z-spread is calculated.
             irr (Rate): internal rate of return to match.
@@ -177,9 +188,9 @@ class Bond:
             z_spread (int): the z-spread in basis points.
         '''
         irr_value = self.get_present_value(date, irr)
-
-        rate_differences = [irr.rate_value - zc_curve.get_zero_rate(c.end_date).rate_value for c in self.coupons.coupons if c.end_date > date]
-        initial_guess = sum(rate_differences)/len(rate_differences)
+        current_zc_value = self.get_present_value_zc(date, zc_curve)
+        dv01 = self.get_dv01(date, irr)
+        initial_guess = (irr_value - current_zc_value) / dv01
         def bp_bump_curve_value(bp_bump: float) -> float:
             zc_curve_bumped = zc_curve.copy().parallel_bump_rates_bps(bp_bump)
             return (self.get_present_value_zc(date, zc_curve_bumped) - irr_value)**2
@@ -266,7 +277,6 @@ class Bond:
         ----
             date (date): The date for which the dv01 is calculated.
             irr (Rate): The interest rate.
-            fx (float): Optional. The foreign exchange rate. Default is 1.
         ----
         Returns:
         ----
@@ -275,5 +285,5 @@ class Bond:
         dur = self.get_duration(date, irr)
         pv = self.get_present_value(date, irr) / 100
         dv01 = - pv * dur / 10_000
-        dv01 *= self.notional 
+        dv01 *= self.coupons.get_residual_amount(date)
         return dv01
