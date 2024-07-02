@@ -6,8 +6,8 @@ Fully implemented in Python.
 
 ## Contents:
 - Fixed Income:
-  - Bonds (`get_irr`, `get_pv`, `get_dv01`)
-  - Chilean Bonds (`get_amount`, `get_tera`)
+  - Bonds (`get_irr`, `get_pv`, `get_dv01`, ...)
+  - Chilean Bonds (`get_amount`, `get_tera`, ...)
   - Chilean Deposits
 - Rates:
   - Rate object: interest calculation, rate convention convertions
