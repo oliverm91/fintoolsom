@@ -1,5 +1,6 @@
 from enum import Enum
 from datetime import date
+from typing import Self
 import numpy as np
 
 from .. import dates
@@ -121,7 +122,7 @@ class Rate:
         InterestConvention.Exponential: _get_exponential_rate_values_from_wf.__func__
     }    
     @staticmethod
-    def get_rate_from_wf(wf: list[float] | np.ndarray | float, start_date: list[date] | np.ndarray | float, end_date: list[date] | np.ndarray | float, rate_convention: RateConvention):
+    def get_rate_from_wf(wf: list[float] | np.ndarray | float, start_date: list[date] | np.ndarray | float, end_date: list[date] | np.ndarray | float, rate_convention: RateConvention) -> Self | list[Self]:
         func = Rate._rate_router[rate_convention.interest_convention]
         rate_values = func(wf, start_date, end_date, rate_convention)
         func_rate = Rate._rate_values_to_rate_router[type(rate_values)]
@@ -129,6 +130,6 @@ class Rate:
         return rate_objs
 
     @staticmethod
-    def get_rate_from_df(df: list[float] | np.ndarray | float, start_date: list[date] | np.ndarray | float, end_date: list[date] | np.ndarray | float, rate_convention: RateConvention):
+    def get_rate_from_df(df: list[float] | np.ndarray | float, start_date: list[date] | np.ndarray | float, end_date: list[date] | np.ndarray | float, rate_convention: RateConvention) -> Self | list[Self]:
         wf = 1/df
         return Rate.get_rate_from_wf(wf, start_date, end_date, rate_convention)

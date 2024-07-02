@@ -2,7 +2,7 @@ from copy import deepcopy
 from datetime import date
 
 import numpy as np
-from scipy.optimize import newton
+from scipy.optimize import newton, minimize
 
 from .. import rates
 from .. import dates
@@ -147,12 +147,51 @@ class Bond:
         return total_pv
     
     def get_present_value_zc(self, date: date, zc_curve: rates.ZeroCouponCurve) -> float:
+        '''
+        Retuns present value using a Zero Coupon Curve object.
+        ----------
+            date (date): date at which the present value is calculated.
+            zc_curve (ZeroCouponCurve): Zero Coupon Curve to discount bond flows.
+        ----
+        Returns:
+        ----
+            present_value (float): present value of the bond at the given date.
+        '''
         end_dates = self.coupons.get_end_dates()
         future_flows_mask = end_dates > date
         flows_dfs = zc_curve.get_dfs(end_dates) * future_flows_mask
         pvs = self.flows_amount * flows_dfs 
         pv = sum(pvs)
         return pv
+    
+    def get_z_spread(self, date: date, irr: rates.Rate, zc_curve: rates.ZeroCouponCurve) -> int:
+        '''
+        Returns the z-spread given the internal rate of return (IRR) and a Zero Coupon Curve. This is, basis points to do a parallel bump to the Zero Coupon Curve so IRR value == ZCC value.
+        ----------
+            date (date): date at which the z-spread is calculated.
+            irr (Rate): internal rate of return to match.
+            zc_curve (ZeroCouponCurve): Zero Coupon Curve to discount bond flows.
+        ----
+        Returns:
+        ----
+            z_spread (int): the z-spread in basis points.
+        '''
+        irr_value = self.get_present_value(date, irr)
+
+        rate_differences = [irr.rate_value - zc_curve.get_zero_rate(c.end_date).rate_value for c in self.coupons.coupons if c.end_date > date]
+        initial_guess = sum(rate_differences)/len(rate_differences)
+        def bp_bump_curve_value(bp_bump: float) -> float:
+            zc_curve_bumped = zc_curve.copy().parallel_bump_rates_bps(bp_bump)
+            return (self.get_present_value_zc(date, zc_curve_bumped) - irr_value)**2
+        
+        tolerance_factor = 1 / 10_000
+        result = minimize(bp_bump_curve_value, initial_guess, tol=irr_value * tolerance_factor)
+
+        if result.success:
+            return int(round(result.x[0], 0))
+        else:
+            raise ValueError('Could not solve z-spread.')
+
     
     def get_irr_from_present_value(self, date: date, present_value: float, irr_rate_convention: RateConvention) -> Rate:
         '''

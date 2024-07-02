@@ -30,6 +30,9 @@ class ZeroCouponCurve:
         
         self.sort()
         self._cashed_dfs: dict[str, np.ndarray] = {}
+
+    def __len__(self) -> int:
+        return len(self.curve_points)
   
     def copy(self):
         return ZeroCouponCurve(self.curve_date, [zccp.copy() for zccp in self.curve_points])
@@ -125,7 +128,7 @@ class ZeroCouponCurve:
         wfs_fwds = 1 / df_fwds
         return wfs_fwds
     
-    def get_forward_rates(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray, rate_convention: rates.RateConvention) -> list[float]:
+    def get_forward_rates(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray, rate_convention: rates.RateConvention) -> list[rates.Rate] | rates.Rate:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")
         start_wfs = self.get_wfs(start_dates)
@@ -134,11 +137,14 @@ class ZeroCouponCurve:
         fwd_rates = rates.Rate.get_rate_from_wf(fwd_wfs, start_dates, end_dates, rate_convention)
         return fwd_rates
 
-    def get_forward_rates_values(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray, rate_convention: rates.RateConvention=None) -> np.ndarray:
+    def get_forward_rates_values(self, start_dates: list[date] | np.ndarray, end_dates: list[date] | np.ndarray, rate_convention: rates.RateConvention=None) -> np.ndarray | float:
         if len(start_dates) != len(end_dates):
             raise ValueError(f"Start and end dates must have the same length. Start dates: {start_dates}, end dates: {end_dates}")        
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention)
-        return np.array([r.rate_value for r in rates_obj])
+        if isinstance(rates_obj, list):
+            return np.array([r.rate_value for r in rates_obj])
+        else: 
+            return rates_obj.rate_value
 
     def get_zero_rates(self, rate_convention: rates.RateConvention=None) -> list[rates.Rate]:
         if rate_convention is None:
@@ -153,7 +159,20 @@ class ZeroCouponCurve:
                     r.convert_rate_convention(rate_convention)
                     rates_obj.append(r)
             return rates_obj
+        
+    def get_zero_rate(self, date: date,  rate_convention: rates.RateConvention=None) -> rates.Rate:
+        if rate_convention is None:
+            rate_convention = self.curve_points[0].rate.rate_convention
+        
+        df = self.get_df(date)
+        r = rates.Rate.get_rate_from_df(df, self.curve_date, date, rate_convention)
+        return r
 
     def get_zero_rates_values(self, rate_convention: rates.RateConvention=None) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
         return np.array([r.rate_value for r in rates_obj])
+    
+    def parallel_bump_rates_bps(self, bps: float):
+        for zccp in self.curve_points:
+            zccp.rate.rate_value += bps / 10_000
+        self.sort()
