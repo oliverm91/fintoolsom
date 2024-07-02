@@ -1,4 +1,4 @@
-from copy import copy, deepcopy
+from copy import deepcopy
 from datetime import date
 
 import numpy as np

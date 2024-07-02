@@ -3,6 +3,7 @@ from datetime import date
 
 from ...rates import ZeroCouponCurve
 
+@dataclass
 class Forward:
     notional: float
     strike: float
