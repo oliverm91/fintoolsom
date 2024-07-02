@@ -16,15 +16,6 @@ class Coupon:
         self.interest = float(interest)
         self.flow = self.amortization + self.interest
         self.residual = float(residual)
-        if type(start_date)!=date or type(end_date)!=date:
-            try:
-                start_date = start_date.date()
-            except:
-                raise Exception(f'Could not cast start_date format to datetime.date:\n{type(start_date)} type received.')
-            try:
-                end_date = end_date.date()
-            except:
-                raise Exception(f'Could not cast end_date format to datetime.date:\n{type(end_date)} type received.')
         self.start_date: date = start_date
         self.end_date: date = end_date
         self.wf = (self.residual + self.interest) / self.residual
