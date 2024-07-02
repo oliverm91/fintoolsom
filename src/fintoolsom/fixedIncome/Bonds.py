@@ -276,5 +276,5 @@ class Bond:
         dur = self.get_duration(date, irr)
         pv = self.get_present_value(date, irr) / 100
         dv01 = - pv * dur / 10_000
-        dv01 *= self.coupons.get_residual_amount(date)
+        dv01 *= self.notional / 100  # remove notional dependencies.
         return dv01
