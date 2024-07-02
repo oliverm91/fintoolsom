@@ -15,6 +15,15 @@ class Calendar:
     
     def add_custom_holiday(self, custom_holiday: date):
         self.custom_holidays.append(custom_holiday)
+        self._fix_custom_holidays()
+
+    def add_custom_holidays(self, custom_holidays: list[date]):
+        self.custom_holidays += custom_holidays
+        self._fix_custom_holidays()
+
+    def _fix_custom_holidays(self):
+        self.custom_holidays = list(set(self.custom_holidays))
+        self.custom_holidays.sort()        
 
     def delete_custom_holidays(self):
         self.custom_holidays.clear()
