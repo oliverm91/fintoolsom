@@ -41,6 +41,7 @@ class Calendar:
     def get_holidays(self, year: int) -> list[date]:
         customs = [ch for ch in self.custom_holidays if ch.year==year]
         rule_holidays = [r.get_date(year) for r in self.holiday_rules]
+        rule_holidays = [h for h in rule_holidays if h is not None]
         year_holidays = list(set(customs + rule_holidays))
         year_holidays.sort()
         return year_holidays
