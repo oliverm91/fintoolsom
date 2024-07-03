@@ -1,4 +1,5 @@
 from copy import copy
+from typing import Self
 import numpy as np
 from datetime import date
 from dataclasses import dataclass, field
@@ -40,8 +41,11 @@ class ZeroCouponCurve:
     def __len__(self) -> int:
         return len(self.curve_points)
   
-    def copy(self):
+    def copy(self) -> Self:
         return ZeroCouponCurve(self.curve_date, [copy(zccp) for zccp in self.curve_points])
+    
+    def __copy__(self) -> Self:
+        return self.copy()
     
     def set_df_curve(self):
         self.wfs = np.array([cp.rate.get_wealth_factor(self.curve_date, cp.date) 
