@@ -26,7 +26,6 @@ class RateConvention:
         return RateConvention(interest_convention=self.interest_convention, day_count_convention=self.day_count_convention, time_fraction_base=self.time_fraction_base)
 
 
-@dataclass(slots=True)
 class Rate:
     rate_convention: RateConvention
     rate_value: float

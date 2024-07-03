@@ -19,7 +19,6 @@ class ZeroCouponCurvePoint:
         return self.copy()
 
 
-@dataclass(slots=True)
 class ZeroCouponCurve:
     curve_date: date
 
