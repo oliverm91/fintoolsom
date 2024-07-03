@@ -251,7 +251,8 @@ class Bond:
         dv01 = self.get_dv01(date, irr)
         initial_guess = (irr_value - current_zc_value) / dv01
         def bp_bump_curve_value(bp_bump: float) -> float:
-            zc_curve_bumped = copy(zc_curve).parallel_bump_rates_bps(bp_bump)
+            zc_curve_bumped = copy(zc_curve)
+            zc_curve_bumped.parallel_bump_rates_bps(bp_bump)
             return (self.get_present_value_zc(date, zc_curve_bumped) - irr_value)**2
         
         tolerance_factor = 1 / 10_000
