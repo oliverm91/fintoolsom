@@ -9,6 +9,9 @@ from scipy.stats import norm
 from ...dates import get_time_fraction, DayCountConvention
 from ...rates import ZeroCouponCurve, Rate, RateConvention, InterestConvention
 
+_default_rc = RateConvention(interest_convention=InterestConvention.Exponential,
+                            day_count_convention=DayCountConvention.Actual,
+                            time_fraction_base=365)
 @dataclass
 class Option(ABC):
     notional: float
@@ -20,9 +23,7 @@ class Option(ABC):
 
     def __post_init__(self):
         if self._valuation_rate_convention is None:
-            self._valuation_rate_convention = RateConvention(interest_convention=InterestConvention.Exponential,
-                                                                              day_count_convention=DayCountConvention.Actual,
-                                                                              time_fraction_base=365)
+            self._valuation_rate_convention = _default_rc
 
     def get_log_moneyness(self, spot: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> float:
         df_r = domestic_curve.get_df(self.maturity)
@@ -83,9 +84,10 @@ class Option(ABC):
 
     def _get_rates(self, t: date, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> dict[str, float]:
         df_r = domestic_curve.get_df(self.maturity)
-        r = Rate.get_rate_from_df(df_r, t, self.maturity, self._valuation_rate_convention).rate_value
+        rc = _default_rc if self._valuation_rate_convention is None else self._valuation_rate_convention
+        r = Rate.get_rate_from_df(df_r, t, self.maturity, rc).rate_value
         df_q = foreign_curve.get_df(self.maturity)
-        q = Rate.get_rate_from_df(df_q, t, self.maturity, self._valuation_rate_convention).rate_value
+        q = Rate.get_rate_from_df(df_q, t, self.maturity, rc).rate_value
         return r, q
 
     def _get_both_ds(self, t: date, spot: float,  volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve
@@ -94,7 +96,7 @@ class Option(ABC):
     
     @staticmethod
     def get_strike_from_delta(delta: float, spot: float, volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve, maturity: date, sign: int) -> float:
-        rate_convention = RateConvention(interest_convention=InterestConvention.Exponential, day_count_convention=DayCountConvention.Actual, time_fraction_base=365)
+        rate_convention = _default_rc
         df_r = domestic_curve.get_df(maturity)
         t = domestic_curve.curve_date
         yf =get_time_fraction(t, maturity, rate_convention.day_count_convention, base_convention=rate_convention.time_fraction_base)
