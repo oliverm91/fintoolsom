@@ -12,7 +12,6 @@ def print_cl_holidays(year: int) -> list[date]:
 
 st.title('Test fintoolsom GitHub Repo')
 
-st.write('Executing code...')
 try:
     year = st.number_input('Ingrese año:', value=2024, min_value=1900, max_value=2500, step=1)
     if st.button('Calcular feriados chilenos'):
