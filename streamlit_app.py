@@ -14,7 +14,8 @@ st.title('Test fintoolsom GitHub Repo')
 st.write('Executing code...')
 try:
     year = st.number_input('Ingrese año:', value=2024, min_value=1900, max_value=2500, step=1)
-    holidays = print_cl_holidays(year)
-    st.write(f'Chilean Holidays in 2024: {holidays}')
+    if st.button('Calcular feriados chilenos'):
+        holidays = print_cl_holidays(year)
+        st.write(f'Feriados chilenos en {year}: {holidays}')
 except Exception as e:
     st.error(f'Error executing code: {e}')
