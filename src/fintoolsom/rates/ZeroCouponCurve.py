@@ -18,7 +18,7 @@ class ZeroCouponCurvePoint:
     def __copy__(self):
         return self.copy()
 
-
+@dataclass
 class ZeroCouponCurve:
     curve_date: date
 
