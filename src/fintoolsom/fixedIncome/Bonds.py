@@ -69,7 +69,7 @@ class Coupon:
     def __copy__(self) -> Self:
         return self.copy()
     
-@dataclass(slots=True)
+@dataclass
 class Coupons:
     coupons: list[Coupon]
 
