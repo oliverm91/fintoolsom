@@ -25,13 +25,11 @@ class RateConvention:
     def copy(self):
         return RateConvention(interest_convention=self.interest_convention, day_count_convention=self.day_count_convention, time_fraction_base=self.time_fraction_base)
 
-@dataclass
 class Rate:
-    rate_convention: RateConvention
-    rate_value: float
-    _wf_router: dict[InterestConvention, Callable[[float, Iterable[date] | date, Iterable[date] | date], np.ndarray | float]] = field(init=False)
-    def __post_init__(self):
-        self._wf_router = {
+    def __init__(self, rate_convention: RateConvention, rate_value: float):
+        self.rate_convention = rate_convention
+        self.rate_value = rate_value
+        self._wf_router: dict[InterestConvention, Callable[[float, Iterable[date] | date, Iterable[date] | date], np.ndarray | float]] = {
             InterestConvention.Linear: self._get_wf_from_linear_rate,
             InterestConvention.Compounded: self._get_wf_from_compounded_rate,
             InterestConvention.Exponential: self._get_wf_from_exponential_rate
