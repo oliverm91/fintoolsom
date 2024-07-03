@@ -34,8 +34,8 @@ class ZeroCouponCurve:
         elif not self.curve_points:
                 raise ValueError(f'If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set.')
         
-        self.sort()
         self._cashed_dfs: dict[str, np.ndarray] = {}
+        self.sort()
 
     def __len__(self) -> int:
         return len(self.curve_points)
