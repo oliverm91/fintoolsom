@@ -15,10 +15,14 @@ class Option(ABC):
     strike: float
     maturity: date
     
-    _valuation_rate_convention: RateConvention = field(default=RateConvention(interest_convention=InterestConvention.Exponential,
-                                                                              day_count_convention=DayCountConvention.Actual,
-                                                                              time_fraction_base=365))
+    _valuation_rate_convention: RateConvention = field(default=None)
     _sign: int = field(init=False)
+
+    def __post_init__(self):
+        if self._valuation_rate_convention is None:
+            self._valuation_rate_convention = RateConvention(interest_convention=InterestConvention.Exponential,
+                                                                              day_count_convention=DayCountConvention.Actual,
+                                                                              time_fraction_base=365)
 
     def get_log_moneyness(self, spot: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> float:
         df_r = domestic_curve.get_df(self.maturity)
