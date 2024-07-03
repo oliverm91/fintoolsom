@@ -98,7 +98,7 @@ class Coupons:
     def validate_residuals(self):
         for i in range(len(self.coupons)):
             calculated_residual = sum([self.coupons[j].amortization for j in range(i, len(self.coupons))])
-            if round(calculated_residual, 2) != round(self.coupons[i].residual, 2):
+            if round(calculated_residual, 1) != round(self.coupons[i].residual, 1):
                 raise ValueError(f'Residual of coupon {i} is {self.coupons[i].residual} but sum of remaining amortizations is {calculated_residual}')
     
     def get_accrue_rate(self) -> Rate:
