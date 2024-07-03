@@ -19,6 +19,7 @@ try:
         holidays = print_cl_holidays(year)
         holidays_str = [h.strftime('%Y-%m-%d') for h in holidays]
         holidays_df = pd.DataFrame(holidays_str, columns=[f'Feriados {year}'])
+        holidays_df.reset_index(drop=True, inplace=True)
         st.table(holidays_df)
 except Exception as e:
     st.error(f'Error executing code: {e}.')
