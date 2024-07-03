@@ -26,7 +26,7 @@ class ZeroCouponCurve:
     curve_points: list[ZeroCouponCurvePoint] = field(default_factory=list)
     date_dfs: list[tuple[date, float]] = field(default_factory=list)
     _rate_conv_for_dfs_init: rates.RateConvention = field(default=None)
-    def __post_init__(self,):
+    def __post_init__(self):
         if self._rate_conv_for_dfs_init is None:
             self._rate_conv_for_dfs_init = rates.RateConvention()
         if not self.curve_points and self.date_dfs:
