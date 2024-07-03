@@ -321,7 +321,7 @@ class Bond:
         ----
             duration (float): The bond duration.
         '''
-        end_dates = self.coupons.get_end_dates()
+        end_dates = self.coupons.get_remaining_end_dates(date)
         tenors = dates.get_time_fraction(date, end_dates, day_count_convention, time_fraction_base)
         pvs = self.get_flows_pv(date, irr)
         total_pv = sum(pvs)
