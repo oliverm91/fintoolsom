@@ -1,3 +1,4 @@
+from copy import copy
 import numpy as np
 from datetime import date
 from dataclasses import dataclass, field
@@ -5,27 +6,31 @@ from dataclasses import dataclass, field
 from .. import rates
 from .. import dates
 
-@dataclass
+
+@dataclass(slots=True)
 class ZeroCouponCurvePoint:
     date: date
     rate: rates.Rate
     
     def copy(self):
-        return ZeroCouponCurvePoint(self.date, self.rate.copy())
-        
-@dataclass
+        return ZeroCouponCurvePoint(self.date, copy(self.rate))
+    
+    def __copy__(self):
+        return self.copy()
+
+
+@dataclass(slots=True)
 class ZeroCouponCurve:
     curve_date: date
 
-    curve_points: list[ZeroCouponCurvePoint] = field(default=None)
-    date_dfs: list[tuple[date, float]] = field(default=None)
+    curve_points: list[ZeroCouponCurvePoint] = field(default_factory=list)
+    date_dfs: list[tuple[date, float]] = field(default_factory=list)
     _rate_conv_for_dfs_init: rates.RateConvention = field(default=rates.RateConvention())
     def __post_init__(self,):
-        if self.curve_points is None:
-            if self.date_dfs is not None:
-                self.curve_points = [ZeroCouponCurvePoint(t_i, rates.Rate.get_rate_from_df(df, self.curve_date, t_i, self._rate_conv_for_dfs_init)) 
+        if not self.curve_points and self.date_dfs:
+            self.curve_points = [ZeroCouponCurvePoint(t_i, rates.Rate.get_rate_from_df(df, self.curve_date, t_i, self._rate_conv_for_dfs_init)) 
                                     for t_i, df in self.date_dfs]
-            else:
+        elif not self.curve_points:
                 raise ValueError(f'If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set.')
         
         self.sort()
@@ -35,16 +40,18 @@ class ZeroCouponCurve:
         return len(self.curve_points)
   
     def copy(self):
-        return ZeroCouponCurve(self.curve_date, [zccp.copy() for zccp in self.curve_points])
+        return ZeroCouponCurve(self.curve_date, [copy(zccp) for zccp in self.curve_points])
     
     def set_df_curve(self):
         self.wfs = np.array([cp.rate.get_wealth_factor(self.curve_date, cp.date) 
                              if cp.date >= self.curve_date else 1 
                              for cp in self.curve_points])
         self.dfs = 1 / self.wfs
+        self._cashed_dfs.clear()
         
     def set_days(self):
         self.days = self.get_days()
+        self._cashed_dfs.clear()
     
     def get_days(self) -> np.ndarray:
         days = dates.get_day_count(self.curve_date, self.dates, dates.DayCountConvention.Actual)
@@ -152,11 +159,11 @@ class ZeroCouponCurve:
         else:
             rates_obj = []
             for cp in self.curve_points:
-                r = cp.rate.copy()
+                r = copy(cp.rate)
                 if r.rate_convention == rate_convention:
                     rates_obj.append(r)
                 else:
-                    r.convert_rate_convention(rate_convention)
+                    r.convert_rate_conventions(rate_convention)
                     rates_obj.append(r)
             return rates_obj
         

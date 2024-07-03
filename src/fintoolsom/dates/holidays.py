@@ -1,12 +1,20 @@
 from abc import ABC, abstractmethod
 import calendar
 from datetime import date, timedelta
+from typing import Self
 
 
 class HolidayRule(ABC):
     @abstractmethod
     def get_date(self, year: int) -> date:
         pass
+
+    @abstractmethod
+    def copy(self) -> Self:
+        pass
+
+    def __copy__(self) -> Self:
+        return self.copy()
 
 
 class OrdinalWeekWeekdayRule(HolidayRule):
@@ -20,6 +28,9 @@ class OrdinalWeekWeekdayRule(HolidayRule):
         days_to_add = (self.weekday - first_day.weekday()) % 7
         first_weekday_occurrence = first_day + timedelta(days=days_to_add)
         return first_weekday_occurrence + timedelta(weeks=self.ordinal - 1)
+    
+    def copy(self) -> Self:
+        return OrdinalWeekWeekdayRule(self.ordinal, self.weekday, self.month)
 
 
 class LastWeekWeekdayRule(HolidayRule):
@@ -31,6 +42,9 @@ class LastWeekWeekdayRule(HolidayRule):
         last_day = date(year, self.month, calendar.monthrange(year, self.month)[1])
         days_to_subtract = (last_day.weekday() - self.weekday) % 7
         return last_day - timedelta(days=days_to_subtract)
+    
+    def copy(self) -> Self:
+        return LastWeekWeekdayRule(self.weekday, self.month)
 
 
 class MonthDayRule(HolidayRule):
@@ -51,6 +65,9 @@ class MonthDayRule(HolidayRule):
                 return t + timedelta(days=3)
             else:
                 return t
+    
+    def copy(self) -> Self:
+        return MonthDayRule(self.month, self.day, monday_adjustable=self.monday_adjustable)
             
 
 class ConsecutiveHolidaySandwichRule(HolidayRule):
@@ -69,6 +86,9 @@ class ConsecutiveHolidaySandwichRule(HolidayRule):
             return self.consecutive_holiday_rules[1].get_date(year).weekday() + timedelta(days=1)
         else:
             return None
+    
+    def copy(self) -> Self:
+        return ConsecutiveHolidaySandwichRule(self.consecutive_holiday_rules)
         
 
 def _easter_sunday(year: int) -> date:
@@ -90,7 +110,13 @@ def _easter_sunday(year: int) -> date:
 class MondayEasterRule(HolidayRule):
     def get_date(self, year: int) -> date:
         return _easter_sunday(year) + timedelta(days=1)
+    
+    def copy(self) -> Self:
+        return MondayEasterRule()
 
 class FridayEasterRule(HolidayRule):
     def get_date(self, year: int) -> date:
         return _easter_sunday(year) - timedelta(days=2)
+    
+    def copy(self) -> Self:
+        return FridayEasterRule()

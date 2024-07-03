@@ -3,6 +3,9 @@ from .. import rates
 from .. import dates
 from datetime import date
 
+
+_linear_ic = rates.InterestConvention.Linear
+_actual_dcc = dates.DayCountConvention.Actual
 class Deposit:
     def __init__(self, nemo: str, currency: str, payment_date: date, payment: float):
         self.currency = currency.lower()
@@ -11,14 +14,11 @@ class Deposit:
         self.nemo = nemo
 
     def get_value(self, t: date, rate_value: float, fx: int=1) -> float:
-        ic = rates.InterestConvention.Linear
-        dcc = dates.DayCountConvention.Actual
         base = 30 if self.currency=='clp' else 360
-        rc = rates.RateConvention(ic, dcc, base)
+        rc = rates.RateConvention(_linear_ic, _actual_dcc, base)
         r = rates.Rate(rc, rate_value)
         
-        wf = r.get_wealth_factor(t, self.payment_date)
-        df = 1 / wf
+        df = r.get_discount_factor(t, self.payment_date)
         value = self.payment * df * fx
         
         return value
@@ -30,7 +30,7 @@ class Deposit:
         return dv01
     
     def get_duration(self, t: date, base_year_fraction: int=365) -> float:
-        dur = (self.payment_date - t).days / base_year_fraction        
+        dur = (self.payment_date - t).days / base_year_fraction
         return dur
     
     def copy(self) -> Self:

@@ -1,4 +1,5 @@
 from copy import copy
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Self
 
@@ -10,16 +11,50 @@ from .. import dates
 from ..rates import Rate, RateConvention
 
 
+@dataclass(slots=True)
 class Coupon:
-    def __init__(self, amortization: float, interest: float, residual: float, start_date: date, end_date: date, accrue_rate_convention: rates.RateConvention):
-        self.amortization = float(amortization)
-        self.interest = float(interest)
+    amortization: float
+    interest: float
+    residual: float
+    start_date: date
+    end_date: date
+    accrue_rate_convention: rates.RateConvention
+
+    flow: float = field(init=False)
+    wf: float = field(init=False)
+    accrue_rate: rates.Rate = field(init=False)
+
+    def __post_init__(self):
+        self.validate_inputs()
+        self.amortization = float(self.amortization)
+        self.interest = float(self.interest)
         self.flow = self.amortization + self.interest
-        self.residual = float(residual)
-        self.start_date: date = start_date
-        self.end_date: date = end_date
+        self.residual = float(self.residual)
         self.wf = (self.residual + self.interest) / self.residual
-        self.accrue_rate: Rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, accrue_rate_convention)
+        self.accrue_rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, self.accrue_rate_convention)
+
+    def validate_inputs(self):
+        if not isinstance(self.amortization, (float, int)):
+            raise TypeError(f"Amortization must be an int or float. Got {type(self.amortization)}")
+        if not isinstance(self.residual, (float, int)):
+            raise TypeError(f"Residual must be an int or float. Got {type(self.residual)}")
+        if self.residual <= 0:
+            raise ValueError(f"Residual must be greater than 0. Got {self.residual}")
+        if self.residual < self.amortization:
+            raise ValueError(f"Amortization cannot be greater than residual. Amortization: {self.amortization}, Residual: {self.residual}")
+
+        if not isinstance(self.interest, (float, int)):
+            raise TypeError(f"Interest must be an int or float. Got {type(self.interest)}")
+        
+        if not isinstance(self.start_date, date):
+            raise TypeError(f"Start date must be of type date. Got {type(self.start_date)}")
+        if not isinstance(self.end_date, date):
+            raise TypeError(f"End date must be of type date. Got {type(self.end_date)}")        
+        if self.start_date >= self.end_date:
+            raise ValueError(f"Start date must be earlier than end date. Start date: {self.start_date}, End date: {self.end_date}")
+        
+        if not isinstance(self.accrue_rate_convention, rates.RateConvention):
+            raise TypeError(f"accrue_rate_convention must be an instance of rates.RateConvention. Got {type(self.accrue_rate_convention)}")
 
     def copy(self) -> Self:
         return Coupon(self.amortization, self.interest, self.residual, self.start_date, self.end_date, self.accrue_rate.rate_convention.copy())
@@ -34,11 +69,19 @@ class Coupon:
     def __copy__(self) -> Self:
         return self.copy()
     
-    
+@dataclass(slots=True)
 class Coupons:
-    def __init__(self, coupons: list[Coupon]):
-        self.coupons = coupons
+    coupons: list[Coupon]
+
+    def __post_init__(self):
+        if not isinstance(self.coupons, list):
+            raise TypeError(f"coupons must be of type list. Got {type(self.coupons)}")
+        for c in self.coupons:
+            if not isinstance(c, Coupon):
+                raise TypeError(f'coupons elements must be of type Coupon. Got {type(c)}')
         self.sort()
+        self.validate_residuals()
+        
 
     def copy(self) -> Self:
         return Coupons([copy(c) for c in self.coupons])
@@ -51,6 +94,12 @@ class Coupons:
         self.first_start_date = self.coupons[0].start_date
         self.flows = self.get_flows()
         self.end_dates = self.get_end_dates()
+
+    def validate_residuals(self):
+        for i in range(len(self.coupons)):
+            calculated_residual = sum([self.coupons[j].amortization for j in range(i, len(self.coupons))])
+            if round(calculated_residual, 2) != round(self.coupons[i].residual, 2):
+                raise ValueError(f'Residual of coupon {i} is {self.coupons[i].residual} but sum of remaining amortizations is {calculated_residual}')
     
     def get_accrue_rate(self) -> Rate:
         return self.coupons[0].accrue_rate
@@ -58,11 +107,17 @@ class Coupons:
     def get_flows(self) -> np.ndarray:
         return np.array([c.flow for c in self.coupons])
     
+    def get_remaining_flows(self, date: date) -> np.ndarray:
+        return np.array([c.flow for c in self.coupons if date < c.end_date])
+    
     def get_flows_between_dates(self, t1, t2) -> np.ndarray:
         return np.array([c.flow for c in self.coupons if t1 < c.end_date <= t2])
     
     def get_end_dates(self) -> np.ndarray:
         return np.array([c.end_date for c in self.coupons])
+    
+    def get_remaining_end_dates(self, date: date) -> np.ndarray:
+        return np.array([c.end_date for c in self.coupons if date < c.end_date])
     
     def get_flows_maturities(self, date: date):
         return dates.get_day_count(date, self.end_dates, dates.DayCountConvention.Actual)
@@ -80,14 +135,27 @@ class Coupons:
 
     def get_accrued_interest(self, date: date, rate: Rate=None) -> float:
         cc = self.get_current_coupon(date)
-        return cc.get_accrued_interest(date, rate)
+        return cc.get_accrued_interest(date, accrue_rate=rate)
+    
+    def adjust_to_notional(self, notional: float):
+        coupons_notional = self.coupons[0].residual
+        ratio = notional / coupons_notional
+        n = 0
+        for coupon in self.coupons:
+            coupon.amortization *= ratio
+            n += coupon.amortization
+            coupon.residual *= ratio
+        assert round(n, 4) != round(notional, 4), f'Could not adjust to notional {notional}. Sum of amortization is {n}.'
+        self.validate_residuals()
 
 
 class Bond:
     def __init__(self, **kwargs):
         self.coupons: Coupons = kwargs['coupons']
         self.currency: str = kwargs['currency']
-        self.notional: int = kwargs['notional']
+        self.currency = self.currency.lower()
+        self.notional: float = kwargs['notional']
+        self.coupons.adjust_to_notional(100) # Everything is calculated to N = 100. Then adjusted to notional. This makes Bond is made with coupons with base 100.
         self.start_date = self.coupons.first_start_date
         self.end_dates = self.coupons.end_dates
         self.accrue_rate = self.coupons.get_accrue_rate()
@@ -110,9 +178,10 @@ class Bond:
         return accrued_interest
         
     def get_flows_pv(self, date: date, irr: Rate) -> np.ndarray:
-        future_flows_mask = self.end_dates > date
-        wealth_factors = irr.get_wealth_factor(date, self.end_dates)
-        pvs = self.flows_amount  * future_flows_mask / wealth_factors
+        remaining_flows = self.coupons.get_remaining_flows(date)
+        remaining_dates = self.coupons.get_remaining_end_dates(date)
+        discount_factors = irr.get_discount_factor(date, remaining_dates)
+        pvs = remaining_flows * discount_factors
         return pvs
     
     def get_present_value(self, date: date, irr: Rate) -> float:
@@ -128,7 +197,7 @@ class Bond:
             present_value (float): present value of the bond at the given date.
         '''
         pvs = self.get_flows_pv(date, irr)
-        total_pv = sum(pvs)
+        total_pv = pvs.sum()
         return total_pv
 
     def _get_present_value_rate_value(self, date: date, irr_value: float, rate_convention: RateConvention) -> float:
@@ -158,11 +227,10 @@ class Bond:
         ----
             present_value (float): present value of the bond at the given date.
         '''
-        end_dates = self.coupons.get_end_dates()
-        future_flows_mask = end_dates > date
-        flows_dfs = zc_curve.get_dfs(end_dates) * future_flows_mask
-        pvs = self.flows_amount * flows_dfs 
-        pv = sum(pvs)
+        remaining_end_dates = self.coupons.get_remaining_end_dates(date)
+        remaining_flows = self.coupons.get_remaining_flows(date)
+        flows_pv = zc_curve.get_dfs(remaining_end_dates) * remaining_flows
+        pv = flows_pv.sum()
         return pv
     
     def get_z_spread(self, date: date, irr: rates.Rate, zc_curve: rates.ZeroCouponCurve) -> int:
@@ -192,7 +260,7 @@ class Bond:
         if result.success:
             return int(round(result.x[0], 0))
         else:
-            raise ValueError('Could not solve z-spread.')
+            raise ValueError(f'Could not solve z-spread.\n-----------\nOptimization result:\n-----------\n{result}')
 
     
     def get_irr_from_present_value(self, date: date, present_value: float, irr_rate_convention: RateConvention) -> Rate:
@@ -275,6 +343,6 @@ class Bond:
         '''
         dur = self.get_duration(date, irr)
         pv = self.get_present_value(date, irr) / 100
-        dv01 = - pv * dur / 10_000
-        dv01 *= self.notional / 100  # remove notional dependencies.
+        dv01 = - pv * dur # Base 100 DV01
+        dv01 *= self.notional / 100 # Notional adjusted
         return dv01

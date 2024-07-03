@@ -32,6 +32,13 @@ class Calendar:
         if date in self.custom_holidays:
             return True
         return any(date == rule.get_date(date.year) for rule in self.holiday_rules)
+    
+    def get_holidays(self, year: int) -> list[date]:
+        customs = [ch for ch in self.custom_holidays if ch.year==year]
+        rule_holidays = [r.get_date(year) for r in self.holiday_rules]
+        year_holidays = list(set(customs + rule_holidays))
+        year_holidays.sort()
+        return year_holidays
 
     def add_business_day(self, t: date) -> date:
         wd = t.weekday()
