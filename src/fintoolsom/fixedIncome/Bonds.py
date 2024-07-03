@@ -145,7 +145,7 @@ class Coupons:
             coupon.amortization *= ratio
             n += coupon.amortization
             coupon.residual *= ratio
-        assert round(float(n), 4) != round(float(notional), 4), f'Could not adjust to notional {notional}. Sum of amortization is {n}.'
+        assert round(float(n), 4) == round(float(notional), 4), f'Could not adjust to notional {notional}. Sum of amortization is {n}.'
         self.validate_residuals()
 
 
