@@ -255,7 +255,7 @@ class Bond:
             zc_curve_bumped.parallel_bump_rates_bps(bp_bump)
             return (self.get_present_value_zc(date, zc_curve_bumped) - irr_value)**2
         
-        result = minimize(bp_bump_curve_value, initial_guess, maxiter=50)
+        result = minimize(bp_bump_curve_value, initial_guess, options={'maxiter'=50})
 
         if result.success or result.fun < 1e-4:
             return int(round(result.x[0], 0))
