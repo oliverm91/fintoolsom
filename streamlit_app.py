@@ -2,6 +2,7 @@ from datetime import date
 import streamlit as st
 import subprocess
 import sys
+import traceback
 
 def print_cl_holidays(year: int) -> list[date]:
     from fintoolsom.dates.calendars import get_cl_calendar
@@ -18,4 +19,4 @@ try:
         holidays = print_cl_holidays(year)
         st.write(f'Feriados chilenos en {year}: {holidays}')
 except Exception as e:
-    st.error(f'Error executing code: {e}')
+    st.error(f'Error executing code: {e}.\n{traceback.format_exc()}')
