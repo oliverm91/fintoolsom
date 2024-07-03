@@ -83,7 +83,7 @@ class ConsecutiveHolidaySandwichRule(HolidayRule):
         if self.consecutive_holiday_rules[0].get_date(year).weekday()==1:
             return self.consecutive_holiday_rules[0].get_date(year) - timedelta(days=1)
         elif self.consecutive_holiday_rules[1].get_date(year).weekday()==3:
-            return self.consecutive_holiday_rules[1].get_date(year).weekday() + timedelta(days=1)
+            return self.consecutive_holiday_rules[1].get_date(year) + timedelta(days=1)
         else:
             return None
     
