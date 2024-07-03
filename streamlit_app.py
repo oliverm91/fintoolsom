@@ -19,4 +19,5 @@ try:
         holidays = print_cl_holidays(year)
         st.write(f'Feriados chilenos en {year}: {holidays}')
 except Exception as e:
-    st.error(f'Error executing code: {e}.\n{traceback.format_exc()}')
+    st.error(f'Error executing code: {e}.')
+    st.error(f'{traceback.format_exc()}')
