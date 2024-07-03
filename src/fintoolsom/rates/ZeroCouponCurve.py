@@ -181,6 +181,8 @@ class ZeroCouponCurve:
         return np.array([r.rate_value for r in rates_obj])
     
     def parallel_bump_rates_bps(self, bps: float):
+        if isinstance(bps, np.ndarray):
+            bps = float(bps[0])
         for zccp in self.curve_points:
             zccp.rate.rate_value += bps / 10_000
         self.sort()
