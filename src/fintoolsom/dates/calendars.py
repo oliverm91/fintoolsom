@@ -14,6 +14,9 @@ class Calendar:
     def __post_init__(self):
         self._add_one_day_week_days: set = {0, 1, 2, 3, 6}
         self._substract_one_day_week_days: set = {1, 2, 3, 4, 5}
+
+        if self.custom_holidays is None:
+            self.custom_holidays = []
     
     def add_custom_holiday(self, custom_holiday: date):
         self.custom_holidays.append(custom_holiday)
