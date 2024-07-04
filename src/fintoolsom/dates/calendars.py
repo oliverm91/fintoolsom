@@ -49,7 +49,7 @@ class Calendar:
     def add_business_day(self, t: date) -> date:
         wd = t.weekday()
         following = t + timedelta(days=1 if wd in self._add_one_day_week_days else 3 if wd==4 else 2)
-        while self.is_holiday(following):
+        while self.is_holiday(following) or following.weekday() in {5,6}:
             following += timedelta(days=1)
         return following
 
@@ -62,7 +62,7 @@ class Calendar:
     def subtract_business_day(self, t: date) -> date:
         wd = t.weekday()
         preceding = t - timedelta(days=1 if wd in self._substract_one_day_week_days else 3 if wd==0 else 2)
-        while self.is_holiday(preceding):
+        while self.is_holiday(preceding) or preceding.weekday() in {5,6}:
             preceding -= timedelta(days=1)
         return preceding
 
