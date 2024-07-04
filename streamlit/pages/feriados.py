@@ -15,4 +15,5 @@ try:
         holidays_df = pd.DataFrame(holidays_str, columns=[f'Feriados {year}'])
         st.table(holidays_df)
 except Exception as e:
+    st.exception(e)
     st.exception(f'{traceback.format_exc()}')
