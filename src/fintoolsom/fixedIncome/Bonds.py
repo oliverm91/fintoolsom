@@ -18,11 +18,11 @@ class Coupon:
     residual: float
     start_date: date
     end_date: date
-    accrue_rate_convention: rates.RateConvention
+    accrue_rate_convention: RateConvention
 
     flow: float = field(init=False)
     wf: float = field(init=False)
-    accrue_rate: rates.Rate = field(init=False)
+    accrue_rate: Rate = field(init=False)
 
     def __post_init__(self):
         self.validate_inputs()
@@ -31,7 +31,9 @@ class Coupon:
         self.flow = self.amortization + self.interest
         self.residual = float(self.residual)
         self.wf = (self.residual + self.interest) / self.residual
-        self.accrue_rate = Rate.get_rate_from_wf(self.wf, self.start_date, self.end_date, self.accrue_rate_convention)
+        tf = self.accrue_rate_convention.day_count_convention.get_time_fraction(self.start_date, self.end_date, self.accrue_rate_convention.time_fraction_base)
+        self.accrue_rate = Rate(self.accrue_rate_convention,
+                                self.accrue_rate_convention.interest_convention.get_rate_from_wf(self.wf, tf))
 
     def validate_inputs(self):
         if not isinstance(self.amortization, (float, int)):
@@ -69,10 +71,13 @@ class Coupon:
     def __copy__(self) -> Self:
         return self.copy()
     
-@dataclass
+@dataclass(slots=True)
 class Coupons:
     coupons: list[Coupon]
 
+    first_start_date: date = field(init=False, default=None)
+    flows: date = field(init=False, default=None)
+    end_dates: date = field(init=False, default=None)
     def __post_init__(self):
         if not isinstance(self.coupons, list):
             raise TypeError(f"coupons must be of type list. Got {type(self.coupons)}")
@@ -84,7 +89,7 @@ class Coupons:
         
 
     def copy(self) -> Self:
-        return Coupons([copy(c) for c in self.coupons])
+        return Coupons([c.copy() for c in self.coupons])
 
     def __copy__(self) -> Self:
         return self.copy()
@@ -113,14 +118,14 @@ class Coupons:
     def get_flows_between_dates(self, t1, t2) -> np.ndarray:
         return np.array([c.flow for c in self.coupons if t1 < c.end_date <= t2])
     
-    def get_end_dates(self) -> np.ndarray:
-        return np.array([c.end_date for c in self.coupons])
+    def get_end_dates(self) -> list[date]:
+        return [c.end_date for c in self.coupons]
     
-    def get_remaining_end_dates(self, date: date) -> np.ndarray:
-        return np.array([c.end_date for c in self.coupons if date < c.end_date])
+    def get_remaining_end_dates(self, date: date) -> list[date]:
+        return [c.end_date for c in self.coupons if date < c.end_date]
     
     def get_flows_maturities(self, date: date):
-        return dates.get_day_count(date, self.end_dates, dates.DayCountConvention.Actual)
+        return dates.ActualDayCountConvention.get_day_count(date, self.end_dates)
     
     def get_current_coupon(self, date: date) -> Coupon:
         for c in self.coupons:
@@ -162,7 +167,7 @@ class Bond:
         self.flows_amount = self.coupons.get_flows()
 
     def copy(self) -> Self:
-        return Bond(coupons=copy(self.coupons), currency=self.currency, notional=self.notional)
+        return Bond(coupons=self.coupons.copy(), currency=self.currency, notional=self.notional)
 
     def __copy__(self) -> Self:
         return self.copy()
@@ -233,7 +238,7 @@ class Bond:
         pv = flows_pv.sum()
         return pv
     
-    def get_z_spread(self, date: date, irr: rates.Rate, zc_curve: rates.ZeroCouponCurve) -> int:
+    def get_z_spread(self, date: date, irr: rates.Rate, zc_curve: rates.ZeroCouponCurve, initial_guess: float=None, maxiter: int=50) -> float:
         '''
         Returns the z-spread given the internal rate of return (IRR) and a Zero Coupon Curve.
         This is, basis points to do a parallel bump to the Zero Coupon Curve so that IRR_value == ZCC_value.
@@ -241,24 +246,27 @@ class Bond:
             date (date): date at which the z-spread is calculated.
             irr (Rate): internal rate of return to match.
             zc_curve (ZeroCouponCurve): Zero Coupon Curve to discount bond flows.
+            initial_guess (Optional, float): default is None.
+            maxiter (Optional, int): Max iterations for solver. Default is 50.
         ----
         Returns:
         ----
             z_spread (int): the z-spread in basis points.
         '''
         irr_value = self.get_present_value(date, irr)
-        current_zc_value = self.get_present_value_zc(date, zc_curve)
-        dv01 = self.get_dv01(date, irr)
-        initial_guess = (irr_value - current_zc_value) / dv01
+        if initial_guess is None:
+            current_zc_value = self.get_present_value_zc(date, zc_curve)
+            dv01 = self.get_dv01(date, irr)
+            initial_guess = (self.notional / 100) * (irr_value - current_zc_value) / dv01
         def bp_bump_curve_value(bp_bump: float) -> float:
-            zc_curve_bumped = copy(zc_curve)
+            zc_curve_bumped = zc_curve.copy()
             zc_curve_bumped.parallel_bump_rates_bps(bp_bump)
             return (self.get_present_value_zc(date, zc_curve_bumped) - irr_value)**2
         
-        result = minimize(bp_bump_curve_value, initial_guess, options={'maxiter': 50})
+        result = minimize(bp_bump_curve_value, initial_guess, method='SLSQP', options={'maxiter': maxiter})
 
         if result.success or result.fun < 1e-4:
-            return int(round(result.x[0], 0))
+            return result.x[0]
         else:
             raise ValueError(f'Could not solve z-spread.\n-----------\nOptimization result:\n-----------\n{result}')
 
@@ -306,7 +314,7 @@ class Bond:
         price = round(100.0 * pv/par_value, price_decimals)
         return price, par_value
     
-    def get_duration(self, date: date, irr: rates.Rate, day_count_convention: dates.DayCountConvention=dates.DayCountConvention.Actual, time_fraction_base: int=365) -> float:
+    def get_duration(self, date: date, irr: rates.Rate, day_count_convention: dates.DayCountConventionBase=dates.ActualDayCountConvention, time_fraction_base: int=365) -> float:
         '''
         Calculates the bond duration.
         ----------
@@ -322,7 +330,7 @@ class Bond:
             duration (float): The bond duration.
         '''
         end_dates = self.coupons.get_remaining_end_dates(date)
-        tenors = dates.get_time_fraction(date, end_dates, day_count_convention, time_fraction_base)
+        tenors = day_count_convention.get_time_fraction(date, end_dates, time_fraction_base)
         pvs = self.get_flows_pv(date, irr)
         total_pv = sum(pvs)
         duration = sum(pvs * tenors) / total_pv
@@ -342,7 +350,7 @@ class Bond:
             dv01 (float): The dv01 of the bond.
         '''
         dur = self.get_duration(date, irr)
-        pv = self.get_present_value(date, irr) / 100
-        dv01 = - pv * dur # Base 100 DV01
+        pv = self.get_present_value(date, irr) # PV base 100
+        dv01 = - pv * dur / 10_000 # Base 100 DV01
         dv01 *= self.notional / 100 # Notional adjusted
         return dv01

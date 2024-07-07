@@ -1,11 +1,10 @@
 from typing import Self
-from .. import rates
-from .. import dates
 from datetime import date
 
+from ..rates import Rate, RateConvention, LinearInterestConvention
+from ..dates import ActualDayCountConvention
 
-_linear_ic = rates.InterestConvention.Linear
-_actual_dcc = dates.DayCountConvention.Actual
+
 class Deposit:
     def __init__(self, nemo: str, currency: str, payment_date: date, payment: float):
         self.currency = currency.lower()
@@ -15,8 +14,8 @@ class Deposit:
 
     def get_value(self, t: date, rate_value: float, fx: int=1) -> float:
         base = 30 if self.currency=='clp' else 360
-        rc = rates.RateConvention(_linear_ic, _actual_dcc, base)
-        r = rates.Rate(rc, rate_value)
+        rc = RateConvention(LinearInterestConvention, ActualDayCountConvention, base)
+        r = Rate(rc, rate_value)
         
         df = r.get_discount_factor(t, self.payment_date)
         value = self.payment * df * fx

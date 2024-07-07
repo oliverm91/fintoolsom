@@ -1,2 +1,2 @@
-from .Rates import Rate, RateConvention, InterestConvention
+from .Rates import Rate, RateConvention, InterestConventionBase, LinearInterestConvention, CompoundedInterestConvention, ExponentialInterestConvention
 from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint

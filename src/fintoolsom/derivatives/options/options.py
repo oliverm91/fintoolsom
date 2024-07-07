@@ -6,11 +6,11 @@ import math
 import numpy as np
 from scipy.stats import norm
 
-from ...dates import get_time_fraction, DayCountConvention
-from ...rates import ZeroCouponCurve, Rate, RateConvention, InterestConvention
+from ...rates import ZeroCouponCurve, Rate, RateConvention, InterestConventionBase, ExponentialInterestConvention
+from ...dates import ActualDayCountConvention
 
-_default_rc = RateConvention(interest_convention=InterestConvention.Exponential,
-                            day_count_convention=DayCountConvention.Actual,
+_default_rc = RateConvention(interest_convention=ExponentialInterestConvention,
+                            day_count_convention=ActualDayCountConvention,
                             time_fraction_base=365)
 @dataclass
 class Option(ABC):
@@ -80,7 +80,7 @@ class Option(ABC):
             return d1, d2
         
     def _get_yf(self, t: date):
-        return get_time_fraction(t, self.maturity, DayCountConvention.Actual, base_convention=365)
+        return ActualDayCountConvention.get_time_fraction(t, self.maturity, base_convention=365)
 
     def _get_rates(self, t: date, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> dict[str, float]:
         df_r = domestic_curve.get_df(self.maturity)
@@ -99,10 +99,10 @@ class Option(ABC):
         rate_convention = _default_rc
         df_r = domestic_curve.get_df(maturity)
         t = domestic_curve.curve_date
-        yf =get_time_fraction(t, maturity, rate_convention.day_count_convention, base_convention=rate_convention.time_fraction_base)
-        r = Rate.get_rate_from_df(df_r, t, maturity, rate_convention).rate_value
+        yf = rate_convention.day_count_convention.get_time_fraction(t, maturity, rate_convention.time_fraction_base)
+        r = rate_convention.interest_convention.get_rate_from_df(df_r, yf)
         df_q = foreign_curve.get_df(maturity)
-        q = Rate.get_rate_from_df(df_q, t, maturity, rate_convention).rate_value
+        q = rate_convention.interest_convention.get_rate_from_df(df_q, yf)
 
         k = spot * np.exp(-(sign*norm.ppf(sign*delta*(1/df_q)) * volatility * np.sqrt(yf) - (r - q + volatility*volatility/2)*yf))
         return k

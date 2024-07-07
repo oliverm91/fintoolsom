@@ -1,27 +1,26 @@
 from copy import copy
 from datetime import date
+from typing import Self
 from scipy.optimize import newton
 
-from fintoolsom.rates.Rates import RateConvention
 from .Bonds import Bond
+from ..rates.Rates import Rate, RateConvention, CompoundedInterestConvention
+from ..dates import ActualDayCountConvention
 
-from .. import rates
-from .. import dates
 
 class CLBond(Bond):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         tera = kwargs.get('tera', None)
         self.tera = tera if tera is not None else self.calculate_tera()
-        self.irr_default_convention = rates.RateConvention(interest_convention=rates.InterestConvention.Compounded, 
-                                                          day_count_convention=dates.DayCountConvention.Actual, 
+        self.irr_default_convention = RateConvention(interest_convention=CompoundedInterestConvention, 
+                                                          day_count_convention=ActualDayCountConvention,
                                                           time_fraction_base=365)
 
-
-    def __copy__(self):
+    def __copy__(self) -> Self:
         return CLBond(**{'coupons': copy(self.coupons), 'currency': self.currency, 'notional': self.notional, 'tera': self.tera})
         
-    def calculate_tera(self) -> rates.Rate:
+    def calculate_tera(self) -> Rate:
         '''
         Calculates the TERA of the Chilean bond.
         --------
@@ -29,13 +28,13 @@ class CLBond(Bond):
         ----
             tera (Rate): The TERA of the Chilean bond.
         '''
-        tera_rate_convention = rates.RateConvention(rates.InterestConvention.Compounded, dates.DayCountConvention.Actual, 365)
+        tera_rate_convention = RateConvention(CompoundedInterestConvention, ActualDayCountConvention, 365)
         tera = self.get_irr_from_present_value(self.start_date, 100.0, tera_rate_convention)
         tera.rate_value = round(tera.rate_value, 6)
         self.tera = tera
         return tera
         
-    def get_amount_value(self, date: date, irr: rates.Rate, fx: float=1.0) -> float:
+    def get_amount_value(self, date: date, irr: Rate, fx: float=1.0) -> float:
         '''
         Calculates the amount to pay of the Chilean bond based on the given IRR.
         --------
@@ -71,10 +70,10 @@ class CLBond(Bond):
         ----
             float: The amount to pay.
         '''
-        rate = rates.Rate(rate_convention, rate_value)
+        rate = Rate(rate_convention, rate_value)
         return self.get_amount_value(date, rate, fx)
 
-    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention=None, fx: float=1.0) -> rates.Rate:
+    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention=None, fx: float=1.0) -> Rate:
         '''
         Calculates the IRR of the Chilean bond based on the given amount.
         --------
@@ -94,7 +93,7 @@ class CLBond(Bond):
             return self._get_amount_value_rate_value(date, irr_value, irr_rate_convention, fx=fx) - amount
         irr_value = newton(objective_function, x0=self.tera.rate_value, tol=1e-8, maxiter=100)
         rate_value = round(irr_value, 6)
-        irr = rates.Rate(irr_rate_convention, rate_value)
+        irr = Rate(irr_rate_convention, rate_value)
         return irr
     
     def get_par_value(self, date: date, decimals: int=8) -> float:
