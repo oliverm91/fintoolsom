@@ -1,33 +1,59 @@
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Iterable
 from dateutil.relativedelta import relativedelta
 from enum import Enum
 
 from .calendars import Calendar
-from .adjustments import AdjustmentDateConvention
+from .adjustments import AdjustmentDateConvention, ModifiedFollowingConvention
 
-
-def add_tenor(date: date, tenor: str, holidays: Iterable[date]=None, adj_convention: AdjustmentDateConvention=None, calendar: Calendar=None) -> date:
-    tenor = tenor.replace('/', '').lower()
-    tenor = tenor.replace('on', '1D')
-    tenor = tenor.replace('tn', '2D')
-    tenor_unit = tenor[-1:]
-    adding_units = int(tenor[:-1])
-    if tenor_unit == 'd':
-        if calendar is None:
-            holidays = [] if holidays is None else holidays
-            calendar = Calendar(custom_holidays=holidays)
-        end_date = calendar.add_business_days(date, adding_units, holidays=holidays)
-        return end_date
-    elif tenor_unit == 'w':
-        days_to_add = 7 * adding_units
-        end_date = date + relativedelta(days=days_to_add)
-    elif tenor_unit in ('m', 'y'):
-        month_mult = 1 if tenor_unit == 'm' else 12
-        adding_months = int(adding_units * month_mult)
-        end_date = date + relativedelta(months=adding_months)
-    else:
-        raise NotImplementedError(f'Tenor unit {tenor_unit} not implemented. Only d, m, y are accepted.')
+_def_cal = Calendar()
+_def_adj_conv = ModifiedFollowingConvention(_def_cal)
+@dataclass(slots=True)
+class Tenor:
+    str_tenor: str
+    adj_conv: AdjustmentDateConvention = field(default=None)
+    
+    tenor_unit: str = field(init=False)
+    tenor_value: int = field(init=False)
+    _rel_mapper: dict = field(init=False)
+    _get_umaturity_func: Callable[[date], date] = field(init=False)
+    def __post_init__(self):
+        if len(self.str_tenor) < 2:
+            raise ValueError(f'str_tenor length must be at least 2. str_tenor received was {self.str_tenor}')
         
-    end_date = adj_convention.adjust(end_date)
-    return end_date
+        if self.adj_conv is None:
+            self.adj_conv = _def_adj_conv
+        
+        self.tenor_unit = self.str_tenor[-1].lower()
+        self.tenor_value = int(self.str_tenor[:-1])
+        self._rel_mapper = {}
+        if self.tenor_unit=='d':
+            def f(t: date) -> date:
+                return self.adj_conv.calendar.add_business_days(t, self.tenor_value)
+        elif self.tenor_unit=='m':
+            self._rel_mapper['kwarg'] = 'months'
+            self._rel_mapper['multiplier'] = 1
+        elif self.tenor_unit=='y':
+            self._rel_mapper['kwarg'] = 'months'
+            self._rel_mapper['multiplier'] = 12
+        elif self.tenor_unit=='w':
+            self._rel_mapper['kwarg'] = 'days'
+            self._rel_mapper['multiplier'] = 7
+        else:
+            raise ValueError(f'Last letter of str_tenor must be of D, W, M or Y. Got {self.tenor_unit}')
+        
+        if self.tenor_unit!='d':
+            def f(t: date) -> date:
+                kwargs = {self._rel_mapper['kwarg']: self._rel_mapper['multiplier'] * self.tenor_value}
+                return t + relativedelta(**kwargs)
+            
+        self._get_umaturity_func = f
+
+    def get_unadjusted_maturity(self, t: date) -> date:
+        return self._get_umaturity_func(t)
+    
+    def get_adjusted_maturity(self, t: date) -> date:
+        u_mat = self.get_unadjusted_maturity(t)
+        return self.adj_conv.adjust(u_mat)
