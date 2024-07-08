@@ -11,8 +11,32 @@ from . import create_bonds
 from fintoolsom.rates import ZeroCouponCurve, ZeroCouponCurvePoint, Rate, RateConvention, CompoundedInterestConvention
 from fintoolsom.dates import ActualDayCountConvention, ModifiedFollowingConvention, get_cl_calendar, ScheduleGenerator
 
-# Create Random nominal Zero Coupon Curve
+# Create nominal Zero Coupon Curve from dfs
+t = date(2024, 7, 8)
+curve_dfs = [
+    (date(2024, 7, 11), 0.99982),
+    (date(2024, 7, 17), 0.99875),
+    (date(2024, 7, 24), 0.99746),
+    (date(2024, 7, 31), 0.99618),
+    (date(2024, 8, 10), 0.99437),
+    (date(2024, 9, 10), 0.99534),
+    (date(2024, 10, 10), 0.99339),
+    (date(2025, 1, 10), 0.99397),
+    (date(2025, 4, 10), 0.98939),
+    (date(2025, 7, 10), 0.98432),
+    (date(2026, 1, 10), 0.97194),
+    (date(2026, 7, 10), 0.95984),
+    (date(2027, 7, 10), 0.93721),
+    (date(2028, 7, 10), 0.91496),
+    (date(2029, 7, 10), 0.89386),
+    (date(2031, 7, 10), 0.85234),
+    (date(2032, 7, 10), 0.83147),
+    (date(2034, 7, 10), 0.79863),
+    (date(2036, 7, 10), 0.77565)
+]
+nominal_zcc = ZeroCouponCurve(t, date_dfs=curve_dfs)
 
+# Create Random nominal Zero Coupon Curve
 t = date.today()
 nominal_curve_points = [
     ZeroCouponCurvePoint(t + timedelta(days=1), Rate(RateConvention(), 0.0575)),

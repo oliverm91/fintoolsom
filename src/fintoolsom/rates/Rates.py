@@ -26,9 +26,9 @@ class InterestConventionBase(ABC):
     def get_rate_from_wf(wf: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
         pass
 
-    @staticmethod
-    def get_df_from_rate(rate_value: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
-        return 1 / InterestConventionBase.get_wf_from_rate(rate_value, time_fraction)
+    @classmethod
+    def get_df_from_rate(cls, rate_value: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
+        return 1 / cls.get_wf_from_rate(rate_value, time_fraction)
 
     @staticmethod
     def get_rate_from_df(df: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
