@@ -30,9 +30,9 @@ class InterestConventionBase(ABC):
     def get_df_from_rate(cls, rate_value: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
         return 1 / cls.get_wf_from_rate(rate_value, time_fraction)
 
-    @staticmethod
-    def get_rate_from_df(df: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
-        return InterestConventionBase.get_rate_from_wf(1/df, time_fraction)
+    @classmethod
+    def get_rate_from_df(cls, df: float | np.ndarray, time_fraction: float | np.ndarray) -> float | np.ndarray:
+        return cls.get_rate_from_wf(1/df, time_fraction)
 
 
 class LinearInterestConvention(InterestConventionBase):
