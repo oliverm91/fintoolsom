@@ -1,10 +1,9 @@
-from copy import copy
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Self
 
 import numpy as np
-from scipy.optimize import newton, minimize
+from scipy.optimize import newton
 
 from .. import rates
 from .. import dates
@@ -259,16 +258,14 @@ class Bond:
             dv01 = self.get_dv01(date, irr)
             initial_guess = (self.notional / 100) * (irr_value - current_zc_value) / dv01
         def bp_bump_curve_value(bp_bump: float) -> float:
-            zc_curve_bumped = zc_curve.copy()
-            zc_curve_bumped.parallel_bump_rates_bps(bp_bump)
-            return (self.get_present_value_zc(date, zc_curve_bumped) - irr_value)**2
+            zc_curve.parallel_bump_rates_bps(bp_bump)
+            bumped_val = self.get_present_value_zc(date, zc_curve)
+            zc_curve.parallel_bump_rates_bps(-bp_bump)
+            return bumped_val-irr_value
         
-        result = minimize(bp_bump_curve_value, initial_guess, method='SLSQP', options={'maxiter': maxiter})
-
-        if result.success or result.fun < 1e-4:
-            return result.x[0]
-        else:
-            raise ValueError(f'Could not solve z-spread.\n-----------\nOptimization result:\n-----------\n{result}')
+        result = newton(bp_bump_curve_value, initial_guess)
+        return result
+        
 
     
     def get_irr_from_present_value(self, date: date, present_value: float, irr_rate_convention: RateConvention) -> Rate:

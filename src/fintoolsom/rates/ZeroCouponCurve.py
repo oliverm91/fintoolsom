@@ -18,6 +18,9 @@ class ZeroCouponCurvePoint:
     
     def __copy__(self):
         return self.copy()
+    
+    def simple_str(self) -> str:
+        return f'({self.date}|{self.rate.rate_value})'
 
 @dataclass(slots=True)
 class ZeroCouponCurve:
@@ -51,15 +54,6 @@ class ZeroCouponCurve:
         self._cashed_dfs: dict[str, np.ndarray] = {}
         self.sort()
 
-    def __len__(self) -> int:
-        return len(self.curve_points)
-  
-    def copy(self) -> Self:
-        return ZeroCouponCurve(self.curve_date, [zccp.copy() for zccp in self.curve_points])
-    
-    def __copy__(self) -> Self:
-        return self.copy()
-    
     def set_df_curve(self):
         self.wfs = np.array([cp.rate.get_wealth_factor(self.curve_date, cp.date) 
                              for cp in self.curve_points])
@@ -98,7 +92,10 @@ class ZeroCouponCurve:
             bps = float(bps[0])
         for zccp in self.curve_points:
             zccp.rate.rate_value += bps / 10_000
-        self.sort()
+        
+        # Copy of part of sort method. Other lines are not necessary here.
+        self.set_df_curve()
+        self._cashed_dfs.clear()
 
     def get_df(self, date: date) -> float:
         return self.get_dfs([date])[0]
@@ -193,3 +190,15 @@ class ZeroCouponCurve:
     def get_zero_rates_values(self, rate_convention: RateConvention=None) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
         return np.array([r.rate_value for r in rates_obj])
+    
+    def __len__(self) -> int:
+        return len(self.curve_points)
+  
+    def copy(self) -> Self:
+        return ZeroCouponCurve(self.curve_date, [zccp.copy() for zccp in self.curve_points])
+    
+    def __copy__(self) -> Self:
+        return self.copy()
+    
+    def __str__(self) -> str:
+        return f'ZeroCouponCurve class. Curve date {self.curve_date}. {str([cp.simple_str() for cp in self.curve_points])}'
