@@ -44,7 +44,7 @@ class ZeroCouponCurve:
             ic = self._rate_conv_for_dfs_init.interest_convention
             dcc = self._rate_conv_for_dfs_init.day_count_convention
             tfb = self._rate_conv_for_dfs_init.time_fraction_base
-            self.curve_points = [ZeroCouponCurvePoint(t_i, ic.get_rate_from_df(df, dcc.get_time_fraction(self.curve_date, t_i, tfb)))
+            self.curve_points = [ZeroCouponCurvePoint(t_i, Rate(self._rate_conv_for_dfs_init, ic.get_rate_from_df(df, dcc.get_time_fraction(self.curve_date, t_i, tfb))))
                                 for t_i, df in self.date_dfs]
         elif not self.curve_points:
                 raise ValueError(f'If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set.')
@@ -165,11 +165,11 @@ class ZeroCouponCurve:
 
     def get_zero_rates(self, rate_convention: RateConvention=None) -> list[Rate]:
         if rate_convention is None:
-            return [copy(cp) for cp in self.curve_points]
+            return [cp.copy() for cp in self.curve_points]
         else:
             rates_obj = []
             for cp in self.curve_points:
-                r = copy(cp.rate)
+                r = cp.rate.copy()
                 if r.rate_convention == rate_convention:
                     rates_obj.append(r)
                 else:
