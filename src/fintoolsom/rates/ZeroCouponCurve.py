@@ -158,7 +158,9 @@ class ZeroCouponCurve:
 
     def get_forward_rates_values(self, start_dates: date | list[date], end_dates: date | list[date], rate_convention: RateConvention=None) -> float | np.ndarray:
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention)
-        if isinstance(rates_obj, list):
+        if isinstance(rates_obj, np.ndarray):
+            return rates_obj
+        elif isinstance(rates_obj, list):
             return np.array([r.rate_value for r in rates_obj])
         else: 
             return rates_obj.rate_value
