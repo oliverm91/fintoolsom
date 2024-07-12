@@ -73,7 +73,7 @@ class CLBond(Bond):
         rate = Rate(rate_convention, rate_value)
         return self.get_amount_value(date, rate, fx)
 
-    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention=None, fx: float=1.0, tol: float=1e-7) -> Rate:
+    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention=None, fx: float=1.0, tol: float=1e-6) -> Rate:
         '''
         Calculates the IRR of the Chilean bond based on the given amount.
         --------
@@ -92,8 +92,9 @@ class CLBond(Bond):
         tera_value = self.get_amount_value(date, self.tera, fx=fx)
         dv01 = self.get_dv01(date, self.tera) * fx
         initial_guess = self.tera.rate_value + ((amount - tera_value) / dv01) / 10_000
+        div_value = min(self.notional / 1000, 10)
         def objective_function(irr_value: float) -> float:
-            return self._get_amount_value_rate_value(date, irr_value, irr_rate_convention, fx=fx) - amount
+            return (self._get_amount_value_rate_value(date, irr_value, irr_rate_convention, fx=fx) - amount)/div_value
         irr_value = newton(objective_function, x0=initial_guess, tol=tol, maxiter=100)
         rate_value = round(irr_value, 6)
         newton_result = self._get_amount_value_rate_value(date, rate_value, irr_rate_convention, fx=fx)
