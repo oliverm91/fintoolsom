@@ -55,6 +55,8 @@ nominal_nemo = 'BTP0470930'
 notional = 100_000_000
 nominal_bond = create_bonds.create_bond(nominal_nemo, notional)
 
+solver_rate = nominal_bond.get_irr_from_amount(t, 101_000_000)
+
 tir_value = 6 / 100
 tir_convention = RateConvention(interest_convention=CompoundedInterestConvention, day_count_convention=ActualDayCountConvention, time_fraction_base=365)
 irr_obj = Rate(tir_convention, tir_value)

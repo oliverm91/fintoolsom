@@ -73,7 +73,7 @@ class CLBond(Bond):
         rate = Rate(rate_convention, rate_value)
         return self.get_amount_value(date, rate, fx)
 
-    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention=None, fx: float=1.0) -> Rate:
+    def get_irr_from_amount(self, date: date, amount: float, irr_rate_convention: RateConvention=None, fx: float=1.0, tol: float=1e-7) -> Rate:
         '''
         Calculates the IRR of the Chilean bond based on the given amount.
         --------
@@ -89,10 +89,32 @@ class CLBond(Bond):
         '''
         if irr_rate_convention is None:
             irr_rate_convention = self.irr_default_convention
+        tera_value = self.get_amount_value(date, self.tera, fx=fx)
+        dv01 = self.get_dv01(date, self.tera) * fx
+        initial_guess = self.tera.rate_value + ((amount - tera_value) / dv01) / 10_000
         def objective_function(irr_value: float) -> float:
             return self._get_amount_value_rate_value(date, irr_value, irr_rate_convention, fx=fx) - amount
-        irr_value = newton(objective_function, x0=self.tera.rate_value, tol=1e-8, maxiter=100)
+        irr_value = newton(objective_function, x0=initial_guess, tol=tol, maxiter=100)
         rate_value = round(irr_value, 6)
+        newton_result = self._get_amount_value_rate_value(date, rate_value, irr_rate_convention, fx=fx)
+        counter = 0
+        if newton_result != amount:
+            direction = 1 if newton_result > amount else -1
+            while True:
+                rate_value += 0.000001 * direction
+                newton_result_i = self._get_amount_value_rate_value(date, rate_value, irr_rate_convention, fx=fx)
+                direction_i = 1 if newton_result_i > amount else -1
+                if direction_i != direction:
+                    if abs(newton_result_i-amount)>abs(newton_result-amount):
+                        rate_value -= 0.000001 * direction
+                    break
+                else:
+                    newton_result = newton_result_i
+                counter += 1
+                if counter == 30:
+                    ig_value = self._get_amount_value_rate_value(date, initial_guess, irr_rate_convention, fx=fx)
+                    raise ValueError(f'Failed to adjust to amount.\nInitial guess {initial_guess}, IG value {ig_value}, Amount {amount}, Newton_result {newton_result}, rate_value {rate_value}.')
+
         irr = Rate(irr_rate_convention, rate_value)
         return irr
     
