@@ -80,8 +80,8 @@ class ExponentialInterestConvention(InterestConventionBase):
 @dataclass(slots=True)
 class RateConvention:
     interest_convention: InterestConventionBase = field(default=CompoundedInterestConvention)
-    day_count_convention: DayCountConventionBase = field(default=ActualDayCountConvention)
-    time_fraction_base: int = field(default=365)
+    day_count_convention: DayCountConventionBase = field(default=ActualDayCountConvention) # Replaced by time_fraction_convention: TimeFractionBase
+    time_fraction_base: int = field(default=365) # Dissapears in next Update
 
     def __copy__(self) -> Self:
         return self.copy()

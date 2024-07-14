@@ -3,7 +3,6 @@ from datetime import date
 import calendar
 
 import numpy as np
-import pandas as pd
     
 
 def _gdc_dd(cls, sd, ed):
