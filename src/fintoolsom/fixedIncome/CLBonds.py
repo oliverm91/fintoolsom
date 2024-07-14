@@ -89,7 +89,7 @@ class CLBond(Bond):
         '''
         if irr_rate_convention is None:
             irr_rate_convention = self.irr_default_convention
-        tera_value = self.get_amount_value(date, self.tera, fx=fx)
+        tera_value = self.get_present_value(date, irr)*fx
         dv01 = self.get_dv01(date, self.tera) * fx
         initial_guess = self.tera.rate_value + ((amount - tera_value) / dv01) / 10_000
         div_value = min(self.notional / 1000, 10)

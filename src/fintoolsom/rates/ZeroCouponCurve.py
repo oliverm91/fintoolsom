@@ -91,7 +91,7 @@ class ZeroCouponCurve:
         for zccp in self.curve_points:
             zccp.rate.rate_value += bps / 10_000
         
-        # Copy of part of sort method. Other lines are not necessary here.
+        # Copy of a part of self.sort() method. Other lines are not necessary here.
         self.set_df_curve()
         self._cashed_dfs.clear()
 
@@ -190,6 +190,12 @@ class ZeroCouponCurve:
     def get_zero_rates_values(self, rate_convention: RateConvention=None) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
         return np.array([r.rate_value for r in rates_obj])
+    
+    def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float:
+        return notional * (self.get_wf_fwd(start_date, end_date) - 1)
+    
+    def get_accrued_interests(self, notional: np.ndarray, start_dates: list[date], end_dates: list[date]) -> np.ndarray:
+        return notional * (self.get_wfs_fwds(start_dates, end_dates) - 1)
     
     def __len__(self) -> int:
         return len(self.curve_points)
