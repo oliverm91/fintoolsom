@@ -38,9 +38,6 @@ class Calendar:
     def is_holiday(self, date: date) -> bool:
         return date in self._calendar or date.weekday() in self._weekend_weekdays
 
-    def add_business_day(self, t: date) -> date:
-        return self.add_business_days(t, 1)
-
     def add_business_days(self, t: date, business_days: int) -> date:
         return self._calendar.get_nth_workday(t, business_days)
 
