@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import date
 
-from .currencies import Currency, CurrencyPair
+from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .localities import Locality
 from ..rates import Rate, ZeroCouponCurve
@@ -11,8 +11,8 @@ from ..dates import Calendar
 @dataclass(slots=True)
 class Market:
     t: date
+    fx_history: dict[CurrencyPair, FX_RateData] = field(default_factory=dict)
     indexes_history: dict[str, dict[date, Index]] = field(default_factory=dict)
-    currency_pairs_history: dict[str, dict[date, CurrencyPair]] = field(default_factory=dict)
     interest_rates: dict[str, dict[date, Rate]] = field(default_factory=dict)
     index_to_interest_rate_map: dict[str, str] = field(default_factory=dict)
 
@@ -31,10 +31,14 @@ class Market:
     zero_coupon_curve_mapper: dict[str, ZeroCouponCurve | dict[Locality, dict[Currency, ZeroCouponCurve]]] = field(default_factory=dict) # First key is index_name which can be None.
 
     def __post_init__(self):
-        # upper names
-        for k in list(self.currency_pairs_history.items()):
-            v = self.currency_pairs_history.pop(k)
-            self.currency_pairs_history[k.upper()] = v
+        for cp, fx_data in self.fx_history.items():
+            # Check fx_history FX_RateData is correctly mapped to CurrencyPairs.
+            if cp!=fx_data.currency_pair:
+                raise ValueError(f'fx_history contained a key-value pair inconsistent in CurrencyPair. Key: {cp}, Value CurrencyPair: {fx_data.currency_pair}')
+            # Add inverted data
+            if cp.invert() not in self.fx_history:
+                self.fx_history[cp.invert()] = fx_data.invert()
+
 
         for k in list(self.zero_coupon_curve_mapper.items()):
             v = self.zero_coupon_curve_mapper.pop(k)
@@ -166,62 +170,15 @@ class Market:
         
     def get_discount_curve(self, currency: Currency, collateral_index_name: str=None, locality: Locality=None) -> ZeroCouponCurve:
         return self.get_zero_coupon_curve(currency, locality=locality, index_name=collateral_index_name)
-
-    def get_currency_pair(self, t: date, base_currency: Currency, quote_currency: Currency) -> CurrencyPair:
-        name = f'{base_currency.value}/{quote_currency.value}'
-        if name in self.currency_pairs_history:
-            if t in self.currency_pairs_history[name]:
-                return self.currency_pairs_history[name][t]
-            
-        # If name not in history or t not in history for name, try to build with data from date t.
-        
-        # Check for direct inversion
-        inverted_name = f"{quote_currency.value}/{base_currency.value}"
-        if inverted_name in self.currency_pairs_history:
-            inverted_name_dict = self.currency_pairs_history[inverted_name]
-            if t in inverted_name_dict:
-                inverted_cp = inverted_name_dict[t]
-                cp = inverted_cp.invert()
-                self.currency_pairs_history[name][t] = cp
-                return cp
-        else:
-            # Get all CurrencyPairs with base and quote currency in it.
-            base_values: dict[str, CurrencyPair] = {}
-            for pair_name in self.currency_pairs_history.keys():
-                if t in self.currency_pairs_history[pair_name]:
-                    pair = self.currency_pairs_history[pair_name][t]
-                    if pair.base_currency == base_currency:
-                        base_values[pair_name] = pair
-                    if pair.quote_currency == base_currency:
-                        iv_pair = pair.invert()
-                        base_values[pair.name] = iv_pair
-            quote_values: dict[str, CurrencyPair] = {}
-            for pair_name in self.currency_pairs_history.keys():
-                if t in self.currency_pairs_history[pair_name]:
-                    pair = self.currency_pairs_history[pair_name][t]
-                    if pair.base_currency == quote_currency:
-                        iv_pair = pair.invert()
-                        quote_values[pair_name] = iv_pair
-                    if pair.quote_currency == quote_currency:
-                        quote_values[pair.name] = pair
-
-            if len(base_values) == 0 or len(quote_values) == 0:
-                raise ValueError(f"Could not build Currency pair {name} date {t}.")
-
-            # Lookup for a connection: base_value.key[-3:]==quote_value.key[:3]
-            for base_key, base_value in base_values.items():
-                for quote_key, quote_value in quote_values.items():
-                    if base_key[-3:] == quote_key[:3]:
-                        combined_value = base_value.value * quote_value.value
-                        result = CurrencyPair(t, base_currency, quote_currency, combined_value)
-                        self.currency_pairs_history[t][result.name] = result
-                        return result
-
-            raise ValueError(f"Could not build Currency pair {name} date {t}.")
     
-    def accrue_currency_pair(self, base_currency: Currency, quote_currency: Currency, t: date, locality: Locality) -> CurrencyPair:
-        current_currency_pair = self.get_currency_pair(self.t, base_currency, quote_currency)
-        foreign_curve = self.get_zero_coupon_curve(base_currency, locality=locality)
-        domestic_curve = self.get_zero_coupon_curve(quote_currency, locality=locality)
+    def add_fx_rate(self, t: date, fx_rate: FX_Rate):
+        if fx_rate.currency_pair not in self.fx_history:
+            self.fx_history[fx_rate.currency_pair] = FX_RateData(fx_rate.currency_pair, {t: fx_rate})
+        else:
+            self.fx_history[fx_rate.currency_pair].add_date(t, fx_rate)
 
-        return current_currency_pair.accrue(foreign_curve, domestic_curve, t)
+    def get_fx_rate(self, t: date, currency_pair: CurrencyPair) -> FX_Rate:
+        if currency_pair in self.fx_history:
+            return self.fx_history[currency_pair].get_fx_rate(t)
+        else:
+            raise KeyError(f'No {currency_pair} data loaded in market.')

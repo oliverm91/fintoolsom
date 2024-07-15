@@ -2,17 +2,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from enum import Enum
 
 from .calendars import Calendar
-from .adjustments import AdjustmentDateConvention, ModifiedFollowingConvention
+from .adjustments import AdjustmentDateConventionBase, ModifiedFollowingConvention
 
 _def_cal = Calendar()
 _def_adj_conv = ModifiedFollowingConvention(_def_cal)
 @dataclass(slots=True)
 class Tenor:
     str_tenor: str
-    adj_conv: AdjustmentDateConvention = field(default=None)
+    adj_conv: AdjustmentDateConventionBase = field(default=None)
     
     tenor_unit: str = field(init=False)
     tenor_value: int = field(init=False)
@@ -61,8 +60,8 @@ class Tenor:
 @dataclass
 class ScheduleGenerator:
     @staticmethod
-    def generate_schedule(start_date: date, maturity_tenor: str, frequency_tenor: str, adj_conv: AdjustmentDateConvention,
-                          maturity_adj_conv: AdjustmentDateConvention=None, stub_first: bool=True, long_stub: bool=True) -> list[date]:
+    def generate_schedule(start_date: date, maturity_tenor: str, frequency_tenor: str, adj_conv: AdjustmentDateConventionBase,
+                          maturity_adj_conv: AdjustmentDateConventionBase=None, stub_first: bool=True, long_stub: bool=True) -> list[date]:
         frequency_tenor = frequency_tenor.lower()
         accepted_frequency_tenors = ['0', 0, '0m', '0y', '1m', '3m', '6m', '1y']
         if frequency_tenor not in accepted_frequency_tenors:

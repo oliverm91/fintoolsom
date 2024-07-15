@@ -4,7 +4,7 @@ from datetime import date
 from .calendars import Calendar
 
 
-class AdjustmentDateConvention(ABC):
+class AdjustmentDateConventionBase(ABC):
     def __init__(self, calendar: Calendar):
         self.calendar = calendar
 
@@ -13,7 +13,7 @@ class AdjustmentDateConvention(ABC):
         pass
 
 
-class FollowingConvention(AdjustmentDateConvention):
+class FollowingConvention(AdjustmentDateConventionBase):
     def adjust(self, date_to_adjust: date) -> date:
         if self.calendar.is_holiday(date_to_adjust):
             return self.calendar.add_business_day(date_to_adjust)
@@ -21,7 +21,7 @@ class FollowingConvention(AdjustmentDateConvention):
             return date_to_adjust
 
 
-class ModifiedFollowingConvention(AdjustmentDateConvention):
+class ModifiedFollowingConvention(AdjustmentDateConventionBase):
     def __init__(self, calendar: Calendar):
         super().__init__(calendar)
         self._fc = FollowingConvention(calendar)
@@ -35,7 +35,7 @@ class ModifiedFollowingConvention(AdjustmentDateConvention):
             return self._pc.adjust(date_to_adjust)
 
 
-class PrecedingConvention(AdjustmentDateConvention):
+class PrecedingConvention(AdjustmentDateConventionBase):
     def adjust(self, date_to_adjust: date) -> date:
         if self.calendar.is_holiday(date_to_adjust):
             return self.calendar.subtract_business_day(date_to_adjust)
@@ -43,7 +43,7 @@ class PrecedingConvention(AdjustmentDateConvention):
             return date_to_adjust
 
 
-class ModifiedPrecedingConvention(AdjustmentDateConvention):
+class ModifiedPrecedingConvention(AdjustmentDateConventionBase):
     def __init__(self, calendar: Calendar):
         super().__init__(calendar)
         self._fc = FollowingConvention(calendar)

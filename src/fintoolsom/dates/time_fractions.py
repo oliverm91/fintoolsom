@@ -6,31 +6,12 @@ from datetime import date
 
 @dataclass
 class TimeFractionBase(ABC):
-
     @abstractmethod
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
         pass
 
-
     @abstractmethod
     def get_coupon_factor(self, start_date: date, end_date: date) -> float:
-        pass
-
-
-@dataclass
-class TF_30_360Base(TimeFractionBase):
-    def get_day_count_factor(self, start_accrual_date: date, end_accrual_date: date) -> float:
-        d1, m1, y1 = self.get_dmy(start_accrual_date)
-        d2, m2, y2 = self.get_dmy(end_accrual_date)
-        return 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1) / 30
-
-    def get_coupon_factor(self, start_accrual_date: date, payment_date: date) -> float:
-        d1, m1, y1 = self.get_dmy(start_accrual_date)
-        d3, m3, y3 = self.get_dmy(payment_date)
-        return 360 * (y3 - y1) + 30 * (m3 - m1) + (d3 - d1) / 30
-    
-    @dataclass
-    def get_dmy(self, t: date) -> tuple[int, int, int]:
         pass
 
 
