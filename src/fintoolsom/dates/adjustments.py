@@ -16,7 +16,7 @@ class AdjustmentDateConventionBase(ABC):
 class FollowingConvention(AdjustmentDateConventionBase):
     def adjust(self, date_to_adjust: date) -> date:
         if self.calendar.is_holiday(date_to_adjust):
-            return self.calendar.add_business_day(date_to_adjust)
+            return self.calendar.add_business_days(date_to_adjust, 1)
         else:
             return date_to_adjust
 
@@ -38,7 +38,7 @@ class ModifiedFollowingConvention(AdjustmentDateConventionBase):
 class PrecedingConvention(AdjustmentDateConventionBase):
     def adjust(self, date_to_adjust: date) -> date:
         if self.calendar.is_holiday(date_to_adjust):
-            return self.calendar.subtract_business_day(date_to_adjust)
+            return self.calendar.add_business_days(date_to_adjust, -1)
         else:
             return date_to_adjust
 

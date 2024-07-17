@@ -11,12 +11,8 @@ class Calendar:
     custom_holidays: list[date] = field(default_factory=list)
     _calendar: HolidayBase = field(default=None)
 
-    _add_one_day_week_days: set[int] = field(init=False, default_factory=set)
-    _substract_one_day_week_days: set[int] = field(init=False, default_factory=set)
     _weekend_weekdays: set[int] = field(init=False, default_factory=set)
     def __post_init__(self):
-        self._add_one_day_week_days: set = {0, 1, 2, 3, 6}
-        self._substract_one_day_week_days: set = {1, 2, 3, 4, 5}
         self._weekend_weekdays = {5,6}
 
         if self._calendar is None:
