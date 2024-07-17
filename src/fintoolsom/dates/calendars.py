@@ -33,7 +33,8 @@ class Calendar:
         self._calendar.append(custom_holiday)
 
     def add_custom_holidays(self, custom_holidays: list[date]):
-        self._calendar.update(custom_holidays)
+        for ch in custom_holidays:
+            self.add_custom_holiday(ch)
     
     def is_holiday(self, date: date) -> bool:
         return date in self._calendar or date.weekday() in self._weekend_weekdays
