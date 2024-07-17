@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
-from .index import Index
+from .index import IndexData
 from .localities import Locality
 from ..rates import Rate, ZeroCouponCurve
 from ..dates import Calendar
@@ -12,22 +12,12 @@ from ..dates import Calendar
 class Market:
     t: date
     fx_history: dict[CurrencyPair, FX_RateData] = field(default_factory=dict)
-    indexes_history: dict[str, dict[date, Index]] = field(default_factory=dict)
-    interest_rates: dict[str, dict[date, Rate]] = field(default_factory=dict)
-    index_to_interest_rate_map: dict[str, str] = field(default_factory=dict)
-
-    interest_rate_to_index_map: dict[str, str] = field(init=False)
+    indexes_history: dict[str, IndexData] = field(default_factory=dict)
     
     # How should curves be assigned?
-    #    Curves have a locality
-    #    All curves have a currency. Curve currency might be different from locality currency. Ex: CL locality can have a USD and EUR curves.
-    #    Some curves have an index. Indexed curves are not dependant on locality, but on currency. Ex: SOFR index have a CLP and a USD curve.
-    #    
-    #    At the end, every curve has a currency. Therefore, this is the first filter to ask for a curve.
-    #    Indexed curves, do not need locality. Non-indexed curves, do.
-    #    
-    #    Proposed data structure to store curves: dict[str, dict[str, ZeroCouponCurve]]
-    #    Explained structure: Dict with currency name as key. Value is a dict that can have either a locality or index name as key and a ZeroCouponCurve as value.
+    # All curves have a currency. Curves might or not be assigned to an index (ICP, Ibor, or USD_CL which has no Index)
+    # First filter per Currency.
+    # Filter per Index.
     zero_coupon_curve_mapper: dict[str, ZeroCouponCurve | dict[Locality, dict[Currency, ZeroCouponCurve]]] = field(default_factory=dict) # First key is index_name which can be None.
 
     def __post_init__(self):

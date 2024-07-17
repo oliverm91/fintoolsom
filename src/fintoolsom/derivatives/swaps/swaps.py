@@ -54,10 +54,10 @@ class DefaultSwap(SwapBase):
             raise ValueError(f'If receive and pay legs are of the same currency, notional must match. Receive leg notional: {self.receive_leg.notional}, Pay leg notional: {self.pay_leg.notional}')
         
     def get_receive_flows_value(self, market: Market=None, locality: Locality=None) -> float:
-        return self.receive_leg.get_flows_value(market=market, locality=locality)
+        return self.receive_leg.get_flows(market=market, locality=locality)
     
     def get_pay_flows_value(self, market: Market=None, locality: Locality=None) -> float:
-        return self.pay_leg.get_flows_value(market=market, locality=locality)
+        return self.pay_leg.get_flows(market=market, locality=locality)
 
 @dataclass
 class FXCompensatedSwap(SwapBase):
@@ -103,13 +103,13 @@ class FXCompensatedSwap(SwapBase):
             return np.array(all_fx)
 
     def get_receive_flows_value(self, market: Market=None, locality: Locality=None) -> np.ndarray:
-        original_currency_receive_flows = self.receive_leg.get_flows_value(market=market, locality=locality)
+        original_currency_receive_flows = self.receive_leg.get_flows(market=market, locality=locality)
         fx_fixing_dates = self.fx_fixing_lag[-len(original_currency_receive_flows):]
         fx_rates = self.get_fx_rate_values(market, self.receive_leg.currency, fx_fixing_dates)
         return original_currency_receive_flows * fx_rates
         
     def get_pay_flows_value(self, market: Market=None, locality: Locality=None) -> float:
-        original_currency_pay_flows = self.pay_leg.get_flows_value(market=market, locality=locality)
+        original_currency_pay_flows = self.pay_leg.get_flows(market=market, locality=locality)
         fx_fixing_dates = self.fx_fixing_lag[-len(original_currency_pay_flows):]
         fx_rates = self.get_fx_rate_values(market, self.pay_leg.currency, fx_fixing_dates)
         return original_currency_pay_flows * fx_rates

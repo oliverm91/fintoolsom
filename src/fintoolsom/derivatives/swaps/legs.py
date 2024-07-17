@@ -36,14 +36,14 @@ class SwapLegBase:
         self.payment_dates = [coupon.payment_date for coupon in self.coupons]
 
     @abstractmethod        
-    def get_flows_value(self, market: Market=None, locality: Locality=None) -> np.ndarray:
+    def get_flows(self, market: Market=None, locality: Locality=None) -> np.ndarray:
         pass
 
 @dataclass
 class DefaultSwapLeg(SwapLegBase):
     def __post_init__(self):
         super().__post_init__()
-    def get_flows_value(self, market: Market=None, locality: Locality=None) -> np.ndarray:
+    def get_flows(self, market: Market=None, locality: Locality=None) -> np.ndarray:
         return np.array([coupon.get_flow_value(market=market, locality=locality) for coupon in self.coupons if coupon.payment_date > market.t])
     
 
@@ -55,9 +55,9 @@ class FixedSwapLeg(SwapLegBase):
         for coupon in self.coupons:
             if not isinstance(coupon, FixedSwapCoupon):
                 raise TypeError(f'Coupons must be of type FixedSwapCoupon. Got {type(coupon)}')
-        self.fixed_flows = super().get_flows_value()
+        self.fixed_flows = super().get_flows()
 
-    def get_flows_value(self, market: Market = None, locality: Locality = None) -> np.ndarray:
+    def get_flows(self, market: Market = None, locality: Locality = None) -> np.ndarray:
         return self.fixed_flows
     
 
@@ -76,7 +76,7 @@ class FloatingSwapLeg(SwapLegBase):
         self.amortizations = np.array([coupon.amortization for coupon in self.coupons])
         self.residuals = np.array([coupon.residual for coupon in self.coupons])
 
-    def get_flows_value(self, **kwargs) -> np.ndarray:
+    def get_flows(self, **kwargs) -> np.ndarray:
         market: Market = kwargs.get('market')
         floating_curve = market.get_zero_coupon_curve(self.currency, self.index_name)
         future_payment_coupons = [coupon for coupon in self.coupons if coupon.payment_date > market.t]
