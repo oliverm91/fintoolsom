@@ -1,15 +1,16 @@
-import cProfile
-
 from datetime import date, timedelta
-import io
-import pstats
 
-from fintoolsom.dates.calendars import get_ny_calendar
+import numpy as np
+import pandas as pd
+
 from fintoolsom.dates.schedules import Tenor
 from . import create_bonds
 
 from fintoolsom.rates import ZeroCouponCurve, ZeroCouponCurvePoint, Rate, RateConvention, CompoundedInterestConvention
-from fintoolsom.dates import ActualDayCountConvention, ModifiedFollowingConvention, get_cl_calendar, ScheduleGenerator
+from fintoolsom.dates import ActualDayCountConvention, ModifiedFollowingConvention
+
+from fintoolsom.derivatives.options.options import Call
+from fintoolsom.derivatives.options.volatility_surface import VolatilitySurface, InterpolationMethod
 
 # Create nominal Zero Coupon Curve from dfs
 t = date(2024, 7, 8)
@@ -82,29 +83,20 @@ print(f'Nominal bond Z-Spread: {z_spread}')
 print('-------')
 print()
 
-print('Adding tenors')
-tenors_str = [
-    '1m', '2m', '6m', '7m', '1w', '1y', '10y', '1d'
-]
-t = date(2024,3,31)
-adj_conv = ModifiedFollowingConvention(get_cl_calendar())
-for tenor_str in tenors_str:
-    tenor = Tenor(tenor_str, adj_conv)
-    print(f'Unadjusted {t} + {tenor_str} = Unadjusted: {tenor.get_unadjusted_maturity(t)}, Adjusted: {tenor.get_adjusted_maturity(t)}')
-print('-------')
-print()
+n, k, T = 1000, 950, date(2024, 10, 12)
+call = Call(n, k, T)
 
-print(f'Generating Schedules')
-ny_cal = get_ny_calendar()
-cl_cal = get_cl_calendar()
-combined_cal = ny_cal + cl_cal
+vs_df = pd.DataFrame({
+    25: [0.15, 0.15],
+    50: [0.15, 0.15],
+    75: [0.15, 0.15]
+    },
+    index=[30, 90]
+    )
+spot = 940
+t_val = date(2024, 8, 12)
+vs = VolatilitySurface(vs_df, spot, nominal_zcc, nominal_zcc)
+vol = vs.get_volatility(np.log(k/spot), (T-t_val).days)
+call_mtm = call.get_mtm(t_val, spot, vol, nominal_zcc, nominal_zcc)
 
-frequency_tenors = ['1m', '6M']
-maturity_tenors = ['3m', '6m', '9M', '12M', '2Y', '6Y']
-adj_conv = ModifiedFollowingConvention(combined_cal)
-for ft in frequency_tenors:
-    for mt in maturity_tenors:
-        sf = False
-        ls = False
-        schedule = ScheduleGenerator.generate_schedule(t, mt, ft, adj_conv, stub_first=sf, long_stub=ls)
-        print(f'{t} + {mt}, freq {ft}. Long stub: {ls}, Stub first: {sf} = {schedule}\n')
+print(f'Call with strike {k}, maturity {T}. MTM: {call_mtm} with spot {spot}, vol {vol} at {t_val}')

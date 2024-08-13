@@ -6,7 +6,7 @@ import math
 import numpy as np
 from scipy.stats import norm
 
-from ...rates import ZeroCouponCurve, Rate, RateConvention, InterestConventionBase, ExponentialInterestConvention
+from ...rates import ZeroCouponCurve, RateConvention, ExponentialInterestConvention
 from ...dates import ActualDayCountConvention
 
 _default_rc = RateConvention(interest_convention=ExponentialInterestConvention,
@@ -71,7 +71,7 @@ class Option(ABC):
             return d1, vol_sqrt_yf
     
     def _get_d2(self, t: date, spot: float,  volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve,
-                return_both_ds: bool=False) -> float | tuple[float]:
+                return_both_ds: bool=False) -> float | tuple[float, float]:
         d1, vol_sqrt_yf = self._get_d1(t, spot, volatility, domestic_curve, foreign_curve, return_vol_sqrt_yf=True)
         d2 = d1-vol_sqrt_yf
         if not return_both_ds:
@@ -79,19 +79,21 @@ class Option(ABC):
         else:
             return d1, d2
         
-    def _get_yf(self, t: date):
-        return ActualDayCountConvention.get_time_fraction(t, self.maturity, base_convention=365)
+    def _get_yf(self, t: date) -> float:
+        return ActualDayCountConvention.get_time_fraction(t, self.maturity, 365)
 
-    def _get_rates(self, t: date, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> dict[str, float]:
+    def _get_rates(self, t: date, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve) -> tuple[float, float]:
         df_r = domestic_curve.get_df(self.maturity)
         rc = _default_rc if self._valuation_rate_convention is None else self._valuation_rate_convention
-        r = Rate.get_rate_from_df(df_r, t, self.maturity, rc).rate_value
+        interest_conv = rc.interest_convention
+        yf = rc.day_count_convention.get_time_fraction(t, self.maturity, rc.time_fraction_base)
+        r = interest_conv.get_rate_from_df(df_r, yf)
         df_q = foreign_curve.get_df(self.maturity)
-        q = Rate.get_rate_from_df(df_q, t, self.maturity, rc).rate_value
+        q = interest_conv.get_rate_from_df(df_q, yf)
         return r, q
 
     def _get_both_ds(self, t: date, spot: float,  volatility: float, domestic_curve: ZeroCouponCurve, foreign_curve: ZeroCouponCurve
-                     ) -> float | tuple[float]:
+                     ) -> tuple[float, float]:
         return self._get_d2(t, spot, volatility, domestic_curve, foreign_curve, return_both_ds=True)
     
     @staticmethod
