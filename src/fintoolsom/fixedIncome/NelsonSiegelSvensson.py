@@ -6,9 +6,9 @@ from scipy.optimize import minimize
 import numpy as np
 from numba import njit, vectorize
 
-from ..fixedIncome import Bond
-from .Rates import Rate
-from .ZeroCouponCurve import ZeroCouponCurve
+from .Bonds import Bond
+from ..rates.Rates import Rate
+from ..rates.ZeroCouponCurve import ZeroCouponCurve
 
 
 @vectorize(nopython=True)
