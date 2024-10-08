@@ -36,7 +36,7 @@ class Calendar:
         return date in self._calendar or date.weekday() in self._weekend_weekdays
 
     def add_business_days(self, t: date, business_days: int) -> date:
-        return self._calendar.get_nth_workday(t, business_days)
+        return self._calendar.get_nth_working_day(t, business_days)
 
     def combine(self, other: Self) -> Self:
         combined_calendar = self._calendar + other._calendar
