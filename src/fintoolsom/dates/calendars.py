@@ -10,6 +10,7 @@ class Calendar:
     subdiv: str = field(default=None)
     custom_holidays: list[date] = field(default_factory=list)
     _calendar: HolidayBase = field(default=None)
+    _extra_categories: tuple = field(default_factory=tuple)
 
     _weekend_weekdays: set[int] = field(init=False, default_factory=set)
     def __post_init__(self):
@@ -21,7 +22,14 @@ class Calendar:
             if self.country is None:
                 self._calendar = HolidayBase()
             else:
+                self._extra_categories = ('bank',)
                 self._calendar = country_holidays(self.country, subdiv=self.subdiv)
+                if self._extra_categories:
+                    original_categories = set(self._calendar.categories)
+                    extra_categories = set(self._extra_categories)
+                    categories = original_categories | extra_categories
+                    self._calendar = country_holidays(self.country, categories=categories)
+
         
             self._calendar.update(self.custom_holidays)
     
