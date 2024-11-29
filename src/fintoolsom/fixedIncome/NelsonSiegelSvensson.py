@@ -103,5 +103,5 @@ class NelsonSiegelSvensson:
         self.calibrate(calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method)
         mat_dates = [bond.get_maturity_date() for bond, _ in bonds_irr_list]
         dfs = self.get_df(np.array([(mat - calibration_date).days / 365 for mat in mat_dates]))
-        curve = ZeroCouponCurve(date_dfs=list(zip(mat_dates, dfs)))
+        curve = ZeroCouponCurve(calibration_date, date_dfs=list(zip(mat_dates, dfs)))
         return curve
