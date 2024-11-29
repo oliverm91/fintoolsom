@@ -100,6 +100,7 @@ class NelsonSiegelSvensson:
         return flat_rates
 
     def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None, method: str = 'SLSQP') -> ZeroCouponCurve:
+        bonds_irr_list = [(bond, irr) for bond, irr in bonds_irr_list if bond.get_maturity_date() > calibration_date]
         self.calibrate(calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method)
         mat_dates = [bond.get_maturity_date() for bond, _ in bonds_irr_list]
         dfs = self.get_df(np.array([(mat - calibration_date).days / 365 for mat in mat_dates]))
