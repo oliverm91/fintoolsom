@@ -99,8 +99,8 @@ class NelsonSiegelSvensson:
             flat_rates[start:end] = _nss_rate(flat_times[start:end], beta0, beta1, beta2, beta3, lambda_, mu_)
         return flat_rates
 
-    def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None) -> ZeroCouponCurve:
-        self.calibrate(calibration_date, bonds_irr_list, initial_guess)
+    def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None, method: str = 'SLSQP') -> ZeroCouponCurve:
+        self.calibrate(calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method)
         mat_dates = [bond.get_maturity_date() for bond, _ in bonds_irr_list]
         dfs = self.get_df(np.array([(mat - calibration_date).days / 365 for mat in mat_dates]))
         curve = ZeroCouponCurve(date_dfs=list(zip(mat_dates, dfs)))
