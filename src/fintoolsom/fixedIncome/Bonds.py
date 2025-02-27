@@ -77,6 +77,7 @@ class Coupons:
     first_start_date: date = field(init=False, default=None)
     flows: date = field(init=False, default=None)
     end_dates: date = field(init=False, default=None)
+    check_residuals: bool = field(init=True, default=None)
     def __post_init__(self):
         if not isinstance(self.coupons, list):
             raise TypeError(f"coupons must be of type list. Got {type(self.coupons)}")
@@ -84,7 +85,8 @@ class Coupons:
             if not isinstance(c, Coupon):
                 raise TypeError(f'coupons elements must be of type Coupon. Got {type(c)}')
         self.sort()
-        self.validate_residuals()
+        if self.check_residuals:
+            self.validate_residuals()
         
 
     def copy(self) -> Self:
