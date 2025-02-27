@@ -151,8 +151,9 @@ class Coupons:
             coupon.amortization *= ratio
             n += coupon.amortization
             coupon.residual *= ratio
-        assert round(float(n), 1) / round(float(notional), 1) - 1 < 1 / 100, f'Could not adjust to notional {notional}. Sum of amortization is {n}.'
-        self.validate_residuals()
+        if self.check_residuals:
+            assert round(float(n), 1) / round(float(notional), 1) - 1 < 1 / 100, f'Could not adjust to notional {notional}. Sum of amortization is {n}.'
+            self.validate_residuals()
 
 
 class Bond:
