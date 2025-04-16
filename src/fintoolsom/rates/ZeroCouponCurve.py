@@ -202,6 +202,18 @@ class ZeroCouponCurve:
     def get_accrued_interests(self, notional: np.ndarray, start_dates: list[date], end_dates: list[date]) -> np.ndarray:
         return notional * (self.get_wfs_fwds(start_dates, end_dates) - 1)
     
+    def get_aged_curve(self, date: date) -> Self:
+        if date <= self.curve_date:
+            raise ValueError(f"Date {date} must be posterior to curve date {self.curve_date}.")
+        if date > self.curve_points[-1].date:
+            raise ValueError(f"Date {date} must be previous to curve last ZeroCouponCurvePoint date {self.curve_points[-1].date}.")
+        
+        fwd_dates = [cp.date for cp in self.curve_points if cp.date > date]
+        fwd_dfs = self.get_dfs_fwds([date]*len(fwd_dates), fwd_dates)
+        date_dfs = [(fwd_dates[i], fwd_dfs[i]) for i in range(len(fwd_dates))]
+        fwd_zcc = ZeroCouponCurve(date, date_dfs=date_dfs)
+        return fwd_zcc        
+    
     def __len__(self) -> int:
         return len(self.curve_points)
   
