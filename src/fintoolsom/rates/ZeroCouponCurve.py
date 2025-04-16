@@ -154,7 +154,7 @@ class ZeroCouponCurve:
         tfb = rate_convention.time_fraction_base
         tfs = rate_convention.day_count_convention.get_time_fraction(start_dates, end_dates, tfb)
         fwd_rates = rate_convention.interest_convention.get_rate_from_wf(fwd_wfs, tfs)
-        if isinstance(np.ndarray, fwd_rates):
+        if isinstance(fwd_rates, np.ndarray):
             fwd_rates = [Rate(rate_convention, rate) for rate in fwd_rates]
         else:
             fwd_rates = Rate(rate_convention, fwd_rates)
