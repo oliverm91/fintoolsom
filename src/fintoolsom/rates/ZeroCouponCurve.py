@@ -154,6 +154,10 @@ class ZeroCouponCurve:
         tfb = rate_convention.time_fraction_base
         tfs = rate_convention.day_count_convention.get_time_fraction(start_dates, end_dates, tfb)
         fwd_rates = rate_convention.interest_convention.get_rate_from_wf(fwd_wfs, tfs)
+        if isinstance(np.ndarray, fwd_rates):
+            fwd_rates = [Rate(rate_convention, rate) for rate in fwd_rates]
+        else:
+            fwd_rates = Rate(rate_convention, fwd_rates)
         return fwd_rates
 
     def get_forward_rates_values(self, start_dates: date | list[date], end_dates: date | list[date], rate_convention: RateConvention=None) -> float | np.ndarray:
@@ -179,13 +183,14 @@ class ZeroCouponCurve:
                     rates_obj.append(r)
             return rates_obj
         
-    def get_zero_rate(self, date: date,  rate_convention: RateConvention=None) -> Rate:
+    def get_zero_rate(self, date: date, rate_convention: RateConvention=None) -> Rate:
         if rate_convention is None:
             rate_convention = self.curve_points[0].rate.rate_convention
         
         df = self.get_df(date)
-        r = rate_convention.interest_convention.get_rate_from_df(df, self.curve_date, date)
-        return r
+        yf = rate_convention.day_count_convention.get_time_fraction(self.curve_date, date, rate_convention.time_fraction_base)
+        r = rate_convention.interest_convention.get_rate_from_df(df, yf)
+        return Rate(rate_convention, r)
 
     def get_zero_rates_values(self, rate_convention: RateConvention=None) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
