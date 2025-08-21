@@ -1,11 +1,19 @@
 from copy import copy
-from typing import Self
-import numpy as np
 from datetime import date
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Self
+
+import numpy as np
+from scipy.interpolate import CubicHermiteSpline
 
 from .Rates import Rate, RateConvention
 from ..dates import ActualDayCountConvention
+
+
+class InterpolationMethod(Enum):
+    LogLinear = 1
+    HermiteCubicSpline = 2
 
 
 @dataclass(slots=True)
@@ -29,6 +37,7 @@ class ZeroCouponCurve:
     curve_points: list[ZeroCouponCurvePoint] = field(default_factory=list)
     date_dfs: list[tuple[date, float]] = field(default_factory=list)
     _rate_conv_for_dfs_init: RateConvention = field(default=None)
+    df_interpolation_method: InterpolationMethod = field(default=InterpolationMethod.HermiteCubicSpline)
 
     wfs: np.ndarray = field(init=False, default=None)
     dfs: np.ndarray = field(init=False, default=None)
@@ -47,7 +56,10 @@ class ZeroCouponCurve:
             self.curve_points = [ZeroCouponCurvePoint(t_i, Rate(self._rate_conv_for_dfs_init, ic.get_rate_from_df(df, dcc.get_time_fraction(self.curve_date, t_i, tfb))))
                                 for t_i, df in self.date_dfs]
         elif not self.curve_points:
-                raise ValueError(f'If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set.')
+            raise ValueError(f'If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set.')
+        
+        if not isinstance(self.df_interpolation_method, InterpolationMethod):
+            raise TypeError(f"'df_interpolation_method' must be of type 'InterpolationMethod'. Received type '{type(self.df_interpolation_method)}' with value '{self.df_interpolation_method}'.")
         
         self._cashed_dfs: dict[str, np.ndarray] = {}
         self.sort()
@@ -116,7 +128,16 @@ class ZeroCouponCurve:
         if greater_tenors_amount:
             dfs[-greater_tenors_amount:] = self.curve_points[-1].rate.get_discount_factor(self.curve_date, dates_t[-greater_tenors_amount:])
         
-        dfs[small_tenors_amount:len(tenors)-greater_tenors_amount] = np.exp(np.interp(normal_tenors, self.days, np.log(self.dfs))) # Log-Linear interpolation of discount factors
+        # Start of interpolation part
+        if self.df_interpolation_method==InterpolationMethod.HermiteCubicSpline:
+            chs = CubicHermiteSpline(self.days, self.dfs)
+            interp_dfs = chs(normal_tenors)
+        elif self.df_interpolation_method==InterpolationMethod.LogLinear:
+            interp_dfs = np.exp(np.interp(normal_tenors, self.days, np.log(self.dfs)))
+        else:
+            raise NotImplementedError(f"Interpolation method: '{self.df_interpolation_method}' currently not implemented.")
+        dfs[small_tenors_amount:len(tenors)-greater_tenors_amount] = interp_dfs
+        # End of interpolation part
         self._cashed_dfs[hashed_inputs] = dfs
         return dfs
     

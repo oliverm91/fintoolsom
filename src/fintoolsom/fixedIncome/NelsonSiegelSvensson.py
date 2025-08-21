@@ -41,7 +41,7 @@ class NelsonSiegelSvensson:
     def get_df(self, t: float | np.ndarray) -> float | np.ndarray:
         return np.exp(-self.get_rate(t) * t)
     
-    def calibrate(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: Optional[list[float]] = None, method: Optional[str]='SLSQP'):
+    def calibrate(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: Optional[list[float]] = None, method: Optional[str]='powell'):
         bonds_irr_list.sort(key=lambda b_irr_tuple: (b_irr_tuple[0].get_maturity_date() - calibration_date).days)
         mkt_pvs = np.array([bond.get_present_value(calibration_date, irr) for bond, irr in bonds_irr_list])
         bond_t_flows_lst = [(np.array([(ed - calibration_date).days / 365 for ed in bond.coupons.get_remaining_end_dates(calibration_date)]),
@@ -100,7 +100,7 @@ class NelsonSiegelSvensson:
             flat_rates[start:end] = _nss_rate(flat_times[start:end], beta0, beta1, beta2, beta3, lambda_, mu_)
         return flat_rates
 
-    def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None, method: str = 'SLSQP') -> ZeroCouponCurve:
+    def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None, method: str = 'powell') -> ZeroCouponCurve:
         bonds_irr_list = [(bond, irr) for bond, irr in bonds_irr_list if bond.get_maturity_date() > calibration_date]
         self.calibrate(calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method)
         dates = [calibration_date + relativedelta(months=i) for i in range(0, 12*20, 1)]
