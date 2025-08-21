@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Self
 
 import numpy as np
-from scipy.interpolate import CubicHermiteSpline
+from scipy.interpolate import PchipInterpolator
 
 from .Rates import Rate, RateConvention
 from ..dates import ActualDayCountConvention
@@ -130,7 +130,7 @@ class ZeroCouponCurve:
         
         # Start of interpolation part
         if self.df_interpolation_method==InterpolationMethod.HermiteCubicSpline:
-            chs = CubicHermiteSpline(self.days, self.dfs)
+            chs = PchipInterpolator(self.days, self.dfs)
             interp_dfs = chs(normal_tenors)
         elif self.df_interpolation_method==InterpolationMethod.LogLinear:
             interp_dfs = np.exp(np.interp(normal_tenors, self.days, np.log(self.dfs)))
