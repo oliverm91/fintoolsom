@@ -269,7 +269,7 @@ class Bond:
         result = newton(bp_bump_curve_value, initial_guess)
         return result
     
-    def get_irr_from_present_value(self, date: date, present_value: float, irr_rate_convention: RateConvention) -> Rate:
+    def get_irr_from_present_value(self, date: date, present_value: float, irr_rate_convention: RateConvention, initial_guess: float=None) -> Rate:
         '''
         Calculates the internal rate of return of a bond for a given present value.
         --------
@@ -282,14 +282,14 @@ class Bond:
         Returns:
         ----
             irr (Rate): The internal rate of return of the bond.'''
-        irr_initial_guess = self.accrue_rate.rate_value
+        irr_initial_guess = self.accrue_rate.rate_value if initial_guess is None else initial_guess
         def objective_function(irr_value: float) -> float:
             return self._get_present_value_rate_value(date, irr_value, irr_rate_convention) - present_value
         irr_value = newton(objective_function, x0=irr_initial_guess, tol=1e-8, maxiter=100)
         irr = rates.Rate(irr_rate_convention, irr_value)
         return irr
-    
-    def get_irr_with_zcc(self, date: date, zero_coupon_curve: rates.ZeroCouponCurve, irr_rate_convention: RateConvention) -> Rate:
+
+    def get_irr_with_zcc(self, date: date, zero_coupon_curve: rates.ZeroCouponCurve, irr_rate_convention: RateConvention, initial_guess: float=None) -> Rate:
         '''
         Calculates the internal rate of return of a bond for a given a ZeroCouponCurve.
         --------
@@ -303,7 +303,7 @@ class Bond:
         ----
             irr (Rate): The internal rate of return of the bond.'''
         pv = self.get_present_value_zc(date, zero_coupon_curve)
-        irr = self.get_irr_from_present_value(date, pv, irr_rate_convention)
+        irr = self.get_irr_from_present_value(date, pv, irr_rate_convention, initial_guess=initial_guess)
         return irr
     
     def get_par_value(self, date: date, decimals: int=8) -> float:
