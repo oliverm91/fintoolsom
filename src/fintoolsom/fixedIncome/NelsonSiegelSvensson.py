@@ -69,12 +69,20 @@ class NelsonSiegelSvensson:
             self.b1 = sum(short_term_yields)/len(short_term_yields) - self.b0
             self.b2 = 0
             self.b3 = 0.01
-            self.lambda_ = 1/2
-            self.mu_ = 1/5
+            self.lambda_ = 1/2 # First hump around 2Y
+            self.mu_ = 1/5 # Second hump arond 5Y
             initial_guess = [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]
 
         with np.errstate(over='ignore'):
-            result = minimize(get_valuation_error, initial_guess, method=method, options={"maxiter": 300})
+            bounds = [
+                (None, None),  # beta0
+                (None, None),  # beta1
+                (None, None),  # beta2
+                (None, None),  # beta3
+                (1/7, 1/0.5), # lambda | First hump to be between 0.5 and 7Y
+                (1/20, 1/3)  # mu | Second hump to be 3 and 20Y
+            ]
+            result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300})
 
         if result.success is False:
             raise ValueError(result.message)
