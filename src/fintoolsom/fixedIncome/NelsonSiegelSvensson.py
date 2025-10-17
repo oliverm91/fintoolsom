@@ -82,7 +82,7 @@ class NelsonSiegelSvensson:
                 (1/7, 1/0.5), # lambda | First hump to be between 0.5 and 7Y
                 (1/20, 1/3)  # mu | Second hump to be 3 and 20Y
             ]
-            result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300})
+            result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
 
         if result.success is False:
             raise ValueError(result.message)
