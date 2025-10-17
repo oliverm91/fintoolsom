@@ -74,7 +74,7 @@ class NelsonSiegelSvensson:
             initial_guess = [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]
 
         with np.errstate(over='ignore'):
-            result = minimize(get_valuation_error, initial_guess, method=method)
+            result = minimize(get_valuation_error, initial_guess, method=method, options={"maxiter": 300})
 
         if result.success is False:
             raise ValueError(result.message)
