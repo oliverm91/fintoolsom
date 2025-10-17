@@ -83,6 +83,10 @@ class NelsonSiegelSvensson:
                 (1/20, 1/3)  # mu | Second hump to be 3 and 20Y
             ]
             result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
+            if result.fun > 1:
+                raise ValueError(f"NSS could not converge to a reasonable value. Optimization error: {result.fun}. Number of iterations: {result.nit}")
+            if result.fun > 0.1:
+                result = minimize(get_valuation_error, result.x, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
 
         if result.success is False:
             raise ValueError(result.message)
