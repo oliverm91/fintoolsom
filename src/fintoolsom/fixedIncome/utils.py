@@ -8,8 +8,8 @@ def get_irr(
     valuation_date: date,
     pv: float,
     initial_guess: float = 0.04,
-    target_error=1e-10,
-    max_iterations=100,
+    target_error: float = 1e-10,
+    max_iterations: int = 100,
     base: int = 365,
     ) -> float:
     """
@@ -75,16 +75,14 @@ def get_irr(
     terms = np.array([(dt - valuation_date).days / base for dt in dates], dtype=np.float64)
 
     irr = initial_guess
-    npv = np.inf
-
     for _ in range(max_iterations):
         df_no_exp = 1.0 / (1.0 + irr)
         pvs = cash_flows * np.power(df_no_exp, terms)
         npv = pvs.sum() - pv # Error in valuation
         if abs(npv) < target_error:
-            return irr
+            return float(irr)
 
         delta = - np.dot(terms, pvs * df_no_exp) # Derivative of NPV w.r.t. irr
         irr -= npv / delta # Newton-Raphson step: -f(x)/f'(x)
-
-    return float(irr)
+    
+    raise RuntimeError(f"IRR calculation did not converge after {max_iterations} iterations. Final NPV error: {npv}")
