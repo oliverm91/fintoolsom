@@ -164,6 +164,7 @@ def get_nelson_siegel_params(
     dfs: np.ndarray, 
     lambda_: float = None,
     lambda_x0: float = 1.5,
+    try_multiple_x0: bool = False
 ) -> tuple[np.ndarray, float]:
     """
     Optimizes a global lambda and returns the corresponding betas.
@@ -173,7 +174,7 @@ def get_nelson_siegel_params(
         dfs: Discount factors (N_dates, M)
         lambda_: If provided, skips optimization.
         lambda_x0: If provided, gives an initial guess for lambda optimization. Only used if lambda_ is None.
-        
+        try_multiple_x0: If provided, tries several initial guesses and perform optimization with best. If given, lambda_x0 might be overwritten.
     Returns:
         tuple(betas_matrix, lambda_scalar)
         - betas_matrix: (N_dates, 3)
@@ -198,6 +199,15 @@ def get_nelson_siegel_params(
         model_dfs = np.exp(-model_rates * yfs[None, :])
         
         return np.sum((model_dfs - dfs)**2)
+    
+    if try_multiple_x0:
+        lambdas = np.linspace(0.01, 3.5, 0.1)
+        err = np.inf
+        for l in lambdas:
+            err_l = sse(l)
+            if err_l < err:
+                lambda_x0 = l
+                err = err_l
 
     res = minimize(
         sse, 
