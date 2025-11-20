@@ -164,7 +164,8 @@ def get_nelson_siegel_params(
     dfs: np.ndarray, 
     lambda_: float = None,
     lambda_x0: float = 1.5,
-    try_multiple_lambda_x0: bool = False
+    try_multiple_lambda_x0: bool = False,
+    optimization_method: str = "l-bfgs-b",
 ) -> tuple[np.ndarray, float]:
     """
     Optimizes a global lambda and returns the corresponding betas.
@@ -173,8 +174,9 @@ def get_nelson_siegel_params(
         yfs: Maturities (M,)
         dfs: Discount factors (N_dates, M)
         lambda_: If provided, skips optimization.
-        lambda_x0: If provided, gives an initial guess for lambda optimization. Only used if lambda_ is None.
-        try_multiple_lambda_x0: If provided, tries several initial guesses and perform optimization with best. If given, lambda_x0 might be overwritten.
+        lambda_x0: Gives an initial guess for lambda optimization. Only used if lambda_ is None.
+        try_multiple_lambda_x0: If True, tries several initial guesses and perform optimization with best. If given, lambda_x0 might be overwritten.
+        optimization_method: optimization method for lambda. Can be "l-bfgs-b" for bounded (0.01, 5) lambda, "powell" and "cg".
     Returns:
         tuple(betas_matrix, lambda_scalar)
         - betas_matrix: (N_dates, 3)
@@ -209,9 +211,12 @@ def get_nelson_siegel_params(
                 lambda_x0 = l
                 err = err_l
 
+    
     res = minimize(
         sse, 
-        x0=lambda_x0
+        x0=lambda_x0,
+        bounds=[(0.01, 5)] if optimization_method.lower()=="l-bfgs-b" else None,
+        method=optimization_method
     )
     
     if not res.success:
