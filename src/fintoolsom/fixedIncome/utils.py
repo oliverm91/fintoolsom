@@ -211,13 +211,19 @@ def get_nelson_siegel_params(
                 lambda_x0 = l
                 err = err_l
 
-    
-    res = minimize(
-        sse, 
-        x0=lambda_x0,
-        bounds=[(0.01, 5)] if optimization_method.lower()=="l-bfgs-b" else None,
-        method=optimization_method
-    )
+    if optimization_method.lower()=="l-bfgs-b":
+        res = minimize(
+            sse, 
+            x0=lambda_x0,
+            bounds=[(0.01, 5)],
+            method=optimization_method
+        )
+    else:
+        res = minimize(
+            sse, 
+            x0=lambda_x0,
+            method=optimization_method
+        )
     
     if not res.success:
         raise RuntimeError(f"Error minimizing error for lambda:\n\n{res}")
