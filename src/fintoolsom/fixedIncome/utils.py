@@ -136,11 +136,10 @@ def get_nelson_siegel_betas(
     yfs = np.asarray(yfs)
     
     rates = -np.log(dfs) / (yfs[None, :])
-    Y = rates
+    Y = rates.T
     X = get_nelson_siegel_loadings(yfs, lambda_)
     
-    betas = np.linalg.inv(X @ X.T) @ X.T @ Y
-    
+    betas = np.linalg.inv(X.T @ X) @ X.T @ Y    
     return betas
 
 def get_nelson_siegel_rates(
