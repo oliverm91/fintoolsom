@@ -211,13 +211,11 @@ def get_nelson_siegel_params(
 
     res = minimize(
         sse, 
-        x0=lambda_x0, 
-        bounds=[(0.01, 5.0)], 
-        method='L-BFGS-B'
+        x0=lambda_x0
     )
     
     if not res.success:
-        print(f"Warning: Optimization did not converge completely: {res.message}")
+        raise RuntimeError(f"Error minimizing error for lambda:\n\n{res}")
 
     opt_lambda = float(res.x[0])
     opt_betas = get_nelson_siegel_betas(yfs, dfs, opt_lambda)
