@@ -162,7 +162,8 @@ from scipy.optimize import minimize
 def get_nelson_siegel_params(
     yfs: np.ndarray, 
     dfs: np.ndarray, 
-    lambda_: float = None
+    lambda_: float = None,
+    lambda_x0: float = 1.5,
 ) -> tuple[np.ndarray, float]:
     """
     Optimizes a global lambda and returns the corresponding betas.
@@ -171,6 +172,7 @@ def get_nelson_siegel_params(
         yfs: Maturities (M,)
         dfs: Discount factors (N_dates, M)
         lambda_: If provided, skips optimization.
+        lambda_x0: If provided, gives an initial guess for lambda optimization. Only used if lambda_ is None.
         
     Returns:
         tuple(betas_matrix, lambda_scalar)
@@ -199,7 +201,7 @@ def get_nelson_siegel_params(
 
     res = minimize(
         sse, 
-        x0=1.5, 
+        x0=lambda_x0, 
         bounds=[(0.01, 5.0)], 
         method='L-BFGS-B'
     )
