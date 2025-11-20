@@ -190,7 +190,7 @@ def get_nelson_siegel_params(
         lam = x
         betas = get_nelson_siegel_betas(yfs, dfs, lam)
         
-        X = get_nelson_siegel_loadings(yfs, lambda_)
+        X = get_nelson_siegel_loadings(yfs, lam)
         model_rates = betas @ X.T
         
         model_dfs = np.exp(-model_rates * yfs[None, :])
