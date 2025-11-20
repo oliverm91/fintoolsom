@@ -14,7 +14,7 @@ from ..rates.ZeroCouponCurve import ZeroCouponCurve
 
 @vectorize(nopython=True)
 def _nss_rate(t: float | np.ndarray, beta0: float, beta1: float, beta2: float, beta3: float, lambda_: float, mu_: float) -> float | np.ndarray:
-    lambda_t = lambda_ * t
+    lambda_t = t / lambda_
     mu_t = mu_ * t
 
     e_minus_lambda_t = np.exp(-lambda_t)
@@ -69,8 +69,8 @@ class NelsonSiegelSvensson:
             self.b1 = sum(short_term_yields)/len(short_term_yields) - self.b0
             self.b2 = 0
             self.b3 = 0.01
-            self.lambda_ = 1/2 # First hump around 2Y
-            self.mu_ = 1/5 # Second hump arond 5Y
+            self.lambda_ = 2 # First hump around 2Y
+            self.mu_ = 5 # Second hump arond 5Y
             initial_guess = [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]
 
         with np.errstate(over='ignore'):
@@ -79,8 +79,8 @@ class NelsonSiegelSvensson:
                 (None, None),  # beta1
                 (None, None),  # beta2
                 (None, None),  # beta3
-                (1/7, 1/0.5), # lambda | First hump to be between 0.5 and 7Y
-                (1/20, 1/3)  # mu | Second hump to be 3 and 20Y
+                (0.5, 3), # lambda | First hump to be between 0.5 and 7Y
+                (2, 20)  # mu | Second hump to be 3 and 20Y
             ]
             result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
             if result.fun > 1:
