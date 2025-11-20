@@ -132,20 +132,14 @@ def get_nelson_siegel_betas(
     Returns:
         Betas matrix of shape (N_dates, 3)
     """
-    dfs = np.atleast_2d(dfs) 
+    dfs = np.atleast_2d(dfs)
     yfs = np.asarray(yfs)
     
-    rates = -np.log(dfs) / (yfs[None, :] + 1e-10)
+    rates = -np.log(dfs) / (yfs[None, :])
+    Y = rates
     X = get_nelson_siegel_loadings(yfs, lambda_)
     
-    # 4. Solve OLS: Beta = Rates * X * (X.T * X)^-1
-    # We use Pseudo-Inverse for numerical stability: X_pinv = (X.T @ X)^-1 @ X.T
-    # X_pinv Shape: (3, M)
-    X_pinv = np.linalg.pinv(X)
-    
-    # 5. Matrix Multiplication to get Betas
-    # (N, M) @ (3, M).T  -> (N, M) @ (M, 3) -> (N, 3)
-    betas = rates @ X_pinv.T
+    betas = np.linalg.inv(X @ X.T) @ X.T @ Y
     
     return betas
 
@@ -203,7 +197,7 @@ def get_nelson_siegel_params(
         return np.sum((model_dfs - dfs)**2)
     
     if try_multiple_lambda_x0:
-        lambdas = np.linspace(0.01, 3.5, 35)
+        lambdas = np.linspace(0.01, 5, 25)
         err = np.inf
         for l in lambdas:
             err_l = sse(l)
