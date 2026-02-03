@@ -50,7 +50,7 @@ dev = [
 source = "vcs"  # <--- Tells Hatch to look at Git/VCS tags
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/processes"]
+packages = ["src/fintoolsom"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
