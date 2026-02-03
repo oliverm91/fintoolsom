@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fintoolsom"
+dynamic = ["version"]
+description = "Personal library for finantial calculations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+keywords = ["fixed income", "dates", "rates", "curves"]
+authors = [
+    {name = "Oliver Mohr B.", email = "oliver.mohr.b@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "Topic :: Office/Business :: Financial",
+    "Natural Language :: English",
+]
+dependencies = [
+    "holidays>=0.90",
+    "numba>=0.63.1",
+    "numpy>=2.3.5",
+    "pandas>=3.0.0",
+    "scipy>=1.17.0",
+]
+[project.urls]
+Homepage = "https://github.com/oliverm91/processes"
+Documentation = "https://oliverm91.github.io/processes/"
+Repository = "https://github.com/oliverm91/processes"
+Issues = "https://github.com/oliverm91/processes/issues"
+Changelog = "https://github.com/oliverm91/processes/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.13.0",
+]
+
+# Tool-specific configurations
+[tool.hatch.version]
+source = "vcs"  # <--- Tells Hatch to look at Git/VCS tags
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/processes"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "scm" 
+tag_format = "v$version"
+update_map_description = true
+version_files = ["pyproject.toml:version"]
+update_changelog_on_bump = true
