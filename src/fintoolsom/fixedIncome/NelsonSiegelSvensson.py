@@ -1,124 +1,144 @@
+import numpy as np
+from numba import njit
+from scipy.optimize import minimize
 from dataclasses import dataclass, field
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from typing import Optional
-from scipy.optimize import minimize
 
-import numpy as np
-from numba import njit, vectorize
-
+# Assuming these relative imports exist in your project
 from .Bonds import Bond
 from ..rates.Rates import Rate
 from ..rates.ZeroCouponCurve import ZeroCouponCurve
 
+# --- JIT-Compiled Rate Functions ---
 
-@vectorize(nopython=True)
-def _nss_rate(t: float | np.ndarray, beta0: float, beta1: float, beta2: float, beta3: float, lambda_: float, mu_: float) -> float | np.ndarray:
-    lambda_t = t / lambda_
-    mu_t = mu_ * t
+@njit
+def _ns_rate(t: np.ndarray, b0: float, b1: float, b2: float, l1: float) -> np.ndarray:
+    """Core Nelson-Siegel (3-factor) logic."""
+    t_l1 = t / l1
+    e_l1 = np.exp(-t_l1)
+    aux_l1 = (1 - e_l1) / t_l1
+    return b0 + b1 * aux_l1 + b2 * (aux_l1 - e_l1)
 
-    e_minus_lambda_t = np.exp(-lambda_t)
-    aux_term_lambda = (1 - e_minus_lambda_t) / lambda_t                
-    e_minus_mu_t = np.exp(-mu_t)
-    return beta0 + beta1 * aux_term_lambda  + beta2 * (aux_term_lambda - e_minus_lambda_t) + beta3 * ((1 - e_minus_mu_t) / mu_t - e_minus_mu_t)
+@njit
+def _nss_rate(t: np.ndarray, b0: float, b1: float, b2: float, b3: float, l1: float, l2: float) -> np.ndarray:
+    """Nelson-Siegel-Svensson leveraging the NS logic."""
+    base_ns = _ns_rate(t, b0, b1, b2, l1)
+    t_l2 = t / l2
+    e_l2 = np.exp(-t_l2)
+    aux_l2 = (1 - e_l2) / t_l2
+    return base_ns + b3 * (aux_l2 - e_l2)
 
+# --- Model Classes ---
 
 @dataclass
-class NelsonSiegelSvensson:
+class NelsonSiegel:
     b0: float = field(init=False)
     b1: float = field(init=False)
     b2: float = field(init=False)
-    b3: float = field(init=False)
-    lambda_: float = field(init=False)
-    mu_: float = field(init=False)
+    l1: float = field(init=False)
 
     def __post_init__(self):
-        self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_ = 0.03, 0.01, 0, 0.01, 0.5, 0.2
-        
-    def get_rate(self, t: float | np.ndarray) -> float | np.ndarray:
-        return NelsonSiegelSvensson._get_rate(t, self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_)
-    
-    def get_df(self, t: float | np.ndarray) -> float | np.ndarray:
+        self.b0, self.b1, self.b2, self.l1 = 0.03, -0.01, 0.0, 2.0
+
+    def get_params(self) -> tuple:
+        return (self.b0, self.b1, self.b2, self.l1)
+
+    def get_rate(self, t: np.ndarray) -> np.ndarray:
+        return _ns_rate(t, *self.get_params())
+
+    def get_df(self, t: np.ndarray) -> np.ndarray:
         return np.exp(-self.get_rate(t) * t)
-    
-    def calibrate(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: Optional[list[float]] = None, method: Optional[str]='powell'):
-        bonds_irr_list.sort(key=lambda b_irr_tuple: (b_irr_tuple[0].get_maturity_date() - calibration_date).days)
-        mkt_pvs = np.array([bond.get_present_value(calibration_date, irr) for bond, irr in bonds_irr_list])
-        bond_t_flows_lst = [(np.array([(ed - calibration_date).days / 365 for ed in bond.coupons.get_remaining_end_dates(calibration_date)]),
-                                bond.coupons.get_remaining_flows(calibration_date)) for bond, _ in bonds_irr_list]
-        bonds_ts, bonds_flows = zip(*bond_t_flows_lst)
-        flat_flows = np.concatenate(bonds_flows)
-        flat_ts = np.concatenate(bonds_ts)
-        starts_ts = np.cumsum([len(bond_ts) for bond_ts in bonds_ts])
-        starts_ts = np.insert(starts_ts, 0, 0)
-        lengths_ts = np.diff(starts_ts)
-        starts_ts = starts_ts[:-1]
-        starts_lengths = list(zip(starts_ts, lengths_ts))
-        ns_pvs = np.zeros(len(bonds_ts))
-        def get_valuation_error(params):
-            ns_dfs = np.exp(-NelsonSiegelSvensson._calculate_rates_flatted(flat_ts, starts_ts, lengths_ts, *params) * flat_ts)
-            flows_vps = ns_dfs * flat_flows
-            for ix, start_length in enumerate(starts_lengths):
-                start, length = start_length
-                ns_pvs[ix] = np.sum(flows_vps[start:start+length])
-            return sum((ns_pvs - mkt_pvs)**2)
-        
-        if initial_guess is None:
-            self.b0 = sum([irr.rate_value for _, irr in bonds_irr_list])/len(bonds_irr_list)
-            short_term_yields = [irr.rate_value for _, irr in bonds_irr_list[:min(3, len(bonds_irr_list))]]
-            self.b1 = sum(short_term_yields)/len(short_term_yields) - self.b0
-            self.b2 = 0
-            self.b3 = 0.01
-            self.lambda_ = 2 # First hump around 2Y
-            self.mu_ = 5 # Second hump arond 5Y
-            initial_guess = [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]
 
-        with np.errstate(over='ignore'):
-            bounds = [
-                (None, None),  # beta0
-                (None, None),  # beta1
-                (None, None),  # beta2
-                (None, None),  # beta3
-                (0.5, 3), # lambda | First hump to be between 0.5 and 7Y
-                (2, 20)  # mu | Second hump to be 3 and 20Y
-            ]
-            result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
-            if result.fun > 1:
-                raise ValueError(f"NSS could not converge to a reasonable value. Optimization error: {result.fun}. Number of iterations: {result.nit}")
-            if result.fun > 0.1:
-                result = minimize(get_valuation_error, result.x, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
-
-        if result.success is False:
-            raise ValueError(result.message)
-        
-        self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_ = result.x
-    
-    @staticmethod
-    def _get_rate(t: float | np.ndarray, b0: float, b1: float, b2: float, b3: float, lambda_: float, mu_: float) -> float | np.ndarray:
-        return _nss_rate(t, b0, b1, b2, b3, lambda_, mu_)
-    
-    @staticmethod
-    def _get_df(t: float | np.ndarray, b0: float, b1: float, b2: float, b3: float, lambda_: float, mu_: float) -> float | np.ndarray:
-        return np.exp(-NelsonSiegelSvensson._get_rate(t, b0, b1, b2, b3, lambda_, mu_) * t)
-    
     @staticmethod
     @njit
-    def _calculate_rates_flatted(flat_times, starts, lengths, beta0, beta1, beta2, beta3, lambda_, mu_) -> np.ndarray:
-        num_bonds = len(starts)
+    def _calculate_rates_flatted(flat_times, starts, lengths, b0, b1, b2, l1) -> np.ndarray:
         flat_rates = np.zeros_like(flat_times)
-        for i in range(num_bonds):
-            start = starts[i]
-            end = start + lengths[i]
-            flat_rates[start:end] = _nss_rate(flat_times[start:end], beta0, beta1, beta2, beta3, lambda_, mu_)
+        for i in range(len(starts)):
+            s, e = starts[i], starts[i] + lengths[i]
+            flat_rates[s:e] = _ns_rate(flat_times[s:e], b0, b1, b2, l1)
         return flat_rates
 
-    def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None, method: str = 'powell') -> ZeroCouponCurve:
-        bonds_irr_list = [(bond, irr) for bond, irr in bonds_irr_list if bond.get_maturity_date() > calibration_date]
-        self.calibrate(calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method)
-        dates = [calibration_date + relativedelta(months=i) + relativedelta(days=1) for i in range(0, 12*20, 1)]
-        dfs = self.get_df(np.array([(mat - calibration_date).days / 365 for mat in dates]))
-        curve = ZeroCouponCurve(calibration_date, date_dfs=list(zip(dates, dfs)))
-        return curve
-    
-    def get_params(self) -> list[float]:
-        return [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]
+    def _prepare_bond_structures(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]]):
+        bonds_irr_list.sort(key=lambda x: (x[0].get_maturity_date() - calibration_date).days)
+        mkt_pvs = np.array([bond.get_present_value(calibration_date, irr) for bond, irr in bonds_irr_list])
+        bond_data = [(np.array([(ed - calibration_date).days / 365 for ed in b.coupons.get_remaining_end_dates(calibration_date)]),
+                      b.coupons.get_remaining_flows(calibration_date)) for b, _ in bonds_irr_list]
+        flat_ts = np.concatenate([x[0] for x in bond_data])
+        flat_flows = np.concatenate([x[1] for x in bond_data])
+        lengths = np.array([len(x[0]) for x in bond_data])
+        starts = np.insert(np.cumsum(lengths)[:-1], 0, 0)
+        return mkt_pvs, flat_ts, flat_flows, starts, lengths
+
+    def calibrate(self, calibration_date: date, bonds_irr_list: list, method='L-BFGS-B', min_l1=0.5, max_l1=3.0):
+        mkt_pvs, flat_ts, flat_flows, starts, lengths = self._prepare_bond_structures(calibration_date, bonds_irr_list)
+        
+        def objective(params):
+            rates = self._calculate_rates_flatted(flat_ts, starts, lengths, *params)
+            dfs = np.exp(-rates * flat_ts)
+            pv_flows = dfs * flat_flows
+            model_pvs = np.zeros(len(mkt_pvs))
+            for i in range(len(mkt_pvs)):
+                model_pvs[i] = np.sum(pv_flows[starts[i]:starts[i]+lengths[i]])
+            return np.sum((model_pvs - mkt_pvs)**2)
+
+        bounds = [(None, None), (None, None), (None, None), (min_l1, max_l1)]
+        res = minimize(objective, self.get_params(), method=method, bounds=bounds, tol=0.01)
+        self.b0, self.b1, self.b2, self.l1 = res.x
+
+    def get_curve(self, calibration_date: date, bonds_irr_list: list, method='powell') -> ZeroCouponCurve:
+        self.calibrate(calibration_date, bonds_irr_list, method=method)
+        dates = [calibration_date + relativedelta(months=i) for i in range(1, 241)]
+        ts = np.array([(d - calibration_date).days / 365 for d in dates])
+        return ZeroCouponCurve(calibration_date, date_dfs=list(zip(dates, self.get_df(ts))))
+
+
+@dataclass
+class NelsonSiegelSvensson(NelsonSiegel):
+    b3: float = field(init=False)
+    l2: float = field(init=False)
+
+    def __post_init__(self):
+        self.b0, self.b1, self.b2, self.b3, self.l1, self.l2 = 0.03, -0.01, 0.0, 0.01, 2.0, 5.0
+
+    def get_params(self) -> tuple:
+        return (self.b0, self.b1, self.b2, self.b3, self.l1, self.l2)
+
+    def get_rate(self, t: np.ndarray) -> np.ndarray:
+        return _nss_rate(t, *self.get_params())
+
+    @staticmethod
+    @njit
+    def _calculate_rates_flatted(flat_times, starts, lengths, b0, b1, b2, b3, l1, l2) -> np.ndarray:
+        flat_rates = np.zeros_like(flat_times)
+        for i in range(len(starts)):
+            s, e = starts[i], starts[i] + lengths[i]
+            flat_rates[s:e] = _nss_rate(flat_times[s:e], b0, b1, b2, b3, l1, l2)
+        return flat_rates
+
+    def calibrate(self, calibration_date: date, bonds_irr_list: list, method='L-BFGS-B', 
+                  min_l1=0.3, max_l1=3.0, max_l2=15.0):
+        
+        mkt_pvs, flat_ts, flat_flows, starts, lengths = self._prepare_bond_structures(calibration_date, bonds_irr_list)
+
+        def objective(params):
+            l1_val, l2_val = params[4], params[5]
+            gap = l2_val - l1_val
+            penalty = 1.0
+            if gap < 0.1:
+                penalty = 1000*(0.1 - gap)**2
+            
+            rates = self._calculate_rates_flatted(flat_ts, starts, lengths, *params)
+            dfs = np.exp(-rates * flat_ts)
+            pv_flows = dfs * flat_flows
+            
+            model_pvs = np.zeros(len(mkt_pvs))
+            for i in range(len(mkt_pvs)):
+                model_pvs[i] = np.sum(pv_flows[starts[i]:starts[i]+lengths[i]])
+                
+            pricing_error = np.sum((model_pvs - mkt_pvs)**2)
+            return pricing_error * penalty
+
+        bounds = [(None, None), (None, None), (None, None), (None, None), (min_l1, max_l1), (min_l1 + 0.1, max_l2)]
+        res = minimize(objective, self.get_params(), method=method, bounds=bounds, tol=0.01)
+        self.b0, self.b1, self.b2, self.b3, self.l1, self.l2 = res.x
