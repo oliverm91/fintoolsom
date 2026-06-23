@@ -34,7 +34,7 @@ Fully implemented in Python.
 
 ## Requirements:
 - Python: >=3.11
-- Packages: numpy pandas scipy holidays numba python-dateutil
+- Packages: numpy pandas scipy holidays python-dateutil
 
 ## Development
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.

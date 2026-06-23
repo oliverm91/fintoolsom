@@ -192,7 +192,7 @@ class ZeroCouponCurve:
 
     def get_zero_rates(self, rate_convention: RateConvention=None) -> list[Rate]:
         if rate_convention is None:
-            return [cp.copy() for cp in self.curve_points]
+            return [cp.rate.copy() for cp in self.curve_points]
         else:
             rates_obj = []
             for cp in self.curve_points:
@@ -200,7 +200,7 @@ class ZeroCouponCurve:
                 if r.rate_convention == rate_convention:
                     rates_obj.append(r)
                 else:
-                    r.convert_rate_convention(rate_convention)
+                    r.convert_rate_convention(rate_convention, self.curve_date, cp.date)
                     rates_obj.append(r)
             return rates_obj
         

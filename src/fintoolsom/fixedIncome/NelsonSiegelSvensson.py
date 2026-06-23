@@ -5,14 +5,13 @@ from typing import Optional
 from scipy.optimize import minimize
 
 import numpy as np
-from numba import njit, vectorize
 
 from .Bonds import Bond
-from ..rates.Rates import Rate
+from ..rates.Rates import Rate, RateConvention, ExponentialInterestConvention
 from ..rates.ZeroCouponCurve import ZeroCouponCurve
+from ..dates import ActualDayCountConvention
 
 
-@vectorize(nopython=True)
 def _nss_rate(t: float | np.ndarray, beta0: float, beta1: float, beta2: float, beta3: float, lambda_: float, mu_: float) -> float | np.ndarray:
     lambda_t = t / lambda_
     mu_t = mu_ * t
@@ -56,7 +55,7 @@ class NelsonSiegelSvensson:
         starts_lengths = list(zip(starts_ts, lengths_ts))
         ns_pvs = np.zeros(len(bonds_ts))
         def get_valuation_error(params):
-            ns_dfs = np.exp(-NelsonSiegelSvensson._calculate_rates_flatted(flat_ts, starts_ts, lengths_ts, *params) * flat_ts)
+            ns_dfs = np.exp(-NelsonSiegelSvensson._get_rate(flat_ts, *params) * flat_ts)
             flows_vps = ns_dfs * flat_flows
             for ix, start_length in enumerate(starts_lengths):
                 start, length = start_length
@@ -92,7 +91,51 @@ class NelsonSiegelSvensson:
             raise ValueError(result.message)
         
         self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_ = result.x
-    
+
+    def calibrate_from_curve(self, curve: ZeroCouponCurve, initial_guess: Optional[list[float]] = None, method: str = 'powell'):
+        # For fixed lambda_/mu_, the NSS rate is linear in b0..b3 (see _get_design_matrix), so betas
+        # can be solved exactly via least squares instead of optimizing over all 6 params. Only
+        # lambda_/mu_ need the nonlinear optimizer, and target rates are computed once upfront.
+        rate_convention = RateConvention(interest_convention=ExponentialInterestConvention, day_count_convention=ActualDayCountConvention, time_fraction_base=365)
+        t = curve.days / 365
+        target_rates = curve.get_zero_rates_values(rate_convention)
+
+        def get_valuation_error(tau_params):
+            lambda_, mu_ = tau_params
+            design_matrix = NelsonSiegelSvensson._get_design_matrix(t, lambda_, mu_)
+            betas, *_ = np.linalg.lstsq(design_matrix, target_rates, rcond=None)
+            fitted_rates = design_matrix @ betas
+            return np.sum((fitted_rates - target_rates) ** 2)
+
+        bounds = [
+            (0.5, 3),  # lambda | First hump to be between 0.5 and 3Y
+            (2, 20),  # mu | Second hump to be between 2 and 20Y
+        ]
+        if initial_guess is None:
+            initial_guess = [2, 5]  # First hump around 2Y, second hump around 5Y
+        with np.errstate(over='ignore'):
+            result = minimize(get_valuation_error, initial_guess, method=method, bounds=bounds, options={"maxiter": 300}, tol=0.01)
+
+        if result.success is False:
+            raise ValueError(result.message)
+
+        self.lambda_, self.mu_ = result.x
+        design_matrix = NelsonSiegelSvensson._get_design_matrix(t, self.lambda_, self.mu_)
+        betas, *_ = np.linalg.lstsq(design_matrix, target_rates, rcond=None)
+        self.b0, self.b1, self.b2, self.b3 = betas
+
+    @staticmethod
+    def _get_design_matrix(t: np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
+        lambda_t = t / lambda_
+        mu_t = mu_ * t
+        e_minus_lambda_t = np.exp(-lambda_t)
+        aux_term_lambda = (1 - e_minus_lambda_t) / lambda_t
+        e_minus_mu_t = np.exp(-mu_t)
+        x1 = aux_term_lambda
+        x2 = aux_term_lambda - e_minus_lambda_t
+        x3 = (1 - e_minus_mu_t) / mu_t - e_minus_mu_t
+        return np.column_stack((np.ones_like(t), x1, x2, x3))
+
     @staticmethod
     def _get_rate(t: float | np.ndarray, b0: float, b1: float, b2: float, b3: float, lambda_: float, mu_: float) -> float | np.ndarray:
         return _nss_rate(t, b0, b1, b2, b3, lambda_, mu_)
@@ -100,17 +143,6 @@ class NelsonSiegelSvensson:
     @staticmethod
     def _get_df(t: float | np.ndarray, b0: float, b1: float, b2: float, b3: float, lambda_: float, mu_: float) -> float | np.ndarray:
         return np.exp(-NelsonSiegelSvensson._get_rate(t, b0, b1, b2, b3, lambda_, mu_) * t)
-    
-    @staticmethod
-    @njit
-    def _calculate_rates_flatted(flat_times, starts, lengths, beta0, beta1, beta2, beta3, lambda_, mu_) -> np.ndarray:
-        num_bonds = len(starts)
-        flat_rates = np.zeros_like(flat_times)
-        for i in range(num_bonds):
-            start = starts[i]
-            end = start + lengths[i]
-            flat_rates[start:end] = _nss_rate(flat_times[start:end], beta0, beta1, beta2, beta3, lambda_, mu_)
-        return flat_rates
 
     def get_curve(self, calibration_date: date, bonds_irr_list: list[tuple[Bond, Rate]], initial_guess: list[float] | None = None, method: str = 'powell') -> ZeroCouponCurve:
         bonds_irr_list = [(bond, irr) for bond, irr in bonds_irr_list if bond.get_maturity_date() > calibration_date]
