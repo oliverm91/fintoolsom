@@ -120,6 +120,7 @@ class Rate:
         return interest
         
     def convert_rate_convention(self, rate_convention: RateConvention, start_date: date, end_date: date):
-        current_wf = self.get_wealth_factor(start_date, end_date)        
+        current_wf = self.get_wealth_factor(start_date, end_date)
         self.rate_convention = rate_convention
-        self.rate_value = self.rate_convention.interest_convention.get_rate_from_wf(current_wf, self.rate_convention.day_count_convention.get_time_fraction(start_date, end_date))
+        new_tf = self.rate_convention.day_count_convention.get_time_fraction(start_date, end_date, self.rate_convention.time_fraction_base)
+        self.rate_value = self.rate_convention.interest_convention.get_rate_from_wf(current_wf, new_tf)

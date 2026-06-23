@@ -34,4 +34,10 @@ Fully implemented in Python.
 
 ## Requirements:
 - Python: >=3.11
-- Packages: numpy scipy multimethod
+- Packages: numpy pandas scipy holidays numba python-dateutil
+
+## Development
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+
+- Install dependencies (including dev tools): `uv sync`
+- Run the test suite: `uv run pytest`

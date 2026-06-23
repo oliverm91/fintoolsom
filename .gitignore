@@ -2,6 +2,9 @@
 .vscode/
 .idea/
 
+# Claude
+CLAUDE.md
+
 # Vagrant
 .vagrant/
 
@@ -133,3 +136,8 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Version matrix testing (scripts/test_matrix.bat)
+.venv-matrix/
+dist-matrix/
+matrix_results.log
