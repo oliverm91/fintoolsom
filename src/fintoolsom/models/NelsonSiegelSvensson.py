@@ -6,7 +6,7 @@ from scipy.optimize import minimize
 
 import numpy as np
 
-from ..fixedIncome.Bonds import Bond
+from ..fixedIncome.CLBonds import CLBond
 from ..rates.Rates import Rate, RateConvention, ExponentialInterestConvention
 from ..rates.ZeroCouponCurve import ZeroCouponCurve
 from ..dates import ActualDayCountConvention
@@ -65,7 +65,7 @@ class NelsonSiegelSvensson:
     def calibrate(
         self,
         calibration_date: date,
-        bonds_irr_list: list[tuple[Bond, Rate]],
+        bonds_irr_list: list[tuple[CLBond, Rate]],
         initial_guess: Optional[list[float]] = None,
         method: Optional[str] = "powell",
     ):
@@ -252,7 +252,7 @@ class NelsonSiegelSvensson:
     def get_curve(
         self,
         calibration_date: date,
-        bonds_irr_list: list[tuple[Bond, Rate]],
+        bonds_irr_list: list[tuple[CLBond, Rate]],
         initial_guess: list[float] | None = None,
         method: str = "powell",
     ) -> ZeroCouponCurve:

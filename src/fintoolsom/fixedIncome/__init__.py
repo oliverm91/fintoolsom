@@ -1,4 +1,3 @@
-from .Bonds import Bond, Coupons, Coupon
-from .CLBonds import CLBond
+from .CLBonds import CLBond, Coupons, Coupon
 from .Deposits import Deposit
 from .utils import get_irr

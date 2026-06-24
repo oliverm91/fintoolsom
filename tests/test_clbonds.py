@@ -1,7 +1,15 @@
+from datetime import date
+
 import pytest
 
-from fintoolsom.rates import Rate, RateConvention, CompoundedInterestConvention
-from fintoolsom.dates import ActualDayCountConvention
+from fintoolsom.fixedIncome import CLBond, Coupon, Coupons
+from fintoolsom.rates import (
+    Rate,
+    RateConvention,
+    CompoundedInterestConvention,
+    LinearInterestConvention,
+)
+from fintoolsom.dates import ActualDayCountConvention, Days30EDayCountConvention
 
 
 def test_bond_present_value_with_irr(sample_bond, curve_date):
@@ -46,3 +54,30 @@ def test_bond_z_spread_matches_irr_present_value(
     sample_zero_coupon_curve.parallel_bump_rates_bps(-z_spread)
 
     assert bumped_zc_pv == pytest.approx(irr_pv, abs=1e-4)
+
+
+def test_init_raises_on_wrong_coupons_type():
+    with pytest.raises(TypeError):
+        CLBond(coupons="not coupons", currency="clp", notional=100)
+
+
+def test_init_raises_on_wrong_currency_type():
+    coupon_rate_convention = RateConvention(
+        LinearInterestConvention, Days30EDayCountConvention, 360
+    )
+    coupons = Coupons(
+        [Coupon(100, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention)]
+    )
+    with pytest.raises(TypeError):
+        CLBond(coupons=coupons, currency=123, notional=100)
+
+
+def test_init_raises_on_non_positive_notional():
+    coupon_rate_convention = RateConvention(
+        LinearInterestConvention, Days30EDayCountConvention, 360
+    )
+    coupons = Coupons(
+        [Coupon(100, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention)]
+    )
+    with pytest.raises(ValueError):
+        CLBond(coupons=coupons, currency="clp", notional=0)

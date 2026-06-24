@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 
-from fintoolsom.fixedIncome import Bond, Coupon, Coupons
+from fintoolsom.fixedIncome import CLBond, Coupon, Coupons
 from fintoolsom.models import NelsonSiegelSvensson
 from fintoolsom.rates import (
     Rate,
@@ -17,13 +17,13 @@ from fintoolsom.dates import ActualDayCountConvention
 
 def _zero_coupon_bond(
     calibration_date: date, years: int, notional: float = 1_000_000
-) -> Bond:
+) -> CLBond:
     convention = RateConvention(
         CompoundedInterestConvention, ActualDayCountConvention, 365
     )
     maturity = calibration_date + timedelta(days=365 * years)
     coupon = Coupon(100, 5, 100, calibration_date, maturity, convention)
-    return Bond(coupons=Coupons([coupon]), currency="clp", notional=notional)
+    return CLBond(coupons=Coupons([coupon]), currency="clp", notional=notional)
 
 
 def test_nss_calibrate_fits_market_irrs():
