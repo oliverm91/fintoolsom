@@ -1,5 +1,11 @@
 # fintoolsom
 
+[![PyPI version](https://img.shields.io/pypi/v/fintoolsom.svg)](https://pypi.org/project/fintoolsom/)
+[![CI](https://github.com/oliverm91/fintoolsom/actions/workflows/ci.yml/badge.svg)](https://github.com/oliverm91/fintoolsom/actions/workflows/ci.yml)
+[![Lint](https://github.com/oliverm91/fintoolsom/actions/workflows/lint.yml/badge.svg)](https://github.com/oliverm91/fintoolsom/actions/workflows/lint.yml)
+[![Python versions](https://img.shields.io/pypi/pyversions/fintoolsom.svg)](https://pypi.org/project/fintoolsom/)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+
 Finantial calculations related library, specialized in Chilean market, meant for personal use.
 
 Fully implemented in Python.
@@ -18,19 +24,17 @@ Fully implemented in Python.
   - Generic Holidays: `MonthDayRule` (4th of july), `OrdinalWeekWeekdayRule` (Third monday of february), `easter` and others...
   - Date Adjustment methods (Following, Modified Following, Preceding, Modified Preceding)
   - Calendars
-    - NY and Chilean Calendar pre-built
 
-- Derivatives:
-  - FX Forwards
-  - Options
-    - MtM and greeks
-    - Volatility Surface interpolation models (DoubleLinear, DoubleCubicSpline, eSSVI)
+- Derivatives: work in progress.
+
+- Models:
+  - Nelson-Siegel-Svensson curve calibration
 
 
 ## Install instructions:
-`pip install git+https://github.com/oliverm91/fintoolsom.git --upgrade`
+`pip install fintoolsom`
 
-`pip install fintoolsom`  NOT UPDATED
+Or directly from source: `pip install git+https://github.com/oliverm91/fintoolsom.git --upgrade`
 
 ## Requirements:
 - Python: >=3.11
@@ -41,3 +45,4 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 - Install dependencies (including dev tools): `uv sync`
 - Run the test suite: `uv run pytest`
+- Lint and format check: `uv run ruff check .` and `uv run ruff format --check .`
