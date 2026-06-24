@@ -44,6 +44,12 @@ dev = [
     "ruff",
 ]
 
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "scm"
+update_changelog_on_bump = true
+tag_format = "v$version"
+
 [tool.hatch.version]
 source = "vcs"
 

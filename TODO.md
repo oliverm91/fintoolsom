@@ -6,10 +6,11 @@ Contexto:
   - Precio debe ser base 100
   - Valor Par es base 100
   - Monto a pagar se calcula con estos, por eso se divide en 10.000 y multiplica por notional
-- Por eso `Bond.coupons` tiene un adjust_to_notional.
+- Por eso `CLBond.coupons` tiene un adjust_to_notional.
 
-- Ver mejor forma de mantener esta lógica de bono Chileno y hacerlo convivir con bonos Extranjeros. Lo importante es no romper la API CLBonds. Bonds podría cambiar.
-- Borrar clase Bonds es una opción y quedarse con CLBonds.
+- [x] Se eliminó la clase `Bond`, toda la lógica vive en `CLBond` (`Bonds.py` fusionado a `CLBonds.py`). Ver `.claude/fixed_income_plan.md`.
+- [x] `CLBond.__init__` ahora tiene parámetros explícitos con validación de tipo/valor en vez de `**kwargs`.
+- [x] **Bug corregido:** `get_irr_from_amount` calculaba `initial_guess` mezclando escalas — usaba `tera_value` en base 100 contra `dv01` y `amount` ya escalados por `notional`. Fix: `tera_value` ahora se escala por `notional/100` antes de calcular `initial_guess`. Test de regresión en `tests/test_clbonds.py::test_irr_from_amount_round_trips_for_real_notional`.
 - Analizar qué métodos y código limpiar
 
 # Derivatives

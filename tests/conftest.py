@@ -5,7 +5,7 @@ import pytest
 from fintoolsom.rates import ZeroCouponCurve
 from fintoolsom.rates.Rates import RateConvention, LinearInterestConvention
 from fintoolsom.dates import Days30EDayCountConvention
-from fintoolsom.fixedIncome import Bond, Coupon, Coupons
+from fintoolsom.fixedIncome import CLBond, Coupon, Coupons
 
 
 @pytest.fixture
@@ -40,8 +40,8 @@ def sample_zero_coupon_curve(curve_date) -> ZeroCouponCurve:
 
 
 @pytest.fixture
-def sample_bond() -> Bond:
-    """A 1-year Bond with two semi-annual coupons, built by hand (no fixed_income.db)."""
+def sample_bond() -> CLBond:
+    """A 1-year CLBond with two semi-annual coupons, built by hand (no fixed_income.db)."""
     coupon_rate_convention = RateConvention(
         LinearInterestConvention, Days30EDayCountConvention, 360
     )
@@ -56,4 +56,4 @@ def sample_bond() -> Bond:
         ],
         check_residuals=True,
     )
-    return Bond(coupons=coupons, currency="clp", notional=100_000_000)
+    return CLBond(coupons=coupons, currency="clp", notional=100_000_000)
