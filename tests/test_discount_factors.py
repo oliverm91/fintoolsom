@@ -1,9 +1,14 @@
 import pytest
 
-from fintoolsom.rates import LinearInterestConvention, CompoundedInterestConvention, ExponentialInterestConvention
+from fintoolsom.rates import (
+    LinearInterestConvention,
+    CompoundedInterestConvention,
+    ExponentialInterestConvention,
+)
 
 
 # --- Discount factor from rate ---
+
 
 def test_get_df_from_rate_linear_positive_rate():
     rate, t = 0.05, 0.5
@@ -19,6 +24,7 @@ def test_get_df_from_rate_compounded_positive_rate():
 
 def test_get_df_from_rate_exponential_positive_rate():
     import math
+
     rate, t = 0.03, 1.5
     df = ExponentialInterestConvention.get_df_from_rate(rate, t)
     assert df == pytest.approx(math.exp(-rate * t))
@@ -39,6 +45,7 @@ def test_get_df_from_rate_compounded_zero_rate_equals_one():
 
 def test_get_df_from_rate_exponential_large_time_fraction():
     import math
+
     rate, t = 0.02, 10
     df = ExponentialInterestConvention.get_df_from_rate(rate, t)
     assert df == pytest.approx(math.exp(-rate * t))
@@ -46,6 +53,7 @@ def test_get_df_from_rate_exponential_large_time_fraction():
 
 
 # --- Rate from discount factor ---
+
 
 def test_get_rate_from_df_linear_short_term():
     df, t = 0.995, 0.25
@@ -61,6 +69,7 @@ def test_get_rate_from_df_compounded_long_term():
 
 def test_get_rate_from_df_exponential_mid_term():
     import math
+
     df, t = 0.97, 0.75
     rate = ExponentialInterestConvention.get_rate_from_df(df, t)
     assert rate == pytest.approx(-math.log(df) / t)
@@ -81,6 +90,7 @@ def test_get_rate_from_df_compounded_df_equals_one_gives_zero_rate():
 
 def test_get_rate_from_df_exponential_df_greater_than_one_gives_negative_rate():
     import math
+
     df, t = 1.02, 3
     rate = ExponentialInterestConvention.get_rate_from_df(df, t)
     assert rate == pytest.approx(-math.log(df) / t)
@@ -89,7 +99,15 @@ def test_get_rate_from_df_exponential_df_greater_than_one_gives_negative_rate():
 
 # --- Round-trip consistency ---
 
-@pytest.mark.parametrize("convention", [LinearInterestConvention, CompoundedInterestConvention, ExponentialInterestConvention])
+
+@pytest.mark.parametrize(
+    "convention",
+    [
+        LinearInterestConvention,
+        CompoundedInterestConvention,
+        ExponentialInterestConvention,
+    ],
+)
 def test_df_from_rate_and_rate_from_df_are_inverses(convention):
     rate, t = 0.035, 1.25
     df = convention.get_df_from_rate(rate, t)

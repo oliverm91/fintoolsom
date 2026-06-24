@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from .currencies import Currency
 from ..dates import Calendar
 
+
 @dataclass(slots=True)
 class Locality:
     name: str
@@ -17,5 +18,7 @@ class Locality:
             try:
                 self.calendar = Calendar(country=self.name)
             except NotImplementedError:
-                print(f'Warning. No calendar for {self.name}. Using default calendar (only holidays are Saturday and Sunday).')
+                print(
+                    f"Warning. No calendar for {self.name}. Using default calendar (only holidays are Saturday and Sunday)."
+                )
                 self.calendar = Calendar()

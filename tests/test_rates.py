@@ -2,7 +2,12 @@ from datetime import date, timedelta
 
 import pytest
 
-from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention, CompoundedInterestConvention
+from fintoolsom.rates import (
+    Rate,
+    RateConvention,
+    LinearInterestConvention,
+    CompoundedInterestConvention,
+)
 from fintoolsom.dates import ActualDayCountConvention
 
 
@@ -22,11 +27,19 @@ def test_convert_rate_convention_linear_to_compounded():
     t_start = date(2023, 10, 17)
     t_end = t_start + timedelta(days=days)
 
-    linear_convention = RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
+    linear_convention = RateConvention(
+        LinearInterestConvention, ActualDayCountConvention, 360
+    )
     rate = Rate(linear_convention, rate_pct / 100)
 
     compounded_base = 365
-    rate.convert_rate_convention(RateConvention(CompoundedInterestConvention, ActualDayCountConvention, compounded_base), t_start, t_end)
+    rate.convert_rate_convention(
+        RateConvention(
+            CompoundedInterestConvention, ActualDayCountConvention, compounded_base
+        ),
+        t_start,
+        t_end,
+    )
 
     expected_value = (1 + rate_pct / 100 * days / 360) ** (compounded_base / days) - 1
     assert rate.rate_value == pytest.approx(expected_value)

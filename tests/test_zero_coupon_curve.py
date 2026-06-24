@@ -1,9 +1,13 @@
 from datetime import date, timedelta
 
-import numpy as np
 import pytest
 
-from fintoolsom.rates import ZeroCouponCurve, ZeroCouponCurvePoint, Rate, RateConvention, CompoundedInterestConvention
+from fintoolsom.rates import (
+    ZeroCouponCurvePoint,
+    Rate,
+    RateConvention,
+    CompoundedInterestConvention,
+)
 from fintoolsom.dates import ActualDayCountConvention
 
 
@@ -28,16 +32,24 @@ def test_get_df_interpolates_between_known_points(sample_zero_coupon_curve):
     assert df_after < df_mid < df_before
 
 
-def test_get_df_before_first_point_uses_first_point_rate(curve_date, sample_zero_coupon_curve):
+def test_get_df_before_first_point_uses_first_point_rate(
+    curve_date, sample_zero_coupon_curve
+):
     short_date = curve_date + timedelta(days=1)
-    expected = sample_zero_coupon_curve.curve_points[0].rate.get_discount_factor(curve_date, short_date)
+    expected = sample_zero_coupon_curve.curve_points[0].rate.get_discount_factor(
+        curve_date, short_date
+    )
     df = sample_zero_coupon_curve.get_df(short_date)
     assert df == pytest.approx(expected)
 
 
-def test_get_df_after_last_point_uses_last_point_rate(curve_date, sample_zero_coupon_curve):
+def test_get_df_after_last_point_uses_last_point_rate(
+    curve_date, sample_zero_coupon_curve
+):
     far_date = sample_zero_coupon_curve.curve_points[-1].date + timedelta(days=365)
-    expected = sample_zero_coupon_curve.curve_points[-1].rate.get_discount_factor(curve_date, far_date)
+    expected = sample_zero_coupon_curve.curve_points[-1].rate.get_discount_factor(
+        curve_date, far_date
+    )
     df = sample_zero_coupon_curve.get_df(far_date)
     assert df == pytest.approx(expected)
 
@@ -53,13 +65,17 @@ def test_get_df_fwd_equals_ratio_of_dfs(sample_zero_coupon_curve):
     start_date = date(2025, 7, 10)
     end_date = date(2027, 7, 10)
     fwd = sample_zero_coupon_curve.get_df_fwd(start_date, end_date)
-    expected = sample_zero_coupon_curve.get_df(end_date) / sample_zero_coupon_curve.get_df(start_date)
+    expected = sample_zero_coupon_curve.get_df(
+        end_date
+    ) / sample_zero_coupon_curve.get_df(start_date)
     assert fwd == pytest.approx(expected)
 
 
 def test_add_point_updates_df_at_that_date(curve_date, sample_zero_coupon_curve):
     new_date = date(2030, 7, 10)
-    convention = RateConvention(CompoundedInterestConvention, ActualDayCountConvention, 365)
+    convention = RateConvention(
+        CompoundedInterestConvention, ActualDayCountConvention, 365
+    )
     new_point = ZeroCouponCurvePoint(new_date, Rate(convention, 0.05))
     original_length = len(sample_zero_coupon_curve)
 
@@ -95,4 +111,6 @@ def test_get_aged_curve_dfs_match_original_forward_dfs(sample_zero_coupon_curve)
 
     for cp in aged_curve.curve_points:
         expected_df = sample_zero_coupon_curve.get_df_fwd(aging_date, cp.date)
-        assert cp.rate.get_discount_factor(aging_date, cp.date) == pytest.approx(expected_df)
+        assert cp.rate.get_discount_factor(aging_date, cp.date) == pytest.approx(
+            expected_df
+        )

@@ -42,9 +42,18 @@ def sample_zero_coupon_curve(curve_date) -> ZeroCouponCurve:
 @pytest.fixture
 def sample_bond() -> Bond:
     """A 1-year Bond with two semi-annual coupons, built by hand (no fixed_income.db)."""
-    coupon_rate_convention = RateConvention(LinearInterestConvention, Days30EDayCountConvention, 360)
-    coupons = Coupons([
-        Coupon(0, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention),
-        Coupon(100, 2, 100, date(2024, 7, 1), date(2025, 1, 1), coupon_rate_convention),
-    ], check_residuals=True)
-    return Bond(coupons=coupons, currency='clp', notional=100_000_000)
+    coupon_rate_convention = RateConvention(
+        LinearInterestConvention, Days30EDayCountConvention, 360
+    )
+    coupons = Coupons(
+        [
+            Coupon(
+                0, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention
+            ),
+            Coupon(
+                100, 2, 100, date(2024, 7, 1), date(2025, 1, 1), coupon_rate_convention
+            ),
+        ],
+        check_residuals=True,
+    )
+    return Bond(coupons=coupons, currency="clp", notional=100_000_000)

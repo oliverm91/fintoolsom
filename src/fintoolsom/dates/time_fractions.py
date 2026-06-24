@@ -18,10 +18,15 @@ class TimeFractionBase(ABC):
 @dataclass
 class TF_30_360Base(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
-        m1, m2, y1, y2 = start_date.month, end_date.month, start_date.year, end_date.year
+        m1, m2, y1, y2 = (
+            start_date.month,
+            end_date.month,
+            start_date.year,
+            end_date.year,
+        )
         d1, d2 = self.get_d_1_and_2(start_date, end_date)
         return (360 * (y2 - y1) + 30 * (m2 - m1) + d2 - d1) / 360
-    
+
     @abstractmethod
     def get_d_1_and_2(self, start_date: date, end_date: date) -> tuple[int, int]:
         pass
@@ -30,31 +35,31 @@ class TF_30_360Base(TimeFractionBase):
 @dataclass
 class TF_30_360BondBasis(TF_30_360Base):
     def get_d_1_and_2(self, start_date: date, end_date: date) -> tuple[int, int]:
-        '''
+        """
         From 2006 ISDA Definitions - 4.16 (f).
         “D1” is the first calendar day, expressed as a number, of the Calculation Period or
         Compounding Period, unless such number would be 31, in which case D1 will be 30; and
         “D2” is the calendar day, expressed as a number, immediately following the last day
         included in the Calculation Period or Compounding Period, unless such number would be 31 and
         D1 is greater than 29, in which case D2 will be 30
-        '''
+        """
         d1 = min(start_date.day, 30)
         d2 = end_date.day
-        d2 = d2 if not (d2==31 and d1 > 29) else 30
+        d2 = d2 if not (d2 == 31 and d1 > 29) else 30
         return d1, d2
 
 
 @dataclass
 class TF_30E_360(TF_30_360Base):
     def get_d_1_and_2(self, start_date: date, end_date: date) -> tuple[int, int]:
-        '''
+        """
         From 2006 ISDA Definitions - 4.16 (g).
         “D1” is the first calendar day, expressed as a number, of the Calculation Period or
         Compounding Period, unless such number would be 31, in which case D1 will be 30; and
         “D2” is the calendar day, expressed as a number, immediately following the last day
         included in the Calculation Period or Compounding Period, unless such number would be 31, in
-        which case D2 will be 30. 
-        '''
+        which case D2 will be 30.
+        """
         d1 = min(start_date.day, 30)
         d2 = min(end_date.day, 30)
         return d1, d2
@@ -75,11 +80,21 @@ class TF_30E_360ISDA(TF_30_360Base):
         """
         d1 = start_date.day
         sd_eom_day = calendar.monthrange(start_date.year, start_date.month)[1]
-        d1 = d1 if not ((start_date.month==2 and start_date.day==sd_eom_day) or d1==31) else 30
+        d1 = (
+            d1
+            if not (
+                (start_date.month == 2 and start_date.day == sd_eom_day) or d1 == 31
+            )
+            else 30
+        )
 
         d2 = end_date.day
         ed_eom_day = calendar.monthrange(end_date.year, end_date.month)[1]
-        d2 = d2 if not ((end_date.month==2 and end_date.day==ed_eom_day) or d2==31) else 30
+        d2 = (
+            d2
+            if not ((end_date.month == 2 and end_date.day == ed_eom_day) or d2 == 31)
+            else 30
+        )
 
         return d1, d2
 
@@ -100,7 +115,7 @@ class TF_Actual360(TimeFractionBase):
 class TF_Actual364(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
         return (end_date - start_date).days / 364
-    
+
 
 @dataclass
 class TF_Actual30(TimeFractionBase):
@@ -116,21 +131,23 @@ class TF_Actual360_25(TimeFractionBase):
 
 @dataclass
 class TF_Actual365_Long(TimeFractionBase):
-    def get_day_count_factor(self, start_date: date, end_date: date, frequency: int) -> float:
-        '''
+    def get_day_count_factor(
+        self, start_date: date, end_date: date, frequency: int
+    ) -> float:
+        """
         From Strata OpenGamma.
         The numerator is the actual number of days in the requested period.
         The denominator is determined by examining the frequency and the period end date (the date of the next coupon).
         If the frequency is annual then the denominator is 366 if the period contains February 29th, if not it is 365.
         The first day in the period is excluded, the last day is included.
         If the frequency is not annual, the denominator is 366 if the period end date is in a leap year, if not it is 365.
-        '''
+        """
         numerator = (end_date - start_date).days
 
         if frequency == 1:
             denominator = 365
             for year in range(start_date.year, end_date.year + 1):
-                if calendar.isleap(year):                    
+                if calendar.isleap(year):
                     if year != end_date:
                         denominator = 366
                         break
@@ -145,14 +162,14 @@ class TF_Actual365_Long(TimeFractionBase):
 @dataclass
 class TF_NL_360(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
-        '''
+        """
         From Strata OpenGamma.
         The result is a simple division.
         The numerator is the actual number of days in the requested period minus the number of occurrences of February 29.
         The denominator is always 360.
         The first day in the period is excluded, the last day is included.
-        '''
-        feb_29_count = 0    
+        """
+        feb_29_count = 0
         # Loop through each year in the range
         for year in range(start_date.year, end_date.year + 1):
             if calendar.isleap(year):
@@ -166,14 +183,14 @@ class TF_NL_360(TimeFractionBase):
 @dataclass
 class TF_NL_365(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
-        '''
+        """
         From Strata OpenGamma.
         The result is a simple division.
         The numerator is the actual number of days in the requested period minus the number of occurrences of February 29.
         The denominator is always 360.
         The first day in the period is excluded, the last day is included.
-        '''
-        feb_29_count = 0    
+        """
+        feb_29_count = 0
         # Loop through each year in the range
         for year in range(start_date.year, end_date.year + 1):
             if calendar.isleap(year):
@@ -211,12 +228,14 @@ class TF_ActualActualISDA(TimeFractionBase):
 
 @dataclass
 class TF_ActualActualICMA(TimeFractionBase):
-
     _actactisda_calc = field(init=False)
 
     def __post_init__(self):
         self._actactisda_calc = TF_ActualActualISDA()
-    def get_day_count_factor(self, start_date: date, end_date: date, frequency: int) -> float:
+
+    def get_day_count_factor(
+        self, start_date: date, end_date: date, frequency: int
+    ) -> float:
         """
         From 2006 ISDA Definitions - 4.16 ().
         “Actual/Actual (ICMA)” or “Act/Act (ICMA)” is specified, a fraction equal to
@@ -229,4 +248,6 @@ class TF_ActualActualICMA(TimeFractionBase):
 
         In summary is a Actual/Actual (ISDA) but divided on the frequency. Frequency is 1 for annual payments, 2 for semi-annual, 4 for quarterly...
         """
-        return self._actactisda_calc.get_day_count_factor(start_date, end_date) / frequency
+        return (
+            self._actactisda_calc.get_day_count_factor(start_date, end_date) / frequency
+        )

@@ -29,7 +29,7 @@ class ModifiedFollowingConvention(AdjustmentDateConventionBase):
 
     def adjust(self, date_to_adjust: date) -> date:
         new_date = self._fc.adjust(date_to_adjust)
-        if new_date.month==date_to_adjust.month:
+        if new_date.month == date_to_adjust.month:
             return new_date
         else:
             return self._pc.adjust(date_to_adjust)
@@ -51,7 +51,7 @@ class ModifiedPrecedingConvention(AdjustmentDateConventionBase):
 
     def adjust(self, date_to_adjust: date) -> date:
         new_date = self._pc.adjust(date_to_adjust)
-        if new_date.month==date_to_adjust.month:
+        if new_date.month == date_to_adjust.month:
             return new_date
         else:
             return self._fc.adjust(date_to_adjust)

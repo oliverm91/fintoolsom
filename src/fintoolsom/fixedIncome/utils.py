@@ -1,5 +1,6 @@
 from datetime import date
 import numpy as np
+from scipy.optimize import minimize
 
 
 def get_irr(
@@ -11,9 +12,9 @@ def get_irr(
     target_error: float = 1e-10,
     max_iterations: int = 100,
     base: int = 365,
-    ) -> float:
+) -> float:
     """
-    Compute the Internal Rate of Return (IRR) — or yield to maturity (YTM) — 
+    Compute the Internal Rate of Return (IRR) — or yield to maturity (YTM) —
     for a set of dated cash flows using the Newton–Raphson method.
 
     The IRR is the discount rate `r` that satisfies:
@@ -67,45 +68,47 @@ def get_irr(
         Rare, but it could occur if new irr is estimated to be -1.0.
     """
 
-    dates, cash_flows = zip(*[(dt, cf) for dt, cf in zip(dates, cash_flows) if dt > valuation_date])
+    dates, cash_flows = zip(
+        *[(dt, cf) for dt, cf in zip(dates, cash_flows) if dt > valuation_date]
+    )
     if len(cash_flows) == 0:
         raise ValueError("No cash flows after valuation date")
 
     cash_flows = np.array(cash_flows, dtype=np.float64)
-    terms = np.array([(dt - valuation_date).days / base for dt in dates], dtype=np.float64)
+    terms = np.array(
+        [(dt - valuation_date).days / base for dt in dates], dtype=np.float64
+    )
 
     irr = initial_guess
     for _ in range(max_iterations):
         df_no_exp = 1.0 / (1.0 + irr)
         pvs = cash_flows * np.power(df_no_exp, terms)
-        npv = pvs.sum() - pv # Error in valuation
+        npv = pvs.sum() - pv  # Error in valuation
         if abs(npv) < target_error:
             return float(irr)
 
-        delta = - np.dot(terms, pvs * df_no_exp) # Derivative of NPV w.r.t. irr
-        irr -= npv / delta # Newton-Raphson step: -f(x)/f'(x)
-    
-    raise RuntimeError(f"IRR calculation did not converge after {max_iterations} iterations. Final NPV error: {npv}")
+        delta = -np.dot(terms, pvs * df_no_exp)  # Derivative of NPV w.r.t. irr
+        irr -= npv / delta  # Newton-Raphson step: -f(x)/f'(x)
 
+    raise RuntimeError(
+        f"IRR calculation did not converge after {max_iterations} iterations. Final NPV error: {npv}"
+    )
 
 
 # Matrix NS
-def get_nelson_siegel_loadings(
-    yfs: np.ndarray,
-    lambda_: float
-) -> np.ndarray:
+def get_nelson_siegel_loadings(yfs: np.ndarray, lambda_: float) -> np.ndarray:
     """
     Calculates the Nelson-Siegel factor loadings matrix.
-    
+
     Args:
         yfs: Array of maturities (M,)
         lambda_: The decay factor (scalar)
-        
+
     Returns:
         Loadings matrix X of shape (M, 3)
     """
     yfs = np.asarray(yfs, dtype=float)
-    
+
     lt = yfs / lambda_
     exp_lt = np.exp(-lt)
 
@@ -116,45 +119,43 @@ def get_nelson_siegel_loadings(
     # Stack columns to create (M, 3) matrix
     return np.column_stack([L1, L2, L3])
 
+
 def get_nelson_siegel_betas(
-    yfs: np.ndarray,
-    dfs: np.ndarray,
-    lambda_: float
+    yfs: np.ndarray, dfs: np.ndarray, lambda_: float
 ) -> np.ndarray:
     """
     Calculates betas for all dates simultaneously using OLS matrix algebra.
-    
+
     Args:
         yfs: Maturities (M,)
         dfs: Discount factors (N_dates, M)
         lambda_: Scalar decay factor
-        
+
     Returns:
         Betas matrix of shape (N_dates, 3)
     """
     dfs = np.atleast_2d(dfs)
     yfs = np.asarray(yfs)
-    
+
     rates = -np.log(dfs) / (yfs[None, :])
     Y = rates.T
     X = get_nelson_siegel_loadings(yfs, lambda_)
-    
-    betas = np.linalg.inv(X.T @ X) @ X.T @ Y    
+
+    betas = np.linalg.inv(X.T @ X) @ X.T @ Y
     return betas.T
 
+
 def get_nelson_siegel_rates(
-    yfs: np.ndarray,
-    betas: np.ndarray,
-    lambda_: np.ndarray
+    yfs: np.ndarray, betas: np.ndarray, lambda_: np.ndarray
 ) -> np.ndarray:
     X = get_nelson_siegel_loadings(yfs, lambda_)
     rates = betas @ X.T
     return rates
 
-from scipy.optimize import minimize
+
 def get_nelson_siegel_params(
-    yfs: np.ndarray, 
-    dfs: np.ndarray, 
+    yfs: np.ndarray,
+    dfs: np.ndarray,
     lambda_: float = None,
     lambda_x0: float = 1.5,
     try_multiple_lambda_x0: bool = False,
@@ -162,7 +163,7 @@ def get_nelson_siegel_params(
 ) -> tuple[np.ndarray, float]:
     """
     Optimizes a global lambda and returns the corresponding betas.
-    
+
     Args:
         yfs: Maturities (M,)
         dfs: Discount factors (N_dates, M)
@@ -187,41 +188,34 @@ def get_nelson_siegel_params(
     def sse(x):
         lam = x
         betas = get_nelson_siegel_betas(yfs, dfs, lam)
-        
+
         X = get_nelson_siegel_loadings(yfs, lam)
         model_rates = betas @ X.T
-        
+
         model_dfs = np.exp(-model_rates * yfs[None, :])
-        
-        return np.sum((model_dfs - dfs)**2)
-    
+
+        return np.sum((model_dfs - dfs) ** 2)
+
     if try_multiple_lambda_x0:
         lambdas = np.linspace(0.01, 5, 25)
         err = np.inf
-        for l in lambdas:
-            err_l = sse(l)
+        for lambda_candidate in lambdas:
+            err_l = sse(lambda_candidate)
             if err_l < err:
-                lambda_x0 = l
+                lambda_x0 = lambda_candidate
                 err = err_l
 
-    if optimization_method.lower()=="l-bfgs-b":
+    if optimization_method.lower() == "l-bfgs-b":
         res = minimize(
-            sse, 
-            x0=lambda_x0,
-            bounds=[(0.01, 5)],
-            method=optimization_method
+            sse, x0=lambda_x0, bounds=[(0.01, 5)], method=optimization_method
         )
     else:
-        res = minimize(
-            sse, 
-            x0=lambda_x0,
-            method=optimization_method
-        )
-    
+        res = minimize(sse, x0=lambda_x0, method=optimization_method)
+
     if not res.success:
         raise RuntimeError(f"Error minimizing error for lambda:\n\n{res}")
 
     opt_lambda = float(res.x[0])
     opt_betas = get_nelson_siegel_betas(yfs, dfs, opt_lambda)
-    
+
     return opt_betas, opt_lambda
