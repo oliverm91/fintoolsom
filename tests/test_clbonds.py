@@ -56,6 +56,24 @@ def test_bond_z_spread_matches_irr_present_value(
     assert bumped_zc_pv == pytest.approx(irr_pv, abs=1e-4)
 
 
+def test_irr_from_amount_round_trips_for_real_notional(sample_bond, curve_date):
+    """Regression test: initial_guess in get_irr_from_amount must scale tera_value by
+    notional/100 to match the notional-scaled amount and dv01, otherwise the Newton
+    solve diverges for any notional != 100 (sample_bond uses 100_000_000)."""
+    irr_convention = RateConvention(
+        CompoundedInterestConvention, ActualDayCountConvention, 365
+    )
+    irr = Rate(irr_convention, 0.06)
+    amount = sample_bond.get_amount_value(curve_date, irr)
+
+    recovered_irr = sample_bond.get_irr_from_amount(
+        curve_date, amount, irr_rate_convention=irr_convention
+    )
+    recovered_amount = sample_bond.get_amount_value(curve_date, recovered_irr)
+
+    assert recovered_amount == amount
+
+
 def test_init_raises_on_wrong_coupons_type():
     with pytest.raises(TypeError):
         CLBond(coupons="not coupons", currency="clp", notional=100)
