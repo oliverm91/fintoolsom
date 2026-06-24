@@ -120,10 +120,10 @@ class Days30UDayCountConvention(DayCountConventionBase):
             d2 = 30
         if is_eom and start_date_last_day_of_february:
             d1 = 30
-        if d2 == 31 and d1 == 30:
-            d2 = 30
         if d1 == 31:
             d1 = 30
+        if d2 == 31 and d1 == 30:
+            d2 = 30
 
         count = 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
         return count
