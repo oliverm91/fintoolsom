@@ -413,7 +413,7 @@ class Bond:
         irr: rates.Rate,
         price_decimals: int = 4,
         par_value_decimals: int = 8,
-    ) -> float:
+    ) -> tuple[float, float]:
         pv = self.get_present_value(date, irr)
         par_value = self.get_par_value(date, decimals=par_value_decimals)
         price = round(100.0 * pv / par_value, price_decimals)
