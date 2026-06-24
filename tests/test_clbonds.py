@@ -84,7 +84,11 @@ def test_init_raises_on_wrong_currency_type():
         LinearInterestConvention, Days30EDayCountConvention, 360
     )
     coupons = Coupons(
-        [Coupon(100, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention)]
+        [
+            Coupon(
+                100, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention
+            )
+        ]
     )
     with pytest.raises(TypeError):
         CLBond(coupons=coupons, currency=123, notional=100)
@@ -95,7 +99,11 @@ def test_init_raises_on_non_positive_notional():
         LinearInterestConvention, Days30EDayCountConvention, 360
     )
     coupons = Coupons(
-        [Coupon(100, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention)]
+        [
+            Coupon(
+                100, 2, 100, date(2024, 1, 1), date(2024, 7, 1), coupon_rate_convention
+            )
+        ]
     )
     with pytest.raises(ValueError):
         CLBond(coupons=coupons, currency="clp", notional=0)

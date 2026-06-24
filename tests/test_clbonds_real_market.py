@@ -42,7 +42,11 @@ def _build_bullet_clbond(coupon_amount: float, notional: float) -> CLBond:
             Coupon(amortization, coupon_amount, 100.0, current, end, accrue_convention)
         )
         current = end
-    return CLBond(coupons=Coupons(coupons, check_residuals=True), currency="clp", notional=notional)
+    return CLBond(
+        coupons=Coupons(coupons, check_residuals=True),
+        currency="clp",
+        notional=notional,
+    )
 
 
 @pytest.fixture
@@ -57,6 +61,7 @@ def btu0190930() -> CLBond:
 
 # --- TERA (estimated automatically since not passed as kwarg) ---
 
+
 def test_btp0470930_tera(btp0470930):
     assert btp0470930.tera.rate_value == pytest.approx(0.047503, abs=1e-6)
 
@@ -66,6 +71,7 @@ def test_btu0190930_tera(btu0190930):
 
 
 # --- Price and par value (base 100) ---
+
 
 def test_btp0470930_price_and_par_value(btp0470930):
     irr = Rate(IRR_CONVENTION, 0.051919)
@@ -82,6 +88,7 @@ def test_btu0190930_price_and_par_value(btu0190930):
 
 
 # --- Amount with given notional ---
+
 
 def test_btp0470930_amount_clp(btp0470930):
     irr = Rate(IRR_CONVENTION, 0.051919)
