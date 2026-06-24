@@ -97,10 +97,9 @@ class ZeroCouponCurve:
 
     def sort(self):
         self.curve_points.sort(key=lambda cp: cp.date)
-        for i, cp in enumerate(self.curve_points):
-            if cp.date > self.curve_date:
-                break
-        self.curve_points = self.curve_points[i:]
+        self.curve_points = [
+            cp for cp in self.curve_points if cp.date > self.curve_date
+        ]
         self.dates = [cp.date for cp in self.curve_points]
         self.rates = [cp.rate for cp in self.curve_points]
         self.days = self.get_days()
@@ -214,8 +213,16 @@ class ZeroCouponCurve:
         end_dates: date | list[date],
         rate_convention: RateConvention,
     ) -> Rate | list[Rate]:
-        start_wfs = self.get_wfs(start_dates)
-        end_wfs = self.get_wfs(end_dates)
+        start_wfs = self.get_wfs(
+            [start_dates] if isinstance(start_dates, date) else start_dates
+        )
+        end_wfs = self.get_wfs(
+            [end_dates] if isinstance(end_dates, date) else end_dates
+        )
+        if isinstance(start_dates, date):
+            start_wfs = start_wfs[0]
+        if isinstance(end_dates, date):
+            end_wfs = end_wfs[0]
         fwd_wfs = end_wfs / start_wfs
         tfb = rate_convention.time_fraction_base
         tfs = rate_convention.day_count_convention.get_time_fraction(
