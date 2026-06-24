@@ -67,11 +67,12 @@ def get_irr(
         Rare, but it could occur if new irr is estimated to be -1.0.
     """
 
-    dates, cash_flows = zip(
-        *[(dt, cf) for dt, cf in zip(dates, cash_flows) if dt > valuation_date]
-    )
-    if len(cash_flows) == 0:
+    future_flows = [
+        (dt, cf) for dt, cf in zip(dates, cash_flows) if dt > valuation_date
+    ]
+    if len(future_flows) == 0:
         raise ValueError("No cash flows after valuation date")
+    dates, cash_flows = zip(*future_flows)
 
     cash_flows = np.array(cash_flows, dtype=np.float64)
     terms = np.array(
