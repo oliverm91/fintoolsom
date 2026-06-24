@@ -6,7 +6,7 @@ from scipy.optimize import minimize
 
 import numpy as np
 
-from .Bonds import Bond
+from ..fixedIncome.Bonds import Bond
 from ..rates.Rates import Rate, RateConvention, ExponentialInterestConvention
 from ..rates.ZeroCouponCurve import ZeroCouponCurve
 from ..dates import ActualDayCountConvention

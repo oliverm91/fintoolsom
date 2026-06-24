@@ -3,7 +3,8 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 
-from fintoolsom.fixedIncome import Bond, Coupon, Coupons, NelsonSiegelSvensson
+from fintoolsom.fixedIncome import Bond, Coupon, Coupons
+from fintoolsom.models import NelsonSiegelSvensson
 from fintoolsom.rates import Rate, RateConvention, CompoundedInterestConvention, ExponentialInterestConvention, ZeroCouponCurve
 from fintoolsom.dates import ActualDayCountConvention
 
