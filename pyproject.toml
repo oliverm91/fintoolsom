@@ -39,6 +39,7 @@ Homepage = "https://github.com/oliverm91/fintoolsom"
 
 [dependency-groups]
 dev = [
+    "commitizen>=4.16.4",
     "pytest",
     "ruff",
 ]
