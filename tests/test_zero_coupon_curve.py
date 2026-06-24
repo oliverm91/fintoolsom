@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import pytest
 
 from fintoolsom.rates import (
+    ZeroCouponCurve,
     ZeroCouponCurvePoint,
     Rate,
     RateConvention,
@@ -114,3 +115,28 @@ def test_get_aged_curve_dfs_match_original_forward_dfs(sample_zero_coupon_curve)
         assert cp.rate.get_discount_factor(aging_date, cp.date) == pytest.approx(
             expected_df
         )
+
+
+def test_get_forward_rates_accepts_scalar_dates(sample_zero_coupon_curve):
+    rate_convention = RateConvention(
+        CompoundedInterestConvention, ActualDayCountConvention, 365
+    )
+    start_date = date(2024, 9, 10)
+    end_date = date(2025, 4, 10)
+
+    fwd_rate = sample_zero_coupon_curve.get_forward_rates(
+        start_date, end_date, rate_convention
+    )
+
+    assert isinstance(fwd_rate, Rate)
+
+
+def test_sort_drops_all_points_not_after_curve_date(curve_date):
+    curve = ZeroCouponCurve(
+        curve_date,
+        date_dfs=[
+            (curve_date - timedelta(days=7), 0.999),
+            (curve_date - timedelta(days=3), 0.998),
+        ],
+    )
+    assert curve.curve_points == []
