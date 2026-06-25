@@ -10,8 +10,8 @@ import pandas as pd
 from scipy.interpolate import CubicSpline, interp1d
 from scipy.optimize import minimize, LinearConstraint
 
-from fintoolsom.rates import ZeroCouponCurve
-from fintoolsom.derivatives.options.options import Put
+from ..rates import ZeroCouponCurve
+from ..derivatives.calculator import Calculator
 
 
 class InterpolationMethod(Enum):
@@ -52,7 +52,7 @@ class InterpolationModel(ABC):
                     fwd_price = self.spot * df_q / df_r
 
                     volatility = vol_surface_df_np[row, column]
-                    k = Put.get_strike_from_delta(
+                    k = Calculator.get_put_strike_from_delta(
                         delta,
                         self.spot,
                         volatility,
