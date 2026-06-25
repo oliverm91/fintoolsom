@@ -3,10 +3,11 @@ from datetime import date
 import pandas as pd
 
 from fintoolsom.derivatives.options.options import Call
-from fintoolsom.derivatives.options.volatility_surface import (
-    VolatilitySurface,
-    InterpolationMethod,
-)
+from fintoolsom.derivatives.calculator import Calculator
+from fintoolsom.market.volatility_surface import VolatilitySurface, InterpolationMethod
+from fintoolsom.market.currencies import Currency, CurrencyPair
+
+USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 
 def _sample_vol_surface_df() -> pd.DataFrame:
@@ -48,12 +49,12 @@ def test_call_mtm_is_positive_for_in_the_money_option(sample_zero_coupon_curve):
         sample_zero_coupon_curve,
         InterpolationMethod.DoubleCubicSpline,
     )
-    call = Call(1000, strike, maturity)
-    log_moneyness = call.get_log_moneyness(
-        spot, sample_zero_coupon_curve, sample_zero_coupon_curve
+    call = Call(1000, strike, maturity, currency_pair=USDCLP)
+    log_moneyness = Calculator.get_option_log_moneyness(
+        call, spot, sample_zero_coupon_curve, sample_zero_coupon_curve
     )
     vol = vs.get_volatility(log_moneyness, (maturity - t_val).days)
-    mtm = call.get_mtm(
-        t_val, spot, vol, sample_zero_coupon_curve, sample_zero_coupon_curve
+    mtm = Calculator.get_option_mtm(
+        call, t_val, spot, vol, sample_zero_coupon_curve, sample_zero_coupon_curve
     )
     assert mtm > 0
