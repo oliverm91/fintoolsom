@@ -13,6 +13,15 @@ class Market:
     t: date
     fx_history: dict[CurrencyPair, FX_RateData] = field(default_factory=dict)
     indexes_history: dict[str, IndexData] = field(default_factory=dict)
+    interest_rates: dict[str, dict[date, Rate]] = field(default_factory=dict)
+    currency_pairs_history: dict[str, dict[date, CurrencyPair]] = field(
+        default_factory=dict
+    )
+    index_to_interest_rate_map: dict[str, str] = field(default_factory=dict)
+    # UF is known until the 9th of the next month, then it must be projected with curves.
+    uf_history: dict[date, float] = field(default_factory=dict)
+
+    interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
 
     # How should curves be assigned?
     # All curves have a currency. Curves might or not be assigned to an index (ICP, Ibor, or USD_CL which has no Index)
@@ -33,15 +42,15 @@ class Market:
             if cp.invert() not in self.fx_history:
                 self.fx_history[cp.invert()] = fx_data.invert()
 
-        for k in list(self.zero_coupon_curve_mapper.items()):
+        for k in list(self.zero_coupon_curve_mapper.keys()):
             v = self.zero_coupon_curve_mapper.pop(k)
             self.zero_coupon_curve_mapper[k.upper()] = v
 
-        for k in list(self.interest_rates.items()):
+        for k in list(self.interest_rates.keys()):
             v = self.interest_rates.pop(k)
             self.interest_rates[k.upper()] = v
 
-        for k in list(self.indexes_history.items()):
+        for k in list(self.indexes_history.keys()):
             v = self.indexes_history.pop(k)
             self.indexes_history[k.upper()] = v
 
@@ -51,10 +60,12 @@ class Market:
         }
 
         # Invert currency pairs
-        for cp_history_dict in self.currency_pairs_history.values():
-            for cp_date, cp in cp_history_dict.items():
+        for cp_history_dict in list(self.currency_pairs_history.values()):
+            for cp_date, cp in list(cp_history_dict.items()):
                 inverted_cp = cp.invert()
-                self.currency_pairs_history[inverted_cp.name][cp_date] = inverted_cp
+                self.currency_pairs_history.setdefault(inverted_cp.name, {})[
+                    cp_date
+                ] = inverted_cp
 
     def add_index(self, index: Index):
         if index.name not in self.indexes_history:

@@ -22,3 +22,9 @@ class Locality:
                     f"Warning. No calendar for {self.name}. Using default calendar (only holidays are Saturday and Sunday)."
                 )
                 self.calendar = Calendar()
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Locality) and self.name == other.name
