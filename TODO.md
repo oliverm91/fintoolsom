@@ -1,3 +1,17 @@
+# Fixed Income
+
+Contexto:
+- CLBonds vienen siempre definidos con flujos base 100 (suma amortizaciones es 100).
+- Fórmula de valorización asume base 100:
+  - Precio debe ser base 100
+  - Valor Par es base 100
+  - Monto a pagar se calcula con estos, por eso se divide en 10.000 y multiplica por notional
+- Por eso `Bond.coupons` tiene un adjust_to_notional.
+
+- Ver mejor forma de mantener esta lógica de bono Chileno y hacerlo convivir con bonos Extranjeros. Lo importante es no romper la API CLBonds. Bonds podría cambiar.
+- Borrar clase Bonds es una opción y quedarse con CLBonds.
+- Analizar qué métodos y código limpiar
+
 # Derivatives
 ## Instrumentos
 Deben estar definidos:
@@ -24,18 +38,15 @@ Solo guardan datos, inmutables. No calculan.
       - OIS
       - Basis
       - Cross Currency basis  
-  - Curvas:
-    - De descuento de monedas (depende de localidad y colateral (o solo localidad y ajusta por colateral con *FD_indiceCol/FD_monColLocal?))
-    - De proyección de índices (curvas cero para Term SOFR 1M). Evaluar objeto ForwardRateCurve para este tipo de curvas
-    - Pueden alimentarse a partir de:
-      - Las cotizaciones
-      - De forma manual
-
 - Debe ser flexible para solicitar al menos fecha, pero puede estar vacío del resto.
 - Evaluar agregar a Cotizaciones e Historia Rates para valorizar `CLBond`s.
-- Evaluar agregar cruva de descuento de bonos de tesorería chileno (curva BTP, curva BTU). Pueden construirse a partir de las cotizaciones mediante `models.NelsonSiegelSvenson`.
 
-
-
-## Calculadora
-Instrumentos no deben tener get_mtm. Debe haber una calculadora que reciba un instrumento y el mercado y lo valoriza.
+## Valuation engine
+- Instrumentos no deben tener get_mtm. Debe haber una calculadora que reciba un instrumento y el mercado y lo valoriza. Va en método estático.
+- Debe poder a partir de un mercado construír curvas (usando cotizaciones swap, puntos forwards, spots, etc...):
+  - De descuento de monedas (depende de localidad y colateral (o solo localidad y ajusta por colateral con *FD_indiceCol/FD_monColLocal?))
+  - De proyección de índices (curvas cero para Term SOFR 1M). Evaluar objeto ForwardRateCurve para este tipo de curvas
+  - Pueden alimentarse a partir de:
+    - Las cotizaciones
+    - De forma manual
+  - Evaluar agregar cruva de descuento de bonos de tesorería chileno (curva BTP, curva BTU). Pueden construirse a partir de las cotizaciones mediante `models.NelsonSiegelSvenson`.
