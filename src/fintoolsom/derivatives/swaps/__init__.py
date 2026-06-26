@@ -2,7 +2,7 @@ from .coupons import (
     FixedSwapCoupon,
     IndexedSwapCoupon,
     FloatingRateSwapCoupon,
-    IborRateFloatingSwapCoupon,
+    TermRateFloatingSwapCoupon,
     OvernightRateFloatingSwapCoupon,
 )
-from .legs import DefaultSwapLeg, IborRateSwapLeg, OvernightRateSwapLeg
+from .legs import DefaultSwapLeg, TermRateSwapLeg, OvernightRateSwapLeg

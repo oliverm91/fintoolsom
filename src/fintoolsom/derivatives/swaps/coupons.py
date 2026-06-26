@@ -38,7 +38,7 @@ class FloatingRateSwapCoupon(SwapCouponBase):
 
 
 @dataclass
-class IborRateFloatingSwapCoupon(FloatingRateSwapCoupon):
+class TermRateFloatingSwapCoupon(FloatingRateSwapCoupon):
     ibor_rate_name: str
     fixing_date: str
 

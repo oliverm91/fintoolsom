@@ -8,7 +8,7 @@ from .coupons import (
     SwapCouponBase,
     FixedSwapCoupon,
     FloatingRateSwapCoupon,
-    IborRateFloatingSwapCoupon,
+    TermRateFloatingSwapCoupon,
     OvernightRateFloatingSwapCoupon,
 )
 from ...market import Currency, Market, Locality
@@ -133,13 +133,13 @@ class FloatingSwapLeg(SwapLegBase):
         pass
 
 
-class IborRateSwapLeg(FloatingSwapLeg):
+class TermRateSwapLeg(FloatingSwapLeg):
     def __post_init__(self):
         super().__post_init__()
         for c in self.coupons:
-            if not isinstance(c, IborRateFloatingSwapCoupon):
+            if not isinstance(c, TermRateFloatingSwapCoupon):
                 raise TypeError(
-                    f"Coupons must be of type IborRateFloatingSwapCoupon. Got {type(c)}"
+                    f"Coupons must be of type TermRateFloatingSwapCoupon. Got {type(c)}"
                 )
 
     def first_coupon_is_fixed(self, t: date) -> bool:
@@ -155,7 +155,7 @@ class OvernightRateSwapLeg(FloatingSwapLeg):
         for c in self.coupons:
             if not isinstance(c, OvernightRateFloatingSwapCoupon):
                 raise TypeError(
-                    f"Coupons must be of type IborRateFloatingSwapCoupon. Got {type(c)}"
+                    f"Coupons must be of type TermRateFloatingSwapCoupon. Got {type(c)}"
                 )
 
     def first_coupon_is_fixed(self, t: date) -> bool:
