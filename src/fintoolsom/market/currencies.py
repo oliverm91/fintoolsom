@@ -6,60 +6,101 @@ from typing import Self
 import numpy as np
 
 from ..rates import ZeroCouponCurve
+from .localities import Locality
 
 
-class LocalityCode(Enum):
-    US = "US"
-    EU = "EU"
-    GB = "GB"
-    JP = "JP"
-    CH = "CH"
-    CL = "CL"
-    BR = "BR"
-    RU = "RU"
-    CN = "CN"
-    IN = "IN"
-    AU = "AU"
-    NZ = "NZ"
-    HK = "HK"
-    SG = "SG"
-    KR = "KR"
-    TH = "TH"
-    CO = "CO"
-    MX = "MX"
-    BN = "BN"
-    SE = "SE"
-    NO = "NO"
+class CurrencyName(Enum):
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+    JPY = "JPY"
+    CHF = "CHF"
+    CLP = "CLP"
+    BRL = "BRL"
+    RUB = "RUB"
+    CNY = "CNY"
+    INR = "INR"
+    AUD = "AUD"
+    NZD = "NZD"
+    HKD = "HKD"
+    SGD = "SGD"
+    KRW = "KRW"
+    THB = "THB"
+    COP = "COP"
+    MXN = "MXN"
+    BND = "BND"
+    SEK = "SEK"
+    NOK = "NOK"
 
 
-class Currency(Enum):
-    USD = ("USD", LocalityCode.US)
-    EUR = ("EUR", LocalityCode.EU)
-    GBP = ("GBP", LocalityCode.GB)
-    JPY = ("JPY", LocalityCode.JP)
-    CHF = ("CHF", LocalityCode.CH)
-    CLP = ("CLP", LocalityCode.CL)
-    BRL = ("BRL", LocalityCode.BR)
-    RUB = ("RUB", LocalityCode.RU)
-    CNY = ("CNY", LocalityCode.CN)
-    INR = ("INR", LocalityCode.IN)
-    AUD = ("AUD", LocalityCode.AU)
-    NZD = ("NZD", LocalityCode.NZ)
-    HKD = ("HKD", LocalityCode.HK)
-    SGD = ("SGD", LocalityCode.SG)
-    KRW = ("KRW", LocalityCode.KR)
-    THB = ("THB", LocalityCode.TH)
-    COP = ("COP", LocalityCode.CO)
-    MXN = ("MXN", LocalityCode.MX)
-    BND = ("BND", LocalityCode.BN)
-    SEK = ("SEK", LocalityCode.SE)
-    NOK = ("NOK", LocalityCode.NO)
+_CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
+    CurrencyName.USD: Locality.US,
+    CurrencyName.EUR: Locality.EU,
+    CurrencyName.GBP: Locality.GB,
+    CurrencyName.JPY: Locality.JP,
+    CurrencyName.CHF: Locality.CH,
+    CurrencyName.CLP: Locality.CL,
+    CurrencyName.BRL: Locality.BR,
+    CurrencyName.RUB: Locality.RU,
+    CurrencyName.CNY: Locality.CN,
+    CurrencyName.INR: Locality.IN,
+    CurrencyName.AUD: Locality.AU,
+    CurrencyName.NZD: Locality.NZ,
+    CurrencyName.HKD: Locality.HK,
+    CurrencyName.SGD: Locality.SG,
+    CurrencyName.KRW: Locality.KR,
+    CurrencyName.THB: Locality.TH,
+    CurrencyName.COP: Locality.CO,
+    CurrencyName.MXN: Locality.MX,
+    CurrencyName.BND: Locality.BN,
+    CurrencyName.SEK: Locality.SE,
+    CurrencyName.NOK: Locality.NO,
+}
 
-    def __new__(cls, code: str, locality: LocalityCode):
-        obj = object.__new__(cls)
-        obj._value_ = code
-        obj.locality = locality
-        return obj
+
+class Currency:
+    def __init__(self, name: CurrencyName):
+        self.name = name
+        self.locality: Locality = _CURRENCY_LOCALITY_MAP[name]
+
+    @property
+    def value(self) -> str:
+        return self.name.value
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Currency) and self.name == other.name
+
+    def __repr__(self) -> str:
+        return f"Currency({self.name.value})"
+
+    def __str__(self) -> str:
+        return self.name.value
+
+
+Currency.USD = Currency(CurrencyName.USD)
+Currency.EUR = Currency(CurrencyName.EUR)
+Currency.GBP = Currency(CurrencyName.GBP)
+Currency.JPY = Currency(CurrencyName.JPY)
+Currency.CHF = Currency(CurrencyName.CHF)
+Currency.CLP = Currency(CurrencyName.CLP)
+Currency.BRL = Currency(CurrencyName.BRL)
+Currency.RUB = Currency(CurrencyName.RUB)
+Currency.CNY = Currency(CurrencyName.CNY)
+Currency.INR = Currency(CurrencyName.INR)
+Currency.AUD = Currency(CurrencyName.AUD)
+Currency.NZD = Currency(CurrencyName.NZD)
+Currency.HKD = Currency(CurrencyName.HKD)
+Currency.SGD = Currency(CurrencyName.SGD)
+Currency.KRW = Currency(CurrencyName.KRW)
+Currency.THB = Currency(CurrencyName.THB)
+Currency.COP = Currency(CurrencyName.COP)
+Currency.MXN = Currency(CurrencyName.MXN)
+Currency.BND = Currency(CurrencyName.BND)
+Currency.SEK = Currency(CurrencyName.SEK)
+Currency.NOK = Currency(CurrencyName.NOK)
 
 
 @dataclass(slots=True)

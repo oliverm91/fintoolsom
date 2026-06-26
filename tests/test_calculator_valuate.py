@@ -2,7 +2,6 @@ from datetime import date
 
 import pytest
 
-from fintoolsom.dates import Calendar
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.derivatives.forwards.forwards import Forward, NDF
 from fintoolsom.market import Currency, Locality, Market
@@ -12,16 +11,15 @@ USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 
 def _market_with_fx_forward_setup(curve_date, zero_coupon_curve, spot: float) -> Market:
-    locality = Locality("TEST", Currency.CLP, calendar=Calendar())
     market = Market(
         t=curve_date,
         zero_coupon_curve_mapper={
-            "USD": {locality: zero_coupon_curve},
-            "CLP": {locality: zero_coupon_curve},
+            "USD": {Locality.CL: zero_coupon_curve},
+            "CLP": {Locality.CL: zero_coupon_curve},
         },
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))
-    return market, locality
+    return market, Locality.CL
 
 
 def test_valuate_forward_matches_get_forward_mtm(sample_zero_coupon_curve, curve_date):
@@ -76,14 +74,12 @@ def test_valuate_uf_ndf_uses_market_uf_history(sample_zero_coupon_curve, curve_d
         zero_coupon_curve_mapper={
             "CLP": {
                 "UF": sample_zero_coupon_curve,
-                Locality("TEST", Currency.CLP, calendar=Calendar()): (
-                    sample_zero_coupon_curve
-                ),
+                Locality.CL: sample_zero_coupon_curve,
             }
         },
         uf_history={fixing_date: known_uf},
     )
-    locality = Locality("TEST", Currency.CLP, calendar=Calendar())
+    locality = Locality.CL
 
     ndf = NDF(
         1_000,
