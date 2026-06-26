@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
-from .index import Index, IndexData
+from .index import Index, InterestIndex
 from .localities import Locality
 from ..rates import Rate, ZeroCouponCurve
 from ..dates import Calendar
@@ -12,7 +12,7 @@ from ..dates import Calendar
 class Market:
     t: date
     fx_history: dict[CurrencyPair, FX_RateData] = field(default_factory=dict)
-    indexes_history: dict[str, IndexData] = field(default_factory=dict)
+    indexes_history: dict[str, InterestIndex] = field(default_factory=dict)
     interest_rates: dict[str, dict[date, Rate]] = field(default_factory=dict)
     currency_pairs_history: dict[str, dict[date, CurrencyPair]] = field(
         default_factory=dict
@@ -24,7 +24,7 @@ class Market:
     interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
 
     # How should curves be assigned?
-    # All curves have a currency. Curves might or not be assigned to an index (ICP, Ibor, or USD_CL which has no Index)
+    # All curves have a currency. Curves might or not be assigned to an index (ICP, Term, or USD_CL which has no Index)
     # First filter per Currency.
     # Filter per Index.
     zero_coupon_curve_mapper: dict[
