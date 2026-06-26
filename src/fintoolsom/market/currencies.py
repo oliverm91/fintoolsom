@@ -8,28 +8,58 @@ import numpy as np
 from ..rates import ZeroCouponCurve
 
 
+class LocalityCode(Enum):
+    US = "US"
+    EU = "EU"
+    GB = "GB"
+    JP = "JP"
+    CH = "CH"
+    CL = "CL"
+    BR = "BR"
+    RU = "RU"
+    CN = "CN"
+    IN = "IN"
+    AU = "AU"
+    NZ = "NZ"
+    HK = "HK"
+    SG = "SG"
+    KR = "KR"
+    TH = "TH"
+    CO = "CO"
+    MX = "MX"
+    BN = "BN"
+    SE = "SE"
+    NO = "NO"
+
+
 class Currency(Enum):
-    USD = "USD"
-    EUR = "EUR"
-    GBP = "GBP"
-    JPY = "JPY"
-    CHF = "CHF"
-    CLP = "CLP"
-    BRL = "BRL"
-    RUB = "RUB"
-    CNY = "CNY"
-    INR = "INR"
-    AUD = "AUD"
-    NZD = "NZD"
-    HKD = "HKD"
-    SGD = "SGD"
-    KRW = "KRW"
-    THB = "THB"
-    COP = "COP"
-    MXN = "MXN"
-    BND = "BND"
-    SEK = "SEK"
-    NOK = "NOK"
+    USD = ("USD", LocalityCode.US)
+    EUR = ("EUR", LocalityCode.EU)
+    GBP = ("GBP", LocalityCode.GB)
+    JPY = ("JPY", LocalityCode.JP)
+    CHF = ("CHF", LocalityCode.CH)
+    CLP = ("CLP", LocalityCode.CL)
+    BRL = ("BRL", LocalityCode.BR)
+    RUB = ("RUB", LocalityCode.RU)
+    CNY = ("CNY", LocalityCode.CN)
+    INR = ("INR", LocalityCode.IN)
+    AUD = ("AUD", LocalityCode.AU)
+    NZD = ("NZD", LocalityCode.NZ)
+    HKD = ("HKD", LocalityCode.HK)
+    SGD = ("SGD", LocalityCode.SG)
+    KRW = ("KRW", LocalityCode.KR)
+    THB = ("THB", LocalityCode.TH)
+    COP = ("COP", LocalityCode.CO)
+    MXN = ("MXN", LocalityCode.MX)
+    BND = ("BND", LocalityCode.BN)
+    SEK = ("SEK", LocalityCode.SE)
+    NOK = ("NOK", LocalityCode.NO)
+
+    def __new__(cls, code: str, locality: LocalityCode):
+        obj = object.__new__(cls)
+        obj._value_ = code
+        obj.locality = locality
+        return obj
 
 
 @dataclass(slots=True)
@@ -59,6 +89,12 @@ class CurrencyPair:
 
     def __eq__(self, other: Self) -> bool:
         return self.name == other.name
+
+
+@dataclass(slots=True)
+class Spot:
+    currency_pair: CurrencyPair
+    value: float
 
 
 @dataclass(slots=True)
