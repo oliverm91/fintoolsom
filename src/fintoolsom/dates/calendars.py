@@ -30,9 +30,12 @@ class Calendar:
                     original_categories = set(self._calendar.categories)
                     extra_categories = set(self._extra_categories)
                     categories = original_categories | extra_categories
-                    self._calendar = country_holidays(
-                        self.country, categories=categories
-                    )
+                    try:
+                        self._calendar = country_holidays(
+                            self.country, categories=categories
+                        )
+                    except ValueError:
+                        pass  # country does not support some extra categories; keep base calendar
 
             self._calendar.update(self.custom_holidays)
 
