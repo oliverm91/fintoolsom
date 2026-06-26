@@ -31,6 +31,7 @@ class CurrencyName(Enum):
     BND = "BND"
     SEK = "SEK"
     NOK = "NOK"
+    PEN = "PEN"
 
 
 _CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
@@ -55,6 +56,7 @@ _CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
     CurrencyName.BND: Locality.BN,
     CurrencyName.SEK: Locality.SE,
     CurrencyName.NOK: Locality.NO,
+    CurrencyName.PEN: Locality.PE,
 }
 
 
@@ -101,6 +103,7 @@ Currency.MXN = Currency(CurrencyName.MXN)
 Currency.BND = Currency(CurrencyName.BND)
 Currency.SEK = Currency(CurrencyName.SEK)
 Currency.NOK = Currency(CurrencyName.NOK)
+Currency.PEN = Currency(CurrencyName.PEN)
 
 
 @dataclass(slots=True)

@@ -3,7 +3,7 @@ from enum import Enum
 
 class Locality(Enum):
     US = "US"
-    EU = "EU"
+    EU = "DE"
     GB = "GB"
     JP = "JP"
     CH = "CH"
@@ -23,3 +23,4 @@ class Locality(Enum):
     BN = "BN"
     SE = "SE"
     NO = "NO"
+    PE = "PE"
