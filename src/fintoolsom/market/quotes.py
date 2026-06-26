@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field, KW_ONLY
 from enum import Enum
 
-from .currencies import Currency, CurrencyPair, Spot
+from .currencies import Currency, CurrencyPair, FX_Rate
 from .index import Index
 from ..rates import Rate
 
@@ -28,13 +28,13 @@ class ForwardQuote:
                 f"points_divisor must be a positive integer. Got {self.points_divisor}."
             )
 
-    def to_outright(self, spot: Spot) -> float:
+    def to_outright(self, spot: FX_Rate) -> float:
         if self.quote_type == ForwardQuoteType.FINAL_PRICE:
             return self.value
         if spot.currency_pair == self.currency_pair:
             effective_spot = spot.value
         elif spot.currency_pair == self.currency_pair.invert():
-            effective_spot = 1.0 / spot.value
+            effective_spot = spot.invert().value
         else:
             raise ValueError(
                 f"Spot currency pair {spot.currency_pair} is incompatible with forward currency pair {self.currency_pair}."

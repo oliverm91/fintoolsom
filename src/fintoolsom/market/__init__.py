@@ -1,4 +1,4 @@
-from .currencies import CurrencyName, Currency, CurrencyPair, Spot
+from .currencies import CurrencyName, Currency, CurrencyPair, FX_Rate
 from .index import Index, InterestIndex, OvernightRateIndex, OvernightPriceIndex, TermRateIndex
 from .localities import Locality
 from .market import Market

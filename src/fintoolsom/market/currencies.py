@@ -133,12 +133,6 @@ class CurrencyPair:
 
 
 @dataclass(slots=True)
-class Spot:
-    currency_pair: CurrencyPair
-    value: float
-
-
-@dataclass(slots=True)
 class FX_Rate:
     currency_pair: CurrencyPair
     value: float
