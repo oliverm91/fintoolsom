@@ -1,4 +1,4 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, KW_ONLY
 from enum import Enum
 
@@ -51,6 +51,47 @@ class ForwardPointsQuote(ForwardQuote):
                 f"Spot currency pair {spot.currency_pair} is incompatible with forward currency pair {self.currency_pair}."
             )
         return effective_spot + self.value / self.points_divisor
+
+
+# ── UF Forward Quotes ──────────────────────────────────────────────────────
+
+@dataclass
+class ForwardUFQuote(ABC):
+    """Base for Chilean UF (Unidad de Fomento) forward quotes. The UF is not a
+    currency, so — unlike the FX :class:`ForwardQuote` family — these carry no
+    ``CurrencyPair``; the spot they resolve against is the current UF level
+    (CLP per UF) passed as a plain float. ``to_outright`` returns the forward UF
+    level (CLP per UF)."""
+    value: float
+    locality: Locality = field(default=Locality.CL)
+
+    @abstractmethod
+    def to_outright(self, spot_uf: float) -> float:
+        ...
+
+
+@dataclass
+class ForwardUFPriceQuote(ForwardUFQuote):
+    """UF forward quoted as the outright forward UF level (CLP per UF)."""
+
+    def to_outright(self, spot_uf: float) -> float:
+        return self.value
+
+
+@dataclass
+class ForwardUFPointsQuote(ForwardUFQuote):
+    """UF forward quoted as points over the spot UF: outright = spot_uf + value / divisor.
+    The points represent the UF reajuste (expected inflation) priced over the period."""
+    points_divisor: int = field(default=1)
+
+    def __post_init__(self):
+        if self.points_divisor <= 0:
+            raise ValueError(
+                f"points_divisor must be a positive integer. Got {self.points_divisor}."
+            )
+
+    def to_outright(self, spot_uf: float) -> float:
+        return spot_uf + self.value / self.points_divisor
 
 
 # ── Swap Quotes ────────────────────────────────────────────────────────────
