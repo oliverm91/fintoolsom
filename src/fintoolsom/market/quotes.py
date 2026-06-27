@@ -1,36 +1,47 @@
+from abc import abstractmethod
 from dataclasses import dataclass, field, KW_ONLY
 from enum import Enum
 
 from .currencies import Currency, CurrencyPair, FX_Rate
-from .index import Index
+from .localities import Locality
+from .index import InterestIndex
 from ..rates import Rate
 
 
 # ── Forward Quotes ─────────────────────────────────────────────────────────
 
-class ForwardQuoteType(Enum):
-    FINAL_PRICE = "FINAL_PRICE"
-    FORWARD_POINTS = "FORWARD_POINTS"
-
-
 @dataclass
 class ForwardQuote:
     currency_pair: CurrencyPair
     value: float
-    quote_type: ForwardQuoteType
-    # Only for FORWARD_POINTS: forward_price = spot + value / points_divisor.
-    # Common values: 1, 100, 10000 (pips for most FX pairs).
+    locality: Locality = field(default=None)
+
+    @abstractmethod
+    def to_outright(self, spot: FX_Rate) -> float:
+        pass
+
+
+@dataclass
+class ForwardPriceQuote(ForwardQuote):
+    """Forward quoted as a final outright price (e.g. UF forwards)."""
+
+    def to_outright(self, spot: FX_Rate) -> float:
+        return self.value
+
+
+@dataclass
+class ForwardPointsQuote(ForwardQuote):
+    """Forward quoted as points added to spot. outright = spot + value / points_divisor."""
+    # Common divisors: 1, 100, 10000 (pips for most FX pairs).
     points_divisor: int = field(default=1)
 
     def __post_init__(self):
-        if self.quote_type == ForwardQuoteType.FORWARD_POINTS and self.points_divisor <= 0:
+        if self.points_divisor <= 0:
             raise ValueError(
                 f"points_divisor must be a positive integer. Got {self.points_divisor}."
             )
 
     def to_outright(self, spot: FX_Rate) -> float:
-        if self.quote_type == ForwardQuoteType.FINAL_PRICE:
-            return self.value
         if spot.currency_pair == self.currency_pair:
             effective_spot = spot.value
         elif spot.currency_pair == self.currency_pair.invert():
@@ -77,7 +88,7 @@ class FixedLegSpec(LegSpec):
 
 @dataclass
 class FloatingLegSpec(LegSpec):
-    index_name: str
+    index: InterestIndex
     spread: BasisPoints = field(default=None)
 
 
@@ -85,13 +96,15 @@ class FloatingLegSpec(LegSpec):
 class SwapQuote:
     """Base class for swap quotes. collateral_index=None means uncollateralised."""
     quoted_side: QuotedSide
+    locality: Locality = field(default=None)
     _: KW_ONLY
-    collateral_index: Index = field(default=None)
+    collateral_index: InterestIndex = field(default=None)
 
 
 @dataclass
 class IRSQuote(SwapQuote):
     """IRS or OIS: fixed vs floating leg, same currency. Fixed rate is the quoted value."""
+    _: KW_ONLY
     fixed_leg: FixedLegSpec
     floating_leg: FloatingLegSpec
 
@@ -106,6 +119,7 @@ class IRSQuote(SwapQuote):
 @dataclass
 class IRBasisQuote(SwapQuote):
     """Float vs float basis swap, same currency. The spread on the quoted_side leg is the quoted value."""
+    _: KW_ONLY
     receive_leg: FloatingLegSpec
     pay_leg: FloatingLegSpec
 
@@ -120,6 +134,7 @@ class IRBasisQuote(SwapQuote):
 @dataclass
 class CrossCurrencyFixedFloatQuote(SwapQuote):
     """Fixed vs floating cross-currency swap. Legs must be in different currencies."""
+    _: KW_ONLY
     fixed_leg: FixedLegSpec
     floating_leg: FloatingLegSpec
 
@@ -133,6 +148,7 @@ class CrossCurrencyFixedFloatQuote(SwapQuote):
 @dataclass
 class CrossCurrencyFloatFloatQuote(SwapQuote):
     """Float vs float cross-currency swap. Legs must be in different currencies."""
+    _: KW_ONLY
     receive_leg: FloatingLegSpec
     pay_leg: FloatingLegSpec
 

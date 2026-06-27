@@ -107,18 +107,17 @@ class IndexedSwapCoupon(FloatingRateSwapCoupon):
         index_curve = market.get_zero_coupon_curve(
             self.currency, index_name=self.index_name
         )
-        market_date_index = market.get_index(market.t, self.index_name).value
+        index_history = market.get_index(self.index_name)
+        market_date_index = index_history.get_value(market.t)
         if self.start_accrual_date <= market.t:
-            start_index = market.get_index(
-                self.start_accrual_date, self.index_name
-            ).value
+            start_index = index_history.get_value(self.start_accrual_date)
         else:
             start_index = market_date_index * index_curve.get_wf(
                 self.start_accrual_date
             )
 
         if self.end_accrual_date <= market.t:
-            end_index = market.get_index(self.end_accrual_date, self.index_name).value
+            end_index = index_history.get_value(self.end_accrual_date)
         else:
             end_index = market_date_index * index_curve.get_wf(self.end_accrual_date)
 

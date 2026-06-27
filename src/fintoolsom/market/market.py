@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
-from .index import Index, InterestIndex
+from .index_history import IndexHistory
 from .localities import Locality
 from ..rates import Rate, ZeroCouponCurve
 from ..dates import Calendar
@@ -12,7 +12,7 @@ from ..dates import Calendar
 class Market:
     t: date
     fx_history: dict[CurrencyPair, FX_RateData] = field(default_factory=dict)
-    indexes_history: dict[str, InterestIndex] = field(default_factory=dict)
+    indexes_history: dict[str, IndexHistory] = field(default_factory=dict)
     interest_rates: dict[str, dict[date, Rate]] = field(default_factory=dict)
     currency_pairs_history: dict[str, dict[date, CurrencyPair]] = field(
         default_factory=dict
@@ -67,10 +67,8 @@ class Market:
                     cp_date
                 ] = inverted_cp
 
-    def add_index(self, index: Index):
-        if index.name not in self.indexes_history:
-            self.indexes_history[index.name] = {}
-        self.indexes_history[index.name][index.index_date] = index
+    def add_index(self, history: IndexHistory):
+        self.indexes_history[history.name.upper()] = history
 
     def add_currency_pair(self, currency_pair: CurrencyPair):
         if currency_pair.name not in self.currency_pairs_history:
@@ -83,12 +81,10 @@ class Market:
             inverted_pair
         )
 
-    def get_index(self, t: date, name: str) -> Index:
+    def get_index(self, name: str) -> IndexHistory:
+        name = name.upper()
         if name in self.indexes_history:
-            if t in self.indexes_history[name]:
-                return self.indexes_history[name][t]
-            raise KeyError(f"Index {name} not found for date {t}.")
-
+            return self.indexes_history[name]
         raise KeyError(f"Index {name} not found in market.")
 
     def get_rate(self, t: date, name: str, use_closest_past_rate: bool = False) -> Rate:
