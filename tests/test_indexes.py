@@ -213,8 +213,36 @@ def test_overnight_interest_price_history_is_interest_history():
 
 
 # ---------------------------------------------------------------------------
-# UFIndexHistory (UF): monthly inflation from published levels
+# UFIndexHistory (UF): real values published by the Chilean SII for 2026
+#   UF daily series : https://www.sii.cl/valores_y_fechas/uf/uf2026.htm
+#   Monthly IPC/UTM : https://www.sii.cl/valores_y_fechas/utm/utm2026.htm
 # ---------------------------------------------------------------------------
+
+# UF on the 9th of each month, CLP per UF (the reajuste boundaries).
+UF_9 = {
+    date(2026, 1, 9): 39762.52,
+    date(2026, 2, 9): 39682.99,
+    date(2026, 3, 9): 39841.72,
+    date(2026, 4, 9): 39841.72,
+    date(2026, 5, 9): 40240.14,
+    date(2026, 6, 9): 40763.26,
+    date(2026, 7, 9): 40844.79,
+}
+
+# Official monthly CPI (IPC) variation, as a decimal.
+IPC_DEC_2025 = -0.002  # -0.2% (real deflation)
+IPC_MAR_2026 = 0.010   # +1.0%
+IPC_APR_2026 = 0.013   # +1.3%
+
+# Real published daily UF over the 9-Apr -> 9-May 2026 reajuste period (IPC Mar = +1.0%).
+UF_APR_MAY_2026 = {
+    date(2026, 4, 13): 39894.61,
+    date(2026, 4, 20): 39987.35,
+    date(2026, 4, 30): 40120.20,
+    date(2026, 5, 1): 40133.50,
+    date(2026, 5, 9): 40240.14,
+}
+
 
 def test_inflation_index_is_price_only_definition():
     # UF is inflation-linked but price-only: a PriceIndex that is NOT interest-bearing.
@@ -223,64 +251,57 @@ def test_inflation_index_is_price_only_definition():
 
 
 def test_inflation_history_is_price_history_without_accrual():
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): 37000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
     assert isinstance(h, PriceHistory)
     assert not isinstance(h, InterestHistory)
     assert not hasattr(h, "get_accrued_interest")
 
 
-def test_inflation_from_reajuste_boundaries():
-    # Inflation of Jan 2026 = UF(9-Mar-2026) / UF(9-Feb-2026) - 1.
-    h = UFIndexHistory(
-        index=UF,
-        values={date(2026, 2, 9): 37000.0, date(2026, 3, 9): 37185.0},
-    )
-    inflation = h.get_inflation(2026, 1)
-    assert math.isclose(inflation, 37185.0 / 37000.0 - 1.0, rel_tol=1e-12)
+def test_inflation_from_real_uf_levels():
+    # get_inflation(year, m) = UF(9 of m+2) / UF(9 of m+1) - 1, which recovers the
+    # official monthly IPC from the real SII UF series.
+    h = UFIndexHistory(index=UF, values=dict(UF_9))
+    assert round(h.get_inflation(2026, 3), 3) == IPC_MAR_2026  # +1.0%
+    assert round(h.get_inflation(2026, 4), 3) == IPC_APR_2026  # +1.3%
 
 
 def test_inflation_reads_future_boundary_level():
-    # The later boundary (9-Mar) can be a future date relative to "today"; as long
-    # as it is loaded (published in advance), get_inflation still resolves it.
-    h = UFIndexHistory(
-        index=UF,
-        values={date(2026, 2, 9): 37000.0, date(2026, 3, 9): 37111.0},
-    )
-    assert h.get_value(date(2026, 3, 9)) == 37111.0  # future print is held
-    assert math.isclose(h.get_inflation(2026, 1), 37111.0 / 37000.0 - 1.0, rel_tol=1e-12)
+    # The later boundary (9-Jun) is a future date relative to an early-May "today";
+    # once published (held in values) get_inflation still resolves against it.
+    h = UFIndexHistory(index=UF, values=dict(UF_9))
+    assert h.get_value(date(2026, 6, 9)) == 40763.26  # future print is held
+    assert round(h.get_inflation(2026, 4), 3) == IPC_APR_2026
 
 
 def test_inflation_rolls_year_for_december():
-    # Inflation of Dec 2026 spans 9-Jan-2027 → 9-Feb-2027.
-    h = UFIndexHistory(
-        index=UF,
-        values={date(2027, 1, 9): 38000.0, date(2027, 2, 9): 38152.0},
-    )
-    assert math.isclose(h.get_inflation(2026, 12), 38152.0 / 38000.0 - 1.0, rel_tol=1e-12)
+    # Real SII: Dec 2025 IPC = UF(9-Feb-2026) / UF(9-Jan-2026) - 1 = -0.2%, which
+    # exercises the year rollover (m = Dec 2025 -> m+1 = Jan, m+2 = Feb 2026).
+    h = UFIndexHistory(index=UF, values=dict(UF_9))
+    assert round(h.get_inflation(2025, 12), 3) == IPC_DEC_2025
 
 
 def test_inflation_missing_boundary_raises():
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): 37000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
     with pytest.raises(ValueError):
-        h.get_inflation(2026, 1)  # 9-Mar-2026 not loaded yet
+        h.get_inflation(2026, 3)  # 9-May-2026 not loaded yet
 
 
 def test_last_known_date_before_cpi_release():
-    # 8-Jun-2026 is a Tuesday (business day), so the release proxy is the 8th.
-    # On the 3rd (before release) only levels up to the 9th of the current month
-    # are known.
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): 37000.0})
+    # 8-Jun-2026 is a business day (no Chilean holiday), so the release proxy is the
+    # 8th. On the 3rd (before release) only levels up to the 9th of the current
+    # month are known.
+    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
     assert h.get_last_known_date(date(2026, 6, 3)) == date(2026, 6, 9)
 
 
 def test_last_known_date_after_cpi_release():
     # On/after the release, levels are known up to the 9th of next month.
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): 37000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
     assert h.get_last_known_date(date(2026, 6, 25)) == date(2026, 7, 9)
 
 
 def test_last_known_date_rolls_year_in_december():
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): 37000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
     assert h.get_last_known_date(date(2026, 12, 20)) == date(2027, 1, 9)
 
 
@@ -290,52 +311,55 @@ def test_last_known_date_uses_chilean_calendar():
     # we are already on/after release → horizon is next month. A weekends-only
     # calendar would place release on the 8th and keep us in the current month, so
     # this asserts the CL calendar (from CLP → Locality.CL) is in effect.
-    h = UFIndexHistory(index=UF, values={date(2026, 12, 9): 39000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
     assert h.get_last_known_date(date(2026, 12, 7)) == date(2027, 1, 9)
 
 
-def test_extend_with_cpi_matches_uf_formula():
-    h = UFIndexHistory(index=UF, values={date(2026, 3, 9): 37000.0})
-    h.extend_with_cpi(0.004)
-    # UF is published rounded to 2 decimals, so the formula output is exact.
-    # Worked example: UF(13-Mar) = round(UF(9-Mar)*(1.004)^(4/31), 2).
-    assert h.get_value(date(2026, 3, 13)) == round(37000.0 * 1.004 ** (4 / 31), 2)
-    # The next 9th carries the full month's variation, exactly.
-    assert h.get_value(date(2026, 4, 9)) == round(37000.0 * 1.004, 2)
-    assert h.get_value(date(2026, 4, 9)) == 37148.0
+def test_extend_with_cpi_matches_real_published_uf():
+    # From base UF(9-Apr-2026) with the March 2026 IPC (+1.0%), the projected daily
+    # UF must reproduce SII's published levels to the cent across 10-Apr..9-May.
+    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
+    h.extend_with_cpi(IPC_MAR_2026)
+    for d, real_uf in UF_APR_MAY_2026.items():
+        assert h.get_value(d) == real_uf
+    # Worked-example form: UF(13-Apr) = round(UF(9-Apr) * (1.01)^(4/30), 2).
+    assert h.get_value(date(2026, 4, 13)) == round(
+        UF_9[date(2026, 4, 9)] * 1.01 ** (4 / 30), 2
+    )
 
 
 def test_extend_with_cpi_rounds_to_two_decimals():
-    h = UFIndexHistory(index=UF, values={date(2026, 3, 9): 37123.45})
-    h.extend_with_cpi(0.0037)
-    for d, level in h.values.items():
+    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
+    h.extend_with_cpi(IPC_MAR_2026)
+    for level in h.values.values():
         assert round(level, 2) == level  # every projected level is a 2-dp value
 
 
 def test_extend_with_cpi_roundtrips_through_get_inflation():
-    # Base is 9-Mar, so the period applies February's CPI; once reached, the
-    # inflation of February reads back as that CPI.
-    h = UFIndexHistory(index=UF, values={date(2026, 3, 9): 37000.0})
-    h.extend_with_cpi(0.004)
-    assert math.isclose(h.get_inflation(2026, 2), 0.004, rel_tol=1e-9)
+    # Extending base 9-Apr with the March IPC fills through 9-May; March inflation
+    # then reads back (UF's 2-dp rounding keeps it within a cent of the input CPI).
+    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
+    h.extend_with_cpi(IPC_MAR_2026)
+    assert round(h.get_inflation(2026, 3), 3) == IPC_MAR_2026
 
 
 def test_extend_with_cpi_does_not_overwrite_known_levels():
-    known = 99999.0
+    sentinel = 99999.99
     h = UFIndexHistory(
-        index=UF, values={date(2026, 3, 9): 37000.0, date(2026, 3, 13): known}
+        index=UF,
+        values={date(2026, 4, 9): UF_9[date(2026, 4, 9)], date(2026, 4, 13): sentinel},
     )
-    h.extend_with_cpi(0.004)
-    assert h.get_value(date(2026, 3, 13)) == known
+    h.extend_with_cpi(IPC_MAR_2026)
+    assert h.get_value(date(2026, 4, 13)) == sentinel
 
 
 def test_extend_with_cpi_requires_a_ninth_base():
-    h = UFIndexHistory(index=UF, values={date(2026, 3, 10): 37000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 4, 10): UF_9[date(2026, 4, 9)]})
     with pytest.raises(ValueError):
-        h.extend_with_cpi(0.004)
+        h.extend_with_cpi(IPC_MAR_2026)
 
 
 def test_extend_with_cpi_rejects_non_ninth_base():
-    h = UFIndexHistory(index=UF, values={date(2026, 3, 9): 37000.0})
+    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
     with pytest.raises(ValueError):
-        h.extend_with_cpi(0.004, base_date=date(2026, 3, 10))
+        h.extend_with_cpi(IPC_MAR_2026, base_date=date(2026, 4, 10))
