@@ -10,7 +10,7 @@ from .conventions import FixedLegSpec, FloatingLegSpec
 from .currencies import CurrencyPair, FX_Rate
 from .localities import Locality
 from .index import InterestIndex
-from ..dates import AdjustmentDateConventionBase
+from ..dates import AdjustmentDateConventionBase, Calendar, ModifiedFollowingConvention
 from ..dates.term import Term
 
 if TYPE_CHECKING:
@@ -37,28 +37,71 @@ _NOTIONAL = 100.0
 class _ForwardQuote(_InstrumentQuote):
     currency_pair: CurrencyPair
     value: float
-    payment_date: date
     is_buy: bool
+    _: KW_ONLY
+    payment_date: date | None = field(default=None)
     locality: Locality | None = field(default=None)
     fixing_date: date | None = field(default=None)  # set → NDF, None → deliverable Forward
+    term: Term | None = field(default=None)
+    quote_date: date | None = field(default=None)
+    spot_lag: int = field(default=2)
+    payment_lag: int = field(default=1)
 
     @abstractmethod
     def to_outright(self, spot: FX_Rate) -> float:
         pass
 
+    def _effective_fixing_date(self) -> date | None:
+        if self.fixing_date is not None:
+            return self.fixing_date
+        if self.term is not None and self.quote_date is not None:
+            cal = self.term.adj_convention.calendar
+            spot_date = cal.add_business_days(self.quote_date, self.spot_lag)
+            return self.term.advance(spot_date)
+        return None
+
+    def _effective_payment_date(self) -> date:
+        if self.payment_date is not None:
+            return self.payment_date
+        fixing = self._effective_fixing_date()
+        if fixing is not None:
+            cal = self.term.adj_convention.calendar if self.term else Calendar()
+            return cal.add_business_days(fixing, self.payment_lag)
+        raise ValueError("Cannot derive payment_date: provide payment_date, or term+quote_date.")
+
 
 @dataclass
 class _ForwardUFQuote(_InstrumentQuote):
-    """UF forwards are always NDFs — fixing_date is required."""
+    """UF forwards are always NDFs — fixing_date or term+quote_date is required."""
     value: float
-    payment_date: date
     is_buy: bool
-    fixing_date: date
+    _: KW_ONLY
+    payment_date: date | None = field(default=None)
+    fixing_date: date | None = field(default=None)
     locality: Locality = field(default=Locality.CL)
+    term: Term | None = field(default=None)
+    quote_date: date | None = field(default=None)
+    spot_lag: int = field(default=2)
+    payment_lag: int = field(default=1)
 
     @abstractmethod
     def to_outright(self, spot_uf: float) -> float:
         ...
+
+    def _effective_fixing_date(self) -> date:
+        if self.fixing_date is not None:
+            return self.fixing_date
+        if self.term is not None and self.quote_date is not None:
+            cal = self.term.adj_convention.calendar
+            spot_date = cal.add_business_days(self.quote_date, self.spot_lag)
+            return self.term.advance(spot_date)
+        raise ValueError("UF forward requires fixing_date or term+quote_date.")
+
+    def _effective_payment_date(self) -> date:
+        if self.payment_date is not None:
+            return self.payment_date
+        cal = self.term.adj_convention.calendar if self.term else Calendar()
+        return cal.add_business_days(self._effective_fixing_date(), self.payment_lag)
 
 
 # ── Private: swap base class ───────────────────────────────────────────────
@@ -74,7 +117,9 @@ class _SwapQuote(_InstrumentQuote):
     quoted_side: QuotedSide
     term: Term
     quote_date: date
-    adj_convention: AdjustmentDateConventionBase
+    adj_convention: AdjustmentDateConventionBase = field(
+        default_factory=lambda: ModifiedFollowingConvention(Calendar())
+    )
     locality: Locality | None = field(default=None)
     _: KW_ONLY
     spot_lag: int = field(default=2)
@@ -87,7 +132,8 @@ class _SwapQuote(_InstrumentQuote):
     def _effective_start(self) -> date:
         if self.start_date is not None:
             return self.start_date
-        return self.adj_convention.calendar.add_business_days(self.quote_date, self.spot_lag)
+        cal = self.adj_convention.calendar
+        return cal.add_business_days(self.quote_date, self.spot_lag)
 
     def _effective_maturity(self, start: date) -> date:
         computed = self.term.advance(start)
@@ -113,15 +159,17 @@ class ForwardPriceQuote(_ForwardQuote):
 
     def get_instrument(self) -> Forward | NDF:
         from ..derivatives.forwards.forwards import Forward, NDF
-        if self.fixing_date is not None:
+        fixing = self._effective_fixing_date()
+        pmt = self._effective_payment_date()
+        if fixing is not None:
             return NDF(
                 notional=_NOTIONAL, strike=self.value,
-                payment_date=self.payment_date, is_buy=self.is_buy,
-                currency_pair=self.currency_pair, fixing_date=self.fixing_date,
+                payment_date=pmt, is_buy=self.is_buy,
+                currency_pair=self.currency_pair, fixing_date=fixing,
             )
         return Forward(
             notional=_NOTIONAL, strike=self.value,
-            payment_date=self.payment_date, is_buy=self.is_buy,
+            payment_date=pmt, is_buy=self.is_buy,
             currency_pair=self.currency_pair,
         )
 
@@ -153,15 +201,17 @@ class ForwardPointsQuote(_ForwardQuote):
     def get_instrument(self) -> Forward | NDF:
         from ..derivatives.forwards.forwards import Forward, NDF
         strike = self.to_outright(self.spot)
-        if self.fixing_date is not None:
+        fixing = self._effective_fixing_date()
+        pmt = self._effective_payment_date()
+        if fixing is not None:
             return NDF(
                 notional=_NOTIONAL, strike=strike,
-                payment_date=self.payment_date, is_buy=self.is_buy,
-                currency_pair=self.currency_pair, fixing_date=self.fixing_date,
+                payment_date=pmt, is_buy=self.is_buy,
+                currency_pair=self.currency_pair, fixing_date=fixing,
             )
         return Forward(
             notional=_NOTIONAL, strike=strike,
-            payment_date=self.payment_date, is_buy=self.is_buy,
+            payment_date=pmt, is_buy=self.is_buy,
             currency_pair=self.currency_pair,
         )
 
@@ -177,8 +227,8 @@ class ForwardUFPriceQuote(_ForwardUFQuote):
         from ..derivatives.forwards.forwards import NDF
         return NDF(
             notional=_NOTIONAL, strike=self.value,
-            payment_date=self.payment_date, is_buy=self.is_buy,
-            fixing_date=self.fixing_date, is_uf_indexed=True,
+            payment_date=self._effective_payment_date(), is_buy=self.is_buy,
+            fixing_date=self._effective_fixing_date(), is_uf_indexed=True,
         )
 
 
@@ -201,8 +251,8 @@ class ForwardUFPointsQuote(_ForwardUFQuote):
         from ..derivatives.forwards.forwards import NDF
         return NDF(
             notional=_NOTIONAL, strike=self.to_outright(self.spot_uf),
-            payment_date=self.payment_date, is_buy=self.is_buy,
-            fixing_date=self.fixing_date, is_uf_indexed=True,
+            payment_date=self._effective_payment_date(), is_buy=self.is_buy,
+            fixing_date=self._effective_fixing_date(), is_uf_indexed=True,
         )
 
 
