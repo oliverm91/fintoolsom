@@ -13,6 +13,7 @@ from .index_history import (
     OvernightHistory,
     PriceHistory,
     UFIndexHistory,
+    UFConvention,
     RateHistory,
     OvernightRateHistory,
     TermRateHistory,
@@ -21,19 +22,20 @@ from .index_history import (
 )
 from .localities import Locality
 from .market import Market
-from .quotes import (
-    ForwardQuote,
-    ForwardPriceQuote,
-    ForwardPointsQuote,
-    ForwardUFQuote,
-    ForwardUFPriceQuote,
-    ForwardUFPointsQuote,
+from .conventions import (
     PaymentFrequency,
-    QuotedSide,
     BasisPoints,
     LegSpec,
     FixedLegSpec,
     FloatingLegSpec,
+)
+from .quotes import (
+    ForwardQuote,
+    ForwardPriceQuote,
+    ForwardPointsQuote,
+    ForwardUFPriceQuote,
+    ForwardUFPointsQuote,
+    QuotedSide,
     SwapQuote,
     IRSQuote,
     IRBasisQuote,
