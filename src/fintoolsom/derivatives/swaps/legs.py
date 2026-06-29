@@ -1,168 +1,276 @@
-from abc import abstractmethod
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date
+from typing import cast
 
 import numpy as np
 
-from .coupons import (
-    SwapCouponBase,
-    FixedSwapCoupon,
-    FloatingRateSwapCoupon,
-    TermRateFloatingSwapCoupon,
-    OvernightRateFloatingSwapCoupon,
-)
-from ...market import Currency, Market, Locality
-from ...dates import Calendar
+from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
+from ...dates import AdjustmentDateConventionBase, DayCountConventionBase, ScheduleGenerator
+from ...market.currencies import Currency
+from ...market.index import Index, InterestIndex
+
+
+# Maps PaymentFrequency enum value to ScheduleGenerator frequency string.
+_FREQ_TO_TENOR: dict[str, str] = {
+    "MONTHLY": "1m",
+    "QUARTERLY": "3m",
+    "SEMIANNUAL": "6m",
+    "ANNUAL": "1y",
+}
 
 
 @dataclass
-class SwapLegBase:
-    notional: float
-    currency: Currency
-    coupons: list[SwapCouponBase]
+class SwapLeg:
+    """Base leg. Wraps a list of coupons and caches numpy arrays for performance."""
+    coupons: list
 
+    residuals: np.ndarray = field(init=False)
+    amortizations: np.ndarray = field(init=False)
+    time_fractions: np.ndarray = field(init=False)
     start_dates: list[date] = field(init=False)
     end_dates: list[date] = field(init=False)
     payment_dates: list[date] = field(init=False)
 
     def __post_init__(self):
-        self.coupons.sort(key=lambda coupon: coupon.start_accrual_date)
-        if self.coupons[0].residual != self.notional:
+        self.residuals = np.array([c.residual for c in self.coupons])
+        self.amortizations = np.array([c.amortization for c in self.coupons])
+        self.time_fractions = np.array([c.time_fraction for c in self.coupons])
+        self.start_dates = [c.start_date for c in self.coupons]
+        self.end_dates = [c.end_date for c in self.coupons]
+        self.payment_dates = [c.payment_date for c in self.coupons]
+
+    @property
+    def n_coupons(self) -> int:
+        return len(self.coupons)
+
+    @staticmethod
+    def _build_schedule(
+        start_date: date,
+        maturity_tenor: str,
+        payment_frequency: str,
+        adj_convention: AdjustmentDateConventionBase,
+        stub_first: bool,
+        long_stub: bool,
+    ) -> list[date]:
+        freq = _FREQ_TO_TENOR.get(payment_frequency)
+        if freq is None:
             raise ValueError(
-                f"Residual of first coupon must be equal to leg notional. First coupon residual: {self.coupons[0].residual}, Notional: {self.notional}"
+                f"Unsupported payment frequency '{payment_frequency}'. "
+                f"Supported values: {list(_FREQ_TO_TENOR)}"
             )
-        r = self.notional
-        for coupon in self.coupons:
-            if coupon.currency != self.currency:
-                raise ValueError(
-                    f"Currency of coupon must be equal to leg currency. Coupon currency: {coupon.currency}, Leg currency: {self.currency}"
-                )
-            if r != coupon.residual:
-                raise ValueError(
-                    "Coupon residual is not consistent with amortization of other coupons."
-                )
-            r -= coupon.amortization
-
-        self.start_dates = [coupon.start_accrual_date for coupon in self.coupons]
-        self.end_dates = [coupon.end_accrual_date for coupon in self.coupons]
-        self.payment_dates = [coupon.payment_date for coupon in self.coupons]
-
-    @abstractmethod
-    def get_flows(self, market: Market = None, locality: Locality = None) -> np.ndarray:
-        pass
-
-
-@dataclass
-class DefaultSwapLeg(SwapLegBase):
-    def __post_init__(self):
-        super().__post_init__()
-
-    def get_flows(self, market: Market = None, locality: Locality = None) -> np.ndarray:
-        return np.array(
-            [
-                coupon.get_flow_value(market=market, locality=locality)
-                for coupon in self.coupons
-                if coupon.payment_date > market.t
-            ]
+        return ScheduleGenerator.generate_schedule(
+            start_date=start_date,
+            maturity_tenor=maturity_tenor,
+            frequency_tenor=freq,
+            adj_conv=adj_convention,
+            stub_first=stub_first,
+            long_stub=long_stub,
         )
 
-
-@dataclass
-class FixedSwapLeg(SwapLegBase):
-    fixed_flows: np.ndarray = field(init=False)
-
-    def __post_init__(self):
-        super().__post_init__()
-        for coupon in self.coupons:
-            if not isinstance(coupon, FixedSwapCoupon):
-                raise TypeError(
-                    f"Coupons must be of type FixedSwapCoupon. Got {type(coupon)}"
-                )
-        self.fixed_flows = super().get_flows()
-
-    def get_flows(self, market: Market = None, locality: Locality = None) -> np.ndarray:
-        return self.fixed_flows
+    @staticmethod
+    def _tf(
+        day_count: type[DayCountConventionBase],
+        start: date,
+        end: date,
+        base: int,
+    ) -> float:
+        return float(day_count.get_time_fraction(start, end, base))
 
 
 @dataclass
-class FloatingSwapLeg(SwapLegBase):
-    index_name: str
-
-    amortizations: np.ndarray = field(init=False)
-    residuals: np.ndarray = field(init=False)
+class FixedLeg(SwapLeg):
+    """Fixed-rate leg. Flows are precomputed at construction."""
+    currency: Currency
+    rates: np.ndarray = field(init=False)
+    flows: np.ndarray = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
-        for coupon in self.coupons:
-            if not isinstance(coupon, FloatingRateSwapCoupon):
-                raise TypeError(
-                    f"Coupons must be of type FloatingRateSwapCoupon. Got {type(coupon)}"
-                )
+        self.rates = np.array([c.rate for c in self.coupons])
+        self.flows = np.array([c.flow for c in self.coupons])
 
-        self.amortizations = np.array([coupon.amortization for coupon in self.coupons])
-        self.residuals = np.array([coupon.residual for coupon in self.coupons])
-
-    def get_flows(self, **kwargs) -> np.ndarray:
-        market: Market = kwargs.get("market")
-        floating_curve = market.get_zero_coupon_curve(self.currency, self.index_name)
-        future_payment_coupons = [
-            coupon for coupon in self.coupons if coupon.payment_date > market.t
+    @classmethod
+    def from_term(
+        cls,
+        notional: float,
+        start_date: date,
+        maturity_tenor: str,
+        payment_frequency: str,
+        adj_convention: AdjustmentDateConventionBase,
+        day_count_convention: type[DayCountConventionBase],
+        year_fraction_base: int,
+        rate: float,
+        currency: Currency,
+        stub_first: bool = True,
+        long_stub: bool = False,
+    ) -> FixedLeg:
+        schedule = cls._build_schedule(
+            start_date, maturity_tenor, payment_frequency,
+            adj_convention, stub_first, long_stub,
+        )
+        n = len(schedule) - 1
+        coupons = [
+            FixedCoupon(
+                residual=notional,
+                amortization=0.0,
+                start_date=schedule[i],
+                end_date=schedule[i + 1],
+                payment_date=schedule[i + 1],
+                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                rate=rate,
+            )
+            for i in range(n)
         ]
-        start_ix = 1 if self.first_coupon_is_fixed(market.t) else 0
-        future_coupons_date_ix = future_payment_coupons + start_ix
-        future_interests = floating_curve.get_accrued_interests(
-            self.residuals[future_coupons_date_ix:],
-            self.start_dates[future_coupons_date_ix:],
-            self.end_dates[future_coupons_date_ix:],
+        return cls(coupons=coupons, currency=currency)
+
+
+@dataclass
+class FloatingLeg(SwapLeg):
+    """Floating-rate leg. Flow amounts are projected at valuation time using the index curve."""
+    index: InterestIndex
+    spread_bps: float = 0.0
+    spreads: np.ndarray = field(init=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.spreads = (self.spread_bps / 10_000) * self.time_fractions * self.residuals
+
+    @property
+    def currency(self) -> Currency:
+        # All concrete InterestIndex types also extend Index, which holds currency.
+        return cast(Index, self.index).currency  # type: ignore[return-value]
+
+
+@dataclass
+class TermRateLeg(FloatingLeg):
+    """Floating leg for a term-rate (IBOR-style) index. Stores per-coupon fixing dates."""
+    fixing_lag: int = 0
+    fixing_dates: list[date] = field(init=False)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.fixing_dates = [c.fixing_date for c in self.coupons]  # type: ignore[union-attr]
+
+    @classmethod
+    def from_term(
+        cls,
+        notional: float,
+        start_date: date,
+        maturity_tenor: str,
+        payment_frequency: str,
+        adj_convention: AdjustmentDateConventionBase,
+        day_count_convention: type[DayCountConventionBase],
+        year_fraction_base: int,
+        index: InterestIndex,
+        spread_bps: float = 0.0,
+        fixing_lag: int = 0,
+        stub_first: bool = True,
+        long_stub: bool = False,
+    ) -> TermRateLeg:
+        schedule = cls._build_schedule(
+            start_date, maturity_tenor, payment_frequency,
+            adj_convention, stub_first, long_stub,
         )
-        if start_ix == 1:
-            future_payment_coupons_ix = len(self.coupons) - len(future_payment_coupons)
-            current_coupon_flow = self.coupons[
-                future_payment_coupons_ix
-            ].get_flow_value(**kwargs)
-            current_coupon_interest = (
-                current_coupon_flow - self.amortizations[future_payment_coupons_ix]
+        calendar = adj_convention.calendar
+        n = len(schedule) - 1
+        coupons = [
+            TermRateCoupon(
+                residual=notional,
+                amortization=0.0,
+                start_date=schedule[i],
+                end_date=schedule[i + 1],
+                payment_date=schedule[i + 1],
+                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                spread_bps=spread_bps,
+                fixing_date=calendar.add_business_days(schedule[i], -fixing_lag),
             )
-            future_interests = np.insert(future_interests, 0, current_coupon_interest)
-
-        flows = self.amortizations[future_payment_coupons:] + future_interests
-        return flows
-
-    @abstractmethod
-    def first_coupon_is_fixed(self, t: date) -> bool:
-        pass
+            for i in range(n)
+        ]
+        return cls(coupons=coupons, index=index, spread_bps=spread_bps, fixing_lag=fixing_lag)
 
 
-class TermRateSwapLeg(FloatingSwapLeg):
-    def __post_init__(self):
-        super().__post_init__()
-        for c in self.coupons:
-            if not isinstance(c, TermRateFloatingSwapCoupon):
-                raise TypeError(
-                    f"Coupons must be of type TermRateFloatingSwapCoupon. Got {type(c)}"
-                )
+@dataclass
+class OvernightLeg(FloatingLeg):
+    """Floating leg for an overnight compounding (OIS-style) index."""
 
-    def first_coupon_is_fixed(self, t: date) -> bool:
-        return [c for c in self.coupons if c.payment_date > t][0].fixing_date <= t
-
-
-class OvernightRateSwapLeg(FloatingSwapLeg):
-    fixing_lag: int
-    calendar: Calendar
-
-    def __post_init__(self):
-        super().__post_init__()
-        for c in self.coupons:
-            if not isinstance(c, OvernightRateFloatingSwapCoupon):
-                raise TypeError(
-                    f"Coupons must be of type TermRateFloatingSwapCoupon. Got {type(c)}"
-                )
-
-    def first_coupon_is_fixed(self, t: date) -> bool:
-        fc: OvernightRateFloatingSwapCoupon = [
-            c for c in self.coupons if c.payment_date > t
-        ][0]
-        last_fixing_date = self.calendar.add_business_days(
-            fc.end_accrual_date, -self.fixing_lag
+    @classmethod
+    def from_term(
+        cls,
+        notional: float,
+        start_date: date,
+        maturity_tenor: str,
+        payment_frequency: str,
+        adj_convention: AdjustmentDateConventionBase,
+        day_count_convention: type[DayCountConventionBase],
+        year_fraction_base: int,
+        index: InterestIndex,
+        spread_bps: float = 0.0,
+        stub_first: bool = True,
+        long_stub: bool = False,
+    ) -> OvernightLeg:
+        schedule = cls._build_schedule(
+            start_date, maturity_tenor, payment_frequency,
+            adj_convention, stub_first, long_stub,
         )
-        return last_fixing_date <= t
+        n = len(schedule) - 1
+        coupons = [
+            OvernightCoupon(
+                residual=notional,
+                amortization=0.0,
+                start_date=schedule[i],
+                end_date=schedule[i + 1],
+                payment_date=schedule[i + 1],
+                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                spread_bps=spread_bps,
+            )
+            for i in range(n)
+        ]
+        return cls(coupons=coupons, index=index, spread_bps=spread_bps)
+
+
+@dataclass
+class XCCYFloatingLeg(FloatingLeg):
+    """Floating leg for a cross-currency swap. Each coupon carries an FX fixing date."""
+    fx_fixing_dates: list[date] | None = field(default=None)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.fx_fixing_dates is None:
+            self.fx_fixing_dates = list(self.end_dates)
+
+    @classmethod
+    def from_term(
+        cls,
+        notional: float,
+        start_date: date,
+        maturity_tenor: str,
+        payment_frequency: str,
+        adj_convention: AdjustmentDateConventionBase,
+        day_count_convention: type[DayCountConventionBase],
+        year_fraction_base: int,
+        index: InterestIndex,
+        spread_bps: float = 0.0,
+        stub_first: bool = True,
+        long_stub: bool = False,
+    ) -> XCCYFloatingLeg:
+        schedule = cls._build_schedule(
+            start_date, maturity_tenor, payment_frequency,
+            adj_convention, stub_first, long_stub,
+        )
+        n = len(schedule) - 1
+        coupons = [
+            XCCYCoupon(
+                residual=notional,
+                amortization=0.0,
+                start_date=schedule[i],
+                end_date=schedule[i + 1],
+                payment_date=schedule[i + 1],
+                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                spread_bps=spread_bps,
+                fx_fixing_date=schedule[i + 1],
+            )
+            for i in range(n)
+        ]
+        return cls(coupons=coupons, index=index, spread_bps=spread_bps)

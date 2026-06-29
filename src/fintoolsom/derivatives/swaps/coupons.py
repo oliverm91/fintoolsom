@@ -1,125 +1,52 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
-from ...dates import Calendar
-from ...market import Currency, Market, Locality
-
 
 @dataclass
-class SwapCouponBase(ABC):
+class SwapCoupon:
+    """Base payment unit. All fields are set at construction and treated as immutable."""
     residual: float
     amortization: float
-    start_accrual_date: date
-    end_accrual_date: date
-    currency: Currency
-
+    start_date: date
+    end_date: date
     payment_date: date
-
-    @abstractmethod
-    def get_flow_value(self, market: Market = None, locality: Locality = None) -> float:
-        pass
+    time_fraction: float
 
 
 @dataclass
-class FixedSwapCoupon(SwapCouponBase):
-    interest: float
+class FixedCoupon(SwapCoupon):
+    rate: float
+    flow: float = field(init=False)  # rate * time_fraction * residual + amortization
 
     def __post_init__(self):
-        self.flow = self.amortization + self.interest
-
-    def get_flow_value(self, market: Market = None, locality: Locality = None) -> float:
-        return self.flow
+        self.flow = self.rate * self.time_fraction * self.residual + self.amortization
 
 
 @dataclass
-class FloatingRateSwapCoupon(SwapCouponBase):
-    pass
+class FloatingCoupon(SwapCoupon):
+    spread_bps: float = 0.0
 
 
 @dataclass
-class TermRateFloatingSwapCoupon(FloatingRateSwapCoupon):
-    ibor_rate_name: str
-    fixing_date: str
+class TermRateCoupon(FloatingCoupon):
+    """Floating coupon for a term-rate (IBOR-style) index. fixing_date defaults to start_date."""
+    fixing_date: date | None = field(default=None)
 
     def __post_init__(self):
-        if self.fixing_date > self.start_accrual_date:
-            raise ValueError(
-                f"Fixing date cannot be greater than start accrual date. Fixing date: {self.fixing_date}, Start accrual date: {self.start_accrual_date}"
-            )
-
-    def get_flow_value(self, market: Market = None, locality: Locality = None) -> float:
-        if self.fixing_date <= market.t:
-            rate = market.get_rate(self.fixing_date, self.ibor_rate_name)
-            return self.amortization + rate.get_accrued_interest(
-                self.residual, self.start_accrual_date, self.end_accrual_date
-            )
-        else:
-            currency_index_curve = market.get_zero_coupon_curve(
-                self.currency, index_name=self.ibor_rate_name
-            )
-            return self.amortization + currency_index_curve.get_accrued_interest(
-                self.residual, self.start_accrual_date, self.end_accrual_date
-            )
+        if self.fixing_date is None:
+            self.fixing_date = self.start_date
 
 
 @dataclass
-class OvernightRateFloatingSwapCoupon(FloatingRateSwapCoupon):
-    rate_name: str
-
-    def get_flow_value(
-        self,
-        calendar: Calendar = None,
-        fixing_lag: int = 0,
-        market: Market = None,
-        locality: Locality = None,
-    ) -> float:
-        if calendar is None:
-            calendar = Calendar()
-
-        t = self.start_accrual_date
-        aux_index = 100
-        # Accrue with past data
-        while t < self.end_accrual_date:
-            fixing_date = calendar.add_business_days(t, -fixing_lag)
-            next_t = min(calendar.add_business_days(t, 1), self.end_accrual_date)
-            if fixing_date <= market.t:
-                rate = market.get_rate(fixing_date, self.rate_name)
-                aux_index *= rate.get_wealth_factor(t, next_t)
-            t = next_t
-
-        # Now t is >= self.end_accrual_date
-        rate_index = market.interest_rate_to_index_map[self.rate_name]
-        index_curve = market.get_zero_coupon_curve(self.currency, index_name=rate_index)
-        aux_index *= index_curve.get_wf(self.end_accrual_date)
-
-        interest = (aux_index / 100 - 1) * self.residual
-
-        return self.amortization + interest
+class OvernightCoupon(FloatingCoupon):
+    """Floating coupon for an overnight compounding (OIS-style) index."""
 
 
 @dataclass
-class IndexedSwapCoupon(FloatingRateSwapCoupon):
-    index_name: str
-    payment_date: date
+class XCCYCoupon(FloatingCoupon):
+    """Floating coupon for a cross-currency leg. fx_fixing_date defaults to end_date."""
+    fx_fixing_date: date | None = field(default=None)
 
-    def get_flow_value(self, market: Market = None, locality: Locality = None) -> float:
-        index_curve = market.get_zero_coupon_curve(
-            self.currency, index_name=self.index_name
-        )
-        index_history = market.get_index(self.index_name)
-        market_date_index = index_history.get_value(market.t)
-        if self.start_accrual_date <= market.t:
-            start_index = index_history.get_value(self.start_accrual_date)
-        else:
-            start_index = market_date_index * index_curve.get_wf(
-                self.start_accrual_date
-            )
-
-        if self.end_accrual_date <= market.t:
-            end_index = index_history.get_value(self.end_accrual_date)
-        else:
-            end_index = market_date_index * index_curve.get_wf(self.end_accrual_date)
-
-        interest = self.residual * (end_index / start_index - 1)
-        return self.amortization + interest
+    def __post_init__(self):
+        if self.fx_fixing_date is None:
+            self.fx_fixing_date = self.end_date
