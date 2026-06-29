@@ -17,6 +17,7 @@ from fintoolsom.market import (
     PriceHistory,
     OvernightInterestPriceHistory,
     UFIndexHistory,
+    UFConvention,
 )
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
 from fintoolsom.dates import ActualDayCountConvention
@@ -363,3 +364,72 @@ def test_extend_with_cpi_rejects_non_ninth_base():
     h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
     with pytest.raises(ValueError):
         h.extend_with_cpi(IPC_MAR_2026, base_date=date(2026, 4, 10))
+
+
+# ---------------------------------------------------------------------------
+# UFConvention: pure UF / CPI formulas (real SII April 2026 levels)
+# ---------------------------------------------------------------------------
+
+# Extra real published UF levels inside the 9-Apr -> 9-May 2026 reajuste period.
+UF_21_APR_2026 = 40000.61
+UF_8_MAY_2026 = 40226.79
+UF_20_MAY_2026 = 40424.99
+
+
+def test_uf_convention_reajuste_matches_published_level():
+    # round(UF(9-Apr) * 1.01^(4/30), 2) == real UF(13-Apr-2026).
+    assert UFConvention.reajuste(UF_9[date(2026, 4, 9)], IPC_MAR_2026, 4, 30) == 39894.61
+
+
+def test_uf_convention_implied_monthly_cpi_full_period():
+    cpi = UFConvention.implied_monthly_cpi(UF_9[date(2026, 4, 9)], UF_9[date(2026, 5, 9)])
+    assert round(cpi, 3) == IPC_MAR_2026
+
+
+def test_implied_cpi_between_ninth_to_mid_month():
+    # 9-Apr (base) to 21-Apr — partial period within March reajuste -> March IPC.
+    cpi = UFConvention.implied_monthly_cpi_between(
+        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 4, 21), UF_21_APR_2026
+    )
+    assert round(cpi, 3) == IPC_MAR_2026
+
+
+def test_implied_cpi_between_ninth_and_eighth_of_next_month():
+    # 9-Apr and 8-May — still one reajuste period (boundary is the 9th) -> March IPC.
+    cpi = UFConvention.implied_monthly_cpi_between(
+        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 8), UF_8_MAY_2026
+    )
+    assert round(cpi, 3) == IPC_MAR_2026
+
+
+def test_implied_cpi_between_full_period_equals_simple_ratio():
+    # 9-Apr to 9-May is exactly one period: scaling exponent is 1, so it reduces
+    # to end/start - 1.
+    cpi = UFConvention.implied_monthly_cpi_between(
+        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 9), UF_9[date(2026, 5, 9)]
+    )
+    assert math.isclose(
+        cpi, UF_9[date(2026, 5, 9)] / UF_9[date(2026, 4, 9)] - 1.0, rel_tol=1e-12
+    )
+
+
+def test_implied_cpi_between_raises_across_reajuste_boundary():
+    # 9-Apr (base) and 20-May cross the 9-May boundary: compounds two months' CPI.
+    with pytest.raises(ValueError):
+        UFConvention.implied_monthly_cpi_between(
+            date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 20), UF_20_MAY_2026
+        )
+
+
+def test_implied_cpi_between_requires_distinct_dates():
+    with pytest.raises(ValueError):
+        UFConvention.implied_monthly_cpi_between(
+            date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 4, 9), UF_9[date(2026, 4, 9)]
+        )
+
+
+def test_implied_cpi_between_requires_base_on_ninth():
+    with pytest.raises(ValueError, match="base_9 must be the 9th"):
+        UFConvention.implied_monthly_cpi_between(
+            date(2026, 4, 13), 39894.61, date(2026, 4, 21), UF_21_APR_2026
+        )

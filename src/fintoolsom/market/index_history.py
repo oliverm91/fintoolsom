@@ -21,6 +21,14 @@ def _shift_month(year: int, month: int, k: int) -> tuple[int, int]:
     return index // 12, index % 12 + 1
 
 
+def _base_ninth(d: date) -> date:
+    """The 9th that anchors the reajuste period containing ``d`` (a date on the 9th
+    is treated as the start of its own period)."""
+    if d.day >= 9:
+        return date(d.year, d.month, 9)
+    return date(*_shift_month(d.year, d.month, -1), 9)
+
+
 def _resolve_overnight_calendar(provided: Calendar, currency: Currency) -> Calendar:
     """Combine a user-provided calendar with the currency's locality calendar.
     With no currency, fall back to a bare (weekends-only) calendar."""
@@ -90,6 +98,59 @@ class PriceHistory(IndexHistory):
         raise KeyError(f"Date {t} not found in {self.name} price history.")
 
 
+class UFConvention:
+    """Stateless Chilean UF / CPI mechanics — holds no data.
+
+    Within a reajuste period (day 10 of a month to day 9 of the next, anchored at
+    the 9th) the UF grows geometrically by that period's monthly CPI, rounded to
+    2 decimals (centavos)."""
+
+    @staticmethod
+    def reajuste(base_level: float, cpi: float, elapsed_days: int, period_days: int) -> float:
+        """UF level ``elapsed_days`` after the base 9th, applying monthly ``cpi``
+        geometrically over a ``period_days``-day reajuste window; rounded to 2 dp."""
+        return round(base_level * (1.0 + cpi) ** (elapsed_days / period_days), 2)
+
+    @staticmethod
+    def implied_monthly_cpi(level_start: float, level_end: float) -> float:
+        """Monthly CPI implied by two consecutive 9th-day UF levels (a full period)."""
+        return level_end / level_start - 1.0
+
+    @staticmethod
+    def implied_monthly_cpi_between(
+        base_9: date,
+        base_level: float,
+        end_date: date,
+        end_level: float,
+    ) -> float:
+        """Monthly CPI implied by the UF level on a reajuste base date (the 9th of a
+        month) and the level on any later date within the same reajuste period (up to
+        and including the 9th of the next month). The partial-period growth is scaled
+        back to a full month::
+
+            cpi = (end_level / base_level) ** (period_days / elapsed_days) - 1
+
+        ``base_9`` must be the 9th of a month; using a mid-period date as the base
+        introduces rounding-precision loss in the exponent.
+
+        Raises ``ValueError`` if ``end_date`` lies beyond the next reajuste boundary,
+        because the growth across it compounds two different months' CPI."""
+        if base_9.day != 9:
+            raise ValueError(f"base_9 must be the 9th of a month; got {base_9}.")
+        if base_9 == end_date:
+            raise ValueError("base_9 and end_date must differ.")
+        next_ninth = date(*_shift_month(base_9.year, base_9.month, 1), 9)
+        if end_date > next_ninth:
+            raise ValueError(
+                f"{base_9} and {end_date} straddle the reajuste boundary "
+                f"{next_ninth}; the implied figure would compound more than one "
+                f"month's CPI."
+            )
+        period_days = (next_ninth - base_9).days
+        elapsed_days = (end_date - base_9).days
+        return (end_level / base_level) ** (period_days / elapsed_days) - 1.0
+
+
 @dataclass
 class UFIndexHistory(PriceHistory):
     """History of the Chilean UF (Unidad de Fomento) — daily price levels (CLP per
@@ -128,7 +189,7 @@ class UFIndexHistory(PriceHistory):
         published."""
         start = self._boundary_level(*_shift_month(year, month, 1))
         end = self._boundary_level(*_shift_month(year, month, 2))
-        return end / start - 1.0
+        return UFConvention.implied_monthly_cpi(start, end)
 
     def _boundary_level(self, year: int, month: int) -> float:
         d = date(year, month, 9)
@@ -191,8 +252,7 @@ class UFIndexHistory(PriceHistory):
         while d <= next_ninth:
             if d not in self.values:
                 elapsed = (d - base_date).days
-                # The UF is published rounded to 2 decimals (centavos).
-                self.values[d] = round(base_uf * (1.0 + cpi) ** (elapsed / period_days), 2)
+                self.values[d] = UFConvention.reajuste(base_uf, cpi, elapsed, period_days)
             d += timedelta(days=1)
 
     def _last_known_ninth(self) -> date:
