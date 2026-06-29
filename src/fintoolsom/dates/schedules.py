@@ -81,6 +81,7 @@ class ScheduleGenerator:
         frequency_tenor: str,
         adj_conv: AdjustmentDateConventionBase,
         maturity_adj_conv: AdjustmentDateConventionBase = None,
+        end_date: date | None = None,
         stub_first: bool = True,
         long_stub: bool = True,
     ) -> list[date]:
@@ -91,11 +92,15 @@ class ScheduleGenerator:
                 f"Frequency tenor accepted values are: {accepted_frequency_tenors}."
             )
         freq_tenor = Tenor(frequency_tenor, adj_conv)
-        if maturity_adj_conv is None:
-            maturity_adj_conv = adj_conv
-        tenor = Tenor(maturity_tenor, maturity_adj_conv)
-        umat = tenor.get_unadjusted_maturity(start_date)
-        adj_mat = maturity_adj_conv.adjust(umat)
+        if end_date is not None:
+            umat = end_date
+            adj_mat = end_date
+        else:
+            if maturity_adj_conv is None:
+                maturity_adj_conv = adj_conv
+            tenor = Tenor(maturity_tenor, maturity_adj_conv)
+            umat = tenor.get_unadjusted_maturity(start_date)
+            adj_mat = maturity_adj_conv.adjust(umat)
 
         if stub_first:
             starting_date = umat

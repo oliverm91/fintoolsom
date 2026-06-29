@@ -1,0 +1,206 @@
+[
+  {
+    "quoteType": "IRSQuote",
+    "comment": "CLP OIS — receive fixed vs CAMARA, 2Y",
+    "quoted_side": "RECEIVE",
+    "term": {"value": 2, "unit": "Y", "adj_convention": "ModifiedFollowingConvention", "calendar": "CL"},
+    "quote_date": "2026-06-29",
+    "spot_lag": 2,
+    "stub_first": true,
+    "long_stub": false,
+    "collateral_index": null,
+    "fixed_leg": {
+      "currency": "CLP",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "CL",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "rate": 0.0525
+    },
+    "floating_leg": {
+      "currency": "CLP",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "CL",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "CAMARA",
+      "spread_bps": 0.0
+    }
+  },
+  {
+    "quoteType": "IRSQuote",
+    "comment": "USD IRS — pay fixed vs SOFR, 5Y",
+    "quoted_side": "PAY",
+    "term": {"value": 5, "unit": "Y", "adj_convention": "ModifiedFollowingConvention", "calendar": "US"},
+    "quote_date": "2026-06-29",
+    "spot_lag": 2,
+    "stub_first": true,
+    "long_stub": false,
+    "collateral_index": "SOFR",
+    "fixed_leg": {
+      "currency": "USD",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "US",
+      "day_count_convention": "TF_30_360BondBasis",
+      "year_fraction_base": 360,
+      "rate": 0.0435
+    },
+    "floating_leg": {
+      "currency": "USD",
+      "payment_frequency": "QUARTERLY",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "US",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "SOFR",
+      "spread_bps": 0.0
+    }
+  },
+  {
+    "quoteType": "IRBasisQuote",
+    "comment": "CLP basis — receive CAMARA vs pay TAB, 3Y",
+    "quoted_side": "RECEIVE",
+    "term": "3Y",
+    "quote_date": "2026-06-29",
+    "spot_lag": 2,
+    "stub_first": true,
+    "long_stub": false,
+    "collateral_index": null,
+    "receive_leg": {
+      "currency": "CLP",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "CL",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "CAMARA",
+      "spread_bps": 0.0
+    },
+    "pay_leg": {
+      "currency": "CLP",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "CL",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "TAB180",
+      "spread_bps": -12.5
+    }
+  },
+  {
+    "quoteType": "CrossCurrencyFixedFloatQuote",
+    "comment": "CLP fixed vs USD SOFR, XCCY, 3Y — typical Chilean bank trade",
+    "quoted_side": "PAY",
+    "term": "3Y",
+    "quote_date": "2026-06-29",
+    "spot_lag": 2,
+    "stub_first": true,
+    "long_stub": false,
+    "collateral_index": "SOFR",
+    "fixed_leg": {
+      "currency": "CLP",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "CL",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "rate": 0.0560
+    },
+    "floating_leg": {
+      "currency": "USD",
+      "payment_frequency": "QUARTERLY",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "US",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "SOFR",
+      "spread_bps": 45.0
+    }
+  },
+  {
+    "quoteType": "CrossCurrencyFloatFloatQuote",
+    "comment": "CLP CAMARA vs USD SOFR, XCCY basis, 5Y",
+    "quoted_side": "RECEIVE",
+    "term": {"value": 5, "unit": "Y", "adj_convention": "ModifiedFollowingConvention", "calendar": "CL"},
+    "quote_date": "2026-06-29",
+    "spot_lag": 2,
+    "stub_first": true,
+    "long_stub": false,
+    "collateral_index": "SOFR",
+    "receive_leg": {
+      "currency": "CLP",
+      "payment_frequency": "SEMIANNUAL",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "CL",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "CAMARA",
+      "spread_bps": 0.0
+    },
+    "pay_leg": {
+      "currency": "USD",
+      "payment_frequency": "QUARTERLY",
+      "adj_convention": "ModifiedFollowingConvention",
+      "calendar": "US",
+      "day_count_convention": "TF_Actual360",
+      "year_fraction_base": 360,
+      "index": "SOFR",
+      "spread_bps": -38.0
+    }
+  },
+  {
+    "quoteType": "ForwardPriceQuote",
+    "comment": "USD/CLP NDF outright — 3M",
+    "currency_pair": ["USD", "CLP"],
+    "value": 965.50,
+    "payment_date": "2026-10-01",
+    "is_buy": true,
+    "fixing_date": "2026-09-29",
+    "locality": "CL"
+  },
+  {
+    "quoteType": "ForwardPriceQuote",
+    "comment": "USD/CLP deliverable forward — 6M",
+    "currency_pair": ["USD", "CLP"],
+    "value": 980.00,
+    "payment_date": "2027-01-02",
+    "is_buy": false,
+    "fixing_date": null,
+    "locality": "CL"
+  },
+  {
+    "quoteType": "ForwardPointsQuote",
+    "comment": "USD/CLP forward points — 1M (points_divisor=1 → CLP pips)",
+    "currency_pair": ["USD", "CLP"],
+    "value": 14.75,
+    "payment_date": "2026-07-31",
+    "is_buy": true,
+    "fixing_date": "2026-07-29",
+    "locality": "CL",
+    "spot": 950.25,
+    "points_divisor": 1
+  },
+  {
+    "quoteType": "ForwardUFPriceQuote",
+    "comment": "UF NDF outright — Sep 2026",
+    "value": 39850.00,
+    "payment_date": "2026-10-01",
+    "is_buy": true,
+    "fixing_date": "2026-09-09",
+    "locality": "CL"
+  },
+  {
+    "quoteType": "ForwardUFPointsQuote",
+    "comment": "UF NDF quoted as points over spot — 3M",
+    "value": 320.00,
+    "payment_date": "2026-10-01",
+    "is_buy": false,
+    "fixing_date": "2026-09-09",
+    "locality": "CL",
+    "spot_uf": 39530.00,
+    "points_divisor": 1
+  }
+]

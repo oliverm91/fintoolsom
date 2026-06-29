@@ -29,14 +29,13 @@ from .conventions import (
     FixedLegSpec,
     FloatingLegSpec,
 )
+from ..dates.term import TermUnit, Term
 from .quotes import (
-    ForwardQuote,
     ForwardPriceQuote,
     ForwardPointsQuote,
     ForwardUFPriceQuote,
     ForwardUFPointsQuote,
     QuotedSide,
-    SwapQuote,
     IRSQuote,
     IRBasisQuote,
     CrossCurrencyFixedFloatQuote,

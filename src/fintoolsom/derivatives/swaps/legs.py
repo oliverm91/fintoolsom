@@ -8,6 +8,7 @@ import numpy as np
 
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
 from ...dates import AdjustmentDateConventionBase, DayCountConventionBase, ScheduleGenerator
+from ...dates.term import Term
 from ...market.currencies import Currency
 from ...market.index import Index, InterestIndex
 
@@ -48,11 +49,12 @@ class SwapLeg:
     @staticmethod
     def _build_schedule(
         start_date: date,
-        maturity_tenor: str,
+        term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
         stub_first: bool,
         long_stub: bool,
+        maturity_date: date | None = None,
     ) -> list[date]:
         freq = _FREQ_TO_TENOR.get(payment_frequency)
         if freq is None:
@@ -62,9 +64,11 @@ class SwapLeg:
             )
         return ScheduleGenerator.generate_schedule(
             start_date=start_date,
-            maturity_tenor=maturity_tenor,
+            maturity_tenor=str(term),
             frequency_tenor=freq,
             adj_conv=adj_convention,
+            maturity_adj_conv=term.adj_convention,
+            end_date=maturity_date,
             stub_first=stub_first,
             long_stub=long_stub,
         )
@@ -96,7 +100,7 @@ class FixedLeg(SwapLeg):
         cls,
         notional: float,
         start_date: date,
-        maturity_tenor: str,
+        term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
         day_count_convention: type[DayCountConventionBase],
@@ -105,10 +109,11 @@ class FixedLeg(SwapLeg):
         currency: Currency,
         stub_first: bool = True,
         long_stub: bool = False,
+        maturity_date: date | None = None,
     ) -> FixedLeg:
         schedule = cls._build_schedule(
-            start_date, maturity_tenor, payment_frequency,
-            adj_convention, stub_first, long_stub,
+            start_date, term, payment_frequency,
+            adj_convention, stub_first, long_stub, maturity_date,
         )
         n = len(schedule) - 1
         coupons = [
@@ -158,7 +163,7 @@ class TermRateLeg(FloatingLeg):
         cls,
         notional: float,
         start_date: date,
-        maturity_tenor: str,
+        term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
         day_count_convention: type[DayCountConventionBase],
@@ -168,10 +173,11 @@ class TermRateLeg(FloatingLeg):
         fixing_lag: int = 0,
         stub_first: bool = True,
         long_stub: bool = False,
+        maturity_date: date | None = None,
     ) -> TermRateLeg:
         schedule = cls._build_schedule(
-            start_date, maturity_tenor, payment_frequency,
-            adj_convention, stub_first, long_stub,
+            start_date, term, payment_frequency,
+            adj_convention, stub_first, long_stub, maturity_date,
         )
         calendar = adj_convention.calendar
         n = len(schedule) - 1
@@ -200,7 +206,7 @@ class OvernightLeg(FloatingLeg):
         cls,
         notional: float,
         start_date: date,
-        maturity_tenor: str,
+        term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
         day_count_convention: type[DayCountConventionBase],
@@ -209,10 +215,11 @@ class OvernightLeg(FloatingLeg):
         spread_bps: float = 0.0,
         stub_first: bool = True,
         long_stub: bool = False,
+        maturity_date: date | None = None,
     ) -> OvernightLeg:
         schedule = cls._build_schedule(
-            start_date, maturity_tenor, payment_frequency,
-            adj_convention, stub_first, long_stub,
+            start_date, term, payment_frequency,
+            adj_convention, stub_first, long_stub, maturity_date,
         )
         n = len(schedule) - 1
         coupons = [
@@ -245,7 +252,7 @@ class XCCYFloatingLeg(FloatingLeg):
         cls,
         notional: float,
         start_date: date,
-        maturity_tenor: str,
+        term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
         day_count_convention: type[DayCountConventionBase],
@@ -254,10 +261,11 @@ class XCCYFloatingLeg(FloatingLeg):
         spread_bps: float = 0.0,
         stub_first: bool = True,
         long_stub: bool = False,
+        maturity_date: date | None = None,
     ) -> XCCYFloatingLeg:
         schedule = cls._build_schedule(
-            start_date, maturity_tenor, payment_frequency,
-            adj_convention, stub_first, long_stub,
+            start_date, term, payment_frequency,
+            adj_convention, stub_first, long_stub, maturity_date,
         )
         n = len(schedule) - 1
         coupons = [
