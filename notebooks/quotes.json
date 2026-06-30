@@ -1,206 +1,1010 @@
 [
   {
+    "group": "USD Fix-SOFR",
     "quoteType": "IRSQuote",
-    "comment": "CLP OIS — receive fixed vs CAMARA, 2Y",
     "quoted_side": "RECEIVE",
-    "term": {"value": 2, "unit": "Y", "adj_convention": "ModifiedFollowingConvention", "calendar": "CL"},
-    "quote_date": "2026-06-29",
     "spot_lag": 2,
-    "stub_first": true,
-    "long_stub": false,
-    "collateral_index": null,
-    "fixed_leg": {
-      "currency": "CLP",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "CL",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "rate": 0.0525
-    },
-    "floating_leg": {
-      "currency": "CLP",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "CL",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "index": "CAMARA",
-      "spread_bps": 0.0
-    }
-  },
-  {
-    "quoteType": "IRSQuote",
-    "comment": "USD IRS — pay fixed vs SOFR, 5Y",
-    "quoted_side": "PAY",
-    "term": {"value": 5, "unit": "Y", "adj_convention": "ModifiedFollowingConvention", "calendar": "US"},
-    "quote_date": "2026-06-29",
-    "spot_lag": 2,
+    "term_adj_convention": "ModifiedFollowingConvention",
+    "term_calendar": "US",
+    "day_count_convention": "TF_Actual360",
     "stub_first": true,
     "long_stub": false,
     "collateral_index": "SOFR",
     "fixed_leg": {
       "currency": "USD",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "US",
-      "day_count_convention": "TF_30_360BondBasis",
-      "year_fraction_base": 360,
-      "rate": 0.0435
+      "interest_convention": "Linear"
     },
     "floating_leg": {
-      "currency": "USD",
-      "payment_frequency": "QUARTERLY",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "US",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
       "index": "SOFR",
       "spread_bps": 0.0
-    }
-  },
-  {
-    "quoteType": "IRBasisQuote",
-    "comment": "CLP basis — receive CAMARA vs pay TAB, 3Y",
-    "quoted_side": "RECEIVE",
-    "term": "3Y",
-    "quote_date": "2026-06-29",
-    "spot_lag": 2,
-    "stub_first": true,
-    "long_stub": false,
-    "collateral_index": null,
-    "receive_leg": {
-      "currency": "CLP",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "CL",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "index": "CAMARA",
-      "spread_bps": 0.0
     },
-    "pay_leg": {
-      "currency": "CLP",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "CL",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "index": "TAB180",
-      "spread_bps": -12.5
-    }
+    "quotes": [
+      {
+        "term": {
+          "value": 1,
+          "unit": "W"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.053276
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "W"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.053352
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "W"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.05335
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 1,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.053378
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.05342
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.053485
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 4,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.053201
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 5,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.052974
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.052743
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 7,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.052305
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 8,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.05193
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.05159
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 10,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.051148
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 12,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.050336
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 18,
+          "unit": "M"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.047303
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.045299
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.042393
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 4,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.040671
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 5,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.039612
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.038986
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 7,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.038573
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 8,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.038306
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.038142
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 10,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.038044
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 12,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.037996
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 15,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.037993
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 20,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.037633
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 25,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.0367
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 30,
+          "unit": "Y"
+        },
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.035725
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      }
+    ]
   },
   {
-    "quoteType": "CrossCurrencyFixedFloatQuote",
-    "comment": "CLP fixed vs USD SOFR, XCCY, 3Y — typical Chilean bank trade",
-    "quoted_side": "PAY",
-    "term": "3Y",
-    "quote_date": "2026-06-29",
-    "spot_lag": 2,
-    "stub_first": true,
-    "long_stub": false,
-    "collateral_index": "SOFR",
-    "fixed_leg": {
-      "currency": "CLP",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "CL",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "rate": 0.0560
-    },
-    "floating_leg": {
-      "currency": "USD",
-      "payment_frequency": "QUARTERLY",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "US",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "index": "SOFR",
-      "spread_bps": 45.0
-    }
-  },
-  {
-    "quoteType": "CrossCurrencyFloatFloatQuote",
-    "comment": "CLP CAMARA vs USD SOFR, XCCY basis, 5Y",
-    "quoted_side": "RECEIVE",
-    "term": {"value": 5, "unit": "Y", "adj_convention": "ModifiedFollowingConvention", "calendar": "CL"},
-    "quote_date": "2026-06-29",
-    "spot_lag": 2,
-    "stub_first": true,
-    "long_stub": false,
-    "collateral_index": "SOFR",
-    "receive_leg": {
-      "currency": "CLP",
-      "payment_frequency": "SEMIANNUAL",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "CL",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "index": "CAMARA",
-      "spread_bps": 0.0
-    },
-    "pay_leg": {
-      "currency": "USD",
-      "payment_frequency": "QUARTERLY",
-      "adj_convention": "ModifiedFollowingConvention",
-      "calendar": "US",
-      "day_count_convention": "TF_Actual360",
-      "year_fraction_base": 360,
-      "index": "SOFR",
-      "spread_bps": -38.0
-    }
-  },
-  {
-    "quoteType": "ForwardPriceQuote",
-    "comment": "USD/CLP NDF outright — 3M",
-    "currency_pair": ["USD", "CLP"],
-    "value": 965.50,
-    "payment_date": "2026-10-01",
-    "is_buy": true,
-    "fixing_date": "2026-09-29",
-    "locality": "CL"
-  },
-  {
-    "quoteType": "ForwardPriceQuote",
-    "comment": "USD/CLP deliverable forward — 6M",
-    "currency_pair": ["USD", "CLP"],
-    "value": 980.00,
-    "payment_date": "2027-01-02",
-    "is_buy": false,
-    "fixing_date": null,
-    "locality": "CL"
-  },
-  {
+    "group": "USDCLP Forward Points",
     "quoteType": "ForwardPointsQuote",
-    "comment": "USD/CLP forward points — 1M (points_divisor=1 → CLP pips)",
-    "currency_pair": ["USD", "CLP"],
-    "value": 14.75,
-    "payment_date": "2026-07-31",
+    "spot_lag": 2,
+    "term_adj_convention": "ModifiedFollowingConvention",
+    "term_calendar": "CL",
+    "payment_lag": 1,
     "is_buy": true,
-    "fixing_date": "2026-07-29",
+    "currency_pair": [
+      "USD",
+      "CLP"
+    ],
+    "spot": 934.45,
+    "points_divisor": 1,
     "locality": "CL",
-    "spot": 950.25,
-    "points_divisor": 1
+    "quotes": [
+      {
+        "term": {
+          "value": 1,
+          "unit": "W"
+        },
+        "value": 0.07
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "W"
+        },
+        "value": 0.12
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "W"
+        },
+        "value": 0.23
+      },
+      {
+        "term": {
+          "value": 1,
+          "unit": "M"
+        },
+        "value": 0.3
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "M"
+        },
+        "value": 0.48
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "M"
+        },
+        "value": 0.55
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "M"
+        },
+        "value": 0.91
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "M"
+        },
+        "value": 1.45
+      },
+      {
+        "term": {
+          "value": 1,
+          "unit": "Y"
+        },
+        "value": 2.01
+      }
+    ]
   },
   {
-    "quoteType": "ForwardUFPriceQuote",
-    "comment": "UF NDF outright — Sep 2026",
-    "value": 39850.00,
-    "payment_date": "2026-10-01",
-    "is_buy": true,
-    "fixing_date": "2026-09-09",
-    "locality": "CL"
+    "group": "USDCLP XCCY Basis CAMARA/SOFR",
+    "quoteType": "CrossCurrencyFloatFloatQuote",
+    "quoted_side": "RECEIVE",
+    "spot_lag": 2,
+    "term_adj_convention": "ModifiedFollowingConvention",
+    "term_calendar": "CL",
+    "day_count_convention": "TF_Actual360",
+    "stub_first": true,
+    "long_stub": false,
+    "receive_leg": {
+      "currency": "CLP",
+      "index": "CAMARA",
+      "spread_bps": 0.0
+    },
+    "pay_leg": {
+      "currency": "USD",
+      "index": "SOFR"
+    },
+    "quotes": [
+      {
+        "term": {
+          "value": 1,
+          "unit": "M"
+        },
+        "receive_leg": {
+          "payment_frequency": "ANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "ANNUAL",
+          "spread_bps": 1.5
+        }
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "M"
+        },
+        "receive_leg": {
+          "payment_frequency": "ANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "ANNUAL",
+          "spread_bps": 4.0
+        }
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "M"
+        },
+        "receive_leg": {
+          "payment_frequency": "ANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "ANNUAL",
+          "spread_bps": 7.5
+        }
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "M"
+        },
+        "receive_leg": {
+          "payment_frequency": "ANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "ANNUAL",
+          "spread_bps": 3.0
+        }
+      },
+      {
+        "term": {
+          "value": 1,
+          "unit": "Y"
+        },
+        "receive_leg": {
+          "payment_frequency": "ANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "ANNUAL",
+          "spread_bps": 1.5
+        }
+      },
+      {
+        "term": {
+          "value": 18,
+          "unit": "M"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 2.25
+        }
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 3.0
+        }
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 4.0
+        }
+      },
+      {
+        "term": {
+          "value": 4,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 5.5
+        }
+      },
+      {
+        "term": {
+          "value": 5,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 9.5
+        }
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 7.5
+        }
+      },
+      {
+        "term": {
+          "value": 7,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 7.5
+        }
+      },
+      {
+        "term": {
+          "value": 8,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 7.0
+        }
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": 3.0
+        }
+      },
+      {
+        "term": {
+          "value": 10,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": -3.0
+        }
+      },
+      {
+        "term": {
+          "value": 12,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": -2.5
+        }
+      },
+      {
+        "term": {
+          "value": 15,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": -3.5
+        }
+      },
+      {
+        "term": {
+          "value": 20,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "receive_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        },
+        "pay_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "spread_bps": -13.5
+        }
+      }
+    ]
   },
   {
-    "quoteType": "ForwardUFPointsQuote",
-    "comment": "UF NDF quoted as points over spot — 3M",
-    "value": 320.00,
-    "payment_date": "2026-10-01",
-    "is_buy": false,
-    "fixing_date": "2026-09-09",
-    "locality": "CL",
-    "spot_uf": 39530.00,
-    "points_divisor": 1
+    "group": "CLP Fix-CAMARA",
+    "quoteType": "IRSQuote",
+    "quoted_side": "RECEIVE",
+    "spot_lag": 2,
+    "term_adj_convention": "ModifiedFollowingConvention",
+    "term_calendar": "CL",
+    "day_count_convention": "TF_Actual360",
+    "stub_first": true,
+    "long_stub": false,
+    "fixed_leg": {
+      "currency": "CLP",
+      "interest_convention": "Linear"
+    },
+    "floating_leg": {
+      "index": "CAMARA",
+      "spread_bps": 0.0
+    },
+    "quotes": [
+      {
+        "term": {
+          "value": 3,
+          "unit": "M"
+        },
+        "collateral_index": "ICP",
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.05605
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "M"
+        },
+        "collateral_index": "ICP",
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.054475
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "M"
+        },
+        "collateral_index": "ICP",
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.05365
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 1,
+          "unit": "Y"
+        },
+        "collateral_index": "ICP",
+        "fixed_leg": {
+          "payment_frequency": "ANNUAL",
+          "rate": 0.0527
+        },
+        "floating_leg": {
+          "payment_frequency": "ANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 18,
+          "unit": "M"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.051425
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 2,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.04965
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 3,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.04945
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 4,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.04955
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 5,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.0495
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 6,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.04975
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 7,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.0502
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 8,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.05065
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 9,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.05095
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 10,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.05165
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 12,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.05285
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 15,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.054
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      },
+      {
+        "term": {
+          "value": 20,
+          "unit": "Y"
+        },
+        "collateral_index": "SOFR",
+        "fixed_leg": {
+          "payment_frequency": "SEMIANNUAL",
+          "rate": 0.0547
+        },
+        "floating_leg": {
+          "payment_frequency": "SEMIANNUAL"
+        }
+      }
+    ]
   }
 ]
