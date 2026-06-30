@@ -8,7 +8,7 @@ from fintoolsom.market import (
     ForwardUFPriceQuote,
     ForwardUFPointsQuote,
 )
-from fintoolsom.market.quotes import ForwardUFQuote  # internal ABC — not re-exported
+from fintoolsom.market.quotes import _ForwardUFQuote  # internal ABC — not re-exported
 
 _PMT = date(2026, 12, 31)
 _FIX = date(2026, 12, 29)
@@ -16,7 +16,7 @@ _FIX = date(2026, 12, 29)
 
 def test_uf_quote_base_is_abstract():
     with pytest.raises(TypeError):
-        ForwardUFQuote(38000.0, _PMT, True, _FIX)  # type: ignore[abstract]
+        _ForwardUFQuote(38000.0, _PMT, True, _FIX)  # type: ignore[abstract]
 
 
 def test_uf_price_quote_returns_outright_level():

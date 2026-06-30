@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import date
 
+import numpy as np
+
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
+from .index import Index
 from .index_history import IndexHistory
 from .localities import Locality
 from ..rates import Rate, ZeroCouponCurve
@@ -30,6 +33,9 @@ class Market:
     zero_coupon_curve_mapper: dict[
         str, ZeroCouponCurve | dict[Locality, dict[Currency, ZeroCouponCurve]]
     ] = field(default_factory=dict)  # First key is index_name which can be None.
+
+    discount_curves: dict[tuple[Index, Currency], ZeroCouponCurve] = field(default_factory=dict)
+    projection_curves: dict[Index, ZeroCouponCurve] = field(default_factory=dict)
 
     def __post_init__(self):
         for cp, fx_data in self.fx_history.items():
@@ -66,6 +72,18 @@ class Market:
                 self.currency_pairs_history.setdefault(inverted_cp.name, {})[
                     cp_date
                 ] = inverted_cp
+
+    def get_discount_df(self, riskless_index: Index, currency: Currency, t: date) -> float:
+        return self.discount_curves[(riskless_index, currency)].get_df(t)
+
+    def get_discount_dfs(self, riskless_index: Index, currency: Currency, dates: list[date]) -> np.ndarray:
+        return self.discount_curves[(riskless_index, currency)].get_dfs(dates)
+
+    def get_projection_df(self, index: Index, t: date) -> float:
+        return self.projection_curves[index].get_df(t)
+
+    def get_projection_dfs(self, index: Index, dates: list[date]) -> np.ndarray:
+        return self.projection_curves[index].get_dfs(dates)
 
     def add_index(self, history: IndexHistory):
         self.indexes_history[history.name.upper()] = history

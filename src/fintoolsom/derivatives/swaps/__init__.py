@@ -16,10 +16,11 @@ from .legs import (
 )
 from .swaps import (
     SwapBase,
-    IRS,
-    IRBasis,
-    CrossCurrencyFixFloat,
-    CrossCurrencyBasis,
-    CrossCurrencyFixFix,
-    CustomSwap,
+    Swap,
+)
+from .builders import (
+    fixed_leg,
+    term_rate_leg,
+    overnight_leg,
+    xccy_floating_leg,
 )

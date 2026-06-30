@@ -7,8 +7,9 @@ from typing import cast
 import numpy as np
 
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
-from ...dates import AdjustmentDateConventionBase, DayCountConventionBase, ScheduleGenerator
+from ...dates import AdjustmentDateConventionBase, ScheduleGenerator
 from ...dates.term import Term
+from ...dates.time_fractions import TimeFractionBase
 from ...market.currencies import Currency
 from ...market.index import Index, InterestIndex
 
@@ -73,14 +74,6 @@ class SwapLeg:
             long_stub=long_stub,
         )
 
-    @staticmethod
-    def _tf(
-        day_count: type[DayCountConventionBase],
-        start: date,
-        end: date,
-        base: int,
-    ) -> float:
-        return float(day_count.get_time_fraction(start, end, base))
 
 
 @dataclass
@@ -103,8 +96,7 @@ class FixedLeg(SwapLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        day_count_convention: type[DayCountConventionBase],
-        year_fraction_base: int,
+        time_fraction: TimeFractionBase,
         rate: float,
         currency: Currency,
         stub_first: bool = True,
@@ -123,7 +115,7 @@ class FixedLeg(SwapLeg):
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
                 rate=rate,
             )
             for i in range(n)
@@ -150,13 +142,9 @@ class FloatingLeg(SwapLeg):
 
 @dataclass
 class TermRateLeg(FloatingLeg):
-    """Floating leg for a term-rate (IBOR-style) index. Stores per-coupon fixing dates."""
-    fixing_lag: int = 0
-    fixing_dates: list[date] = field(init=False)
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.fixing_dates = [c.fixing_date for c in self.coupons]  # type: ignore[union-attr]
+    """Floating leg for a term-rate or price index.
+    fixing_dates are explicit — they typically don't coincide with start_date."""
+    fixing_dates: list[date] = field(default_factory=list)
 
     @classmethod
     def from_term(
@@ -166,8 +154,7 @@ class TermRateLeg(FloatingLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        day_count_convention: type[DayCountConventionBase],
-        year_fraction_base: int,
+        time_fraction: TimeFractionBase,
         index: InterestIndex,
         spread_bps: float = 0.0,
         fixing_lag: int = 0,
@@ -181,6 +168,7 @@ class TermRateLeg(FloatingLeg):
         )
         calendar = adj_convention.calendar
         n = len(schedule) - 1
+        fixing_dates = [calendar.add_business_days(schedule[i], -fixing_lag) for i in range(n)]
         coupons = [
             TermRateCoupon(
                 residual=notional,
@@ -188,13 +176,13 @@ class TermRateLeg(FloatingLeg):
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
                 spread_bps=spread_bps,
-                fixing_date=calendar.add_business_days(schedule[i], -fixing_lag),
+                fixing_date=fixing_dates[i],
             )
             for i in range(n)
         ]
-        return cls(coupons=coupons, index=index, spread_bps=spread_bps, fixing_lag=fixing_lag)
+        return cls(coupons=coupons, index=index, spread_bps=spread_bps, fixing_dates=fixing_dates)
 
 
 @dataclass
@@ -209,8 +197,7 @@ class OvernightLeg(FloatingLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        day_count_convention: type[DayCountConventionBase],
-        year_fraction_base: int,
+        time_fraction: TimeFractionBase,
         index: InterestIndex,
         spread_bps: float = 0.0,
         stub_first: bool = True,
@@ -229,7 +216,7 @@ class OvernightLeg(FloatingLeg):
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
                 spread_bps=spread_bps,
             )
             for i in range(n)
@@ -255,8 +242,7 @@ class XCCYFloatingLeg(FloatingLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        day_count_convention: type[DayCountConventionBase],
-        year_fraction_base: int,
+        time_fraction: TimeFractionBase,
         index: InterestIndex,
         spread_bps: float = 0.0,
         stub_first: bool = True,
@@ -275,7 +261,7 @@ class XCCYFloatingLeg(FloatingLeg):
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=cls._tf(day_count_convention, schedule[i], schedule[i + 1], year_fraction_base),
+                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
                 spread_bps=spread_bps,
                 fx_fixing_date=schedule[i + 1],
             )

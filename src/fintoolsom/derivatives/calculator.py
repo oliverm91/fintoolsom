@@ -14,6 +14,9 @@ from .options.options import Option
 
 if TYPE_CHECKING:
     from ..market import Market, Locality
+    from ..market.currencies import Currency
+    from ..market.index import Index
+    from .swaps.swaps import Swap
 
 _default_option_rate_convention = RateConvention(
     interest_convention=ExponentialInterestConvention,
@@ -76,7 +79,7 @@ class Calculator:
         if known_uf is not None:
             s_t = known_uf
         else:
-            known_dates = [t for t in uf_history if t <= ndf.fixing_date]
+            known_dates = [d for d in uf_history if d <= ndf.fixing_date]
             if len(known_dates) == 0:
                 raise ValueError(
                     f"No UF value known on or before fixing_date {ndf.fixing_date} to project from."
@@ -355,6 +358,122 @@ class Calculator:
             -1,
             rate_convention,
         )
+
+    # --- Swaps ---
+
+    @staticmethod
+    def _leg_pv(leg, collateral, market: Market, riskless_index: Index) -> float:
+        """PV of one leg in its own currency, vectorised over future coupons.
+
+        TermRateLeg — split by fixing_date:
+          fixed      fixing_date ≤ t          → history rate for full [start, end]
+          to_project fixing_date > t          → project with get_dfs_fwds
+
+        OvernightLeg / XCCYFloatingLeg — split by start_date:
+          current    start ≤ t < payment      → history[start→t] + projection[t→end]
+                                                 (or pure history if end_date ≤ t)
+          pure_future start > t               → project with get_dfs_fwds
+        """
+        from .swaps.legs import FixedLeg as _FixedLeg, TermRateLeg as _TermRateLeg
+
+        currency = leg.currency
+        future_payment = np.array([t > market.t for t in leg.payment_dates])
+        if not future_payment.any():
+            return 0.0
+
+        # Collateral-adjusted DFs for all future payment dates
+        future_pay_dates = [t for t, f in zip(leg.payment_dates, future_payment) if f]
+        base_dfs = market.get_discount_dfs(riskless_index, currency, future_pay_dates)
+        if collateral is not None:
+            proj_dfs = market.get_projection_dfs(collateral, future_pay_dates)
+            riskless_coll_dfs = market.get_discount_dfs(riskless_index, collateral.currency, future_pay_dates)  # type: ignore[union-attr]
+            dfs = base_dfs * proj_dfs / riskless_coll_dfs
+        else:
+            dfs = base_dfs
+
+        if isinstance(leg, _FixedLeg):
+            return float(np.dot(leg.flows[future_payment], dfs))
+
+        flows = np.zeros(int(future_payment.sum()))
+        proj_curve = market.projection_curves[leg.index]
+
+        if isinstance(leg, _TermRateLeg):
+            # TermRate: split by fixing_date. Once fixing_date ≤ t the rate is locked
+            # regardless of where start_date falls (e.g. fix Wed, start Fri, value Thu).
+            fixed_mask   = future_payment & np.array([leg.fixing_dates[i] <= market.t for i in range(len(leg.coupons))])
+            to_proj_mask = future_payment & ~fixed_mask
+
+            if fixed_mask.any():
+                rate_name = market.index_to_interest_rate_map.get(leg.index.name.upper())  # type: ignore[union-attr]
+                if rate_name is None:
+                    raise KeyError(f"No interest rate mapped to index '{leg.index.name}' in market.")  # type: ignore[union-attr]
+                fixed_flows = []
+                for i in np.where(fixed_mask)[0]:
+                    c = leg.coupons[i]
+                    rate = market.get_rate(leg.fixing_dates[i], rate_name, use_closest_past_rate=True)
+                    fixed_flows.append(rate.get_accrued_interest(c.residual, c.start_date, c.end_date) + leg.spreads[i])
+                flows[fixed_mask[future_payment]] = np.array(fixed_flows)
+
+            if to_proj_mask.any():
+                starts  = [s for s, f in zip(leg.start_dates, to_proj_mask) if f]
+                ends    = [e for e, f in zip(leg.end_dates,   to_proj_mask) if f]
+                fwd_dfs = proj_curve.get_dfs_fwds(starts, ends)
+                flows[to_proj_mask[future_payment]] = leg.residuals[to_proj_mask] * (fwd_dfs - 1) + leg.spreads[to_proj_mask]
+
+        else:
+            # OvernightLeg (and XCCYFloatingLeg): split by start_date
+            future_start = np.array([s > market.t for s in leg.start_dates])
+            pure_future  = future_payment & future_start
+            current_mask = future_payment & ~future_start
+
+            if pure_future.any():
+                starts  = [s for s, f in zip(leg.start_dates, pure_future) if f]
+                ends    = [e for e, f in zip(leg.end_dates,   pure_future) if f]
+                fwd_dfs = proj_curve.get_dfs_fwds(starts, ends)
+                flows[pure_future[future_payment]] = leg.residuals[pure_future] * (fwd_dfs - 1) + leg.spreads[pure_future]
+
+            if current_mask.any():
+                idx = int(np.where(current_mask)[0][0])
+                c   = leg.coupons[idx]
+                rate_name = market.index_to_interest_rate_map.get(leg.index.name.upper())  # type: ignore[union-attr]
+                if rate_name is None:
+                    raise KeyError(f"No interest rate mapped to index '{leg.index.name}' in market.")  # type: ignore[union-attr]
+                if market.t < c.end_date:
+                    # Still accruing: history [start→t] + projection [t→end]
+                    accrued = market.accrue_rates_reset_business_days(
+                        c.residual, rate_name, c.start_date, market.t
+                    )
+                    interest = accrued + (c.residual + accrued) * (
+                        proj_curve.get_df_fwd(market.t, c.end_date) - 1
+                    )
+                else:
+                    # end_date ≤ t: fully accrued, awaiting payment only
+                    interest = market.accrue_rates_reset_business_days(
+                        c.residual, rate_name, c.start_date, c.end_date
+                    )
+                flows[current_mask[future_payment]] = interest + leg.spreads[idx]
+
+        return float(np.dot(flows, dfs))
+
+    @staticmethod
+    def get_swap_mtm(swap: Swap, market: Market, riskless_index: Index, currency: Currency) -> float:
+        """Generic swap valuation in the requested reporting currency.
+
+        Discounts receive_leg (positive) and pay_leg (negative) in their own currencies,
+        then converts each PV to ``currency`` via market FX at market.t when they differ.
+
+        Note: XCCYFloatingLeg notional exchanges (initial and final) are NOT included
+        until they are added as explicit coupons in the leg's coupon list."""
+        from ..market.currencies import CurrencyPair as _CurrencyPair
+
+        def _pv(leg) -> float:
+            pv = Calculator._leg_pv(leg, swap.collateral_index, market, riskless_index)
+            if leg.currency != currency:
+                cp = _CurrencyPair(leg.currency, currency)
+                pv *= market.get_fx_rate(market.t, cp).value
+            return pv
+
+        return _pv(swap.receive_leg) - _pv(swap.pay_leg)
 
     # --- Dispatcher ---
 

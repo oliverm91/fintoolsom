@@ -31,6 +31,7 @@ from .conventions import (
 )
 from ..dates.term import TermUnit, Term
 from .quotes import (
+    InstrumentQuote,
     ForwardPriceQuote,
     ForwardPointsQuote,
     ForwardUFPriceQuote,

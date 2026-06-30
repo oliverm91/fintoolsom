@@ -1,7 +1,8 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
-from ..dates import AdjustmentDateConventionBase, DayCountConventionBase
+from ..dates import AdjustmentDateConventionBase
+from ..dates.time_fractions import TimeFractionBase
 from .currencies import Currency
 from .index import InterestIndex
 from ..rates import Rate
@@ -29,8 +30,7 @@ class LegSpec:
     currency: Currency
     payment_frequency: PaymentFrequency
     adj_convention: AdjustmentDateConventionBase
-    day_count_convention: type[DayCountConventionBase]
-    year_fraction_base: int  # 360 or 365
+    time_fraction: TimeFractionBase
 
 
 @dataclass

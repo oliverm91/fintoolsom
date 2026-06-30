@@ -10,9 +10,8 @@ class TimeFractionBase(ABC):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
         pass
 
-    @abstractmethod
     def get_coupon_factor(self, start_date: date, end_date: date) -> float:
-        pass
+        return self.get_day_count_factor(start_date, end_date)
 
 
 @dataclass
@@ -109,6 +108,7 @@ class TF_Actual365(TimeFractionBase):
 class TF_Actual360(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
         return (end_date - start_date).days / 360
+
 
 
 @dataclass
@@ -228,7 +228,7 @@ class TF_ActualActualISDA(TimeFractionBase):
 
 @dataclass
 class TF_ActualActualICMA(TimeFractionBase):
-    _actactisda_calc = field(init=False)
+    _actactisda_calc: TF_ActualActualISDA = field(init=False)
 
     def __post_init__(self):
         self._actactisda_calc = TF_ActualActualISDA()

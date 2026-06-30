@@ -15,12 +15,12 @@ from ..dates.term import Term
 
 if TYPE_CHECKING:
     from ..derivatives.forwards.forwards import Forward, NDF
-    from ..derivatives.swaps.swaps import IRS, IRBasis, CrossCurrencyFixFloat, CrossCurrencyBasis
+    from ..derivatives.swaps.swaps import Swap
 
 
 # ── Private: ABC and module constants ──────────────────────────────────────
 
-class _InstrumentQuote(ABC):
+class InstrumentQuote(ABC):
     """Enforces get_instrument() on all concrete quote subclasses."""
 
     @abstractmethod
@@ -34,7 +34,7 @@ _NOTIONAL = 100.0
 # ── Private: forward base classes ──────────────────────────────────────────
 
 @dataclass
-class _ForwardQuote(_InstrumentQuote):
+class _ForwardQuote(InstrumentQuote):
     currency_pair: CurrencyPair
     value: float
     is_buy: bool
@@ -71,7 +71,7 @@ class _ForwardQuote(_InstrumentQuote):
 
 
 @dataclass
-class _ForwardUFQuote(_InstrumentQuote):
+class _ForwardUFQuote(InstrumentQuote):
     """UF forwards are always NDFs — fixing_date or term+quote_date is required."""
     value: float
     is_buy: bool
@@ -112,7 +112,7 @@ class QuotedSide(Enum):
 
 
 @dataclass
-class _SwapQuote(_InstrumentQuote):
+class _SwapQuote(InstrumentQuote):
     """collateral_index=None means uncollateralised."""
     quoted_side: QuotedSide
     term: Term
@@ -270,45 +270,39 @@ class IRSQuote(_SwapQuote):
                 f"Got {self.fixed_leg.currency} and {self.floating_leg.currency}."
             )
 
-    def get_instrument(self) -> IRS:
-        from ..derivatives.swaps.swaps import IRS
-        from ..derivatives.swaps.legs import FixedLeg, TermRateLeg
+    def get_instrument(self) -> Swap:
+        from ..derivatives.swaps.swaps import Swap
+        from ..derivatives.swaps.builders import fixed_leg, term_rate_leg
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
-        fixed = FixedLeg.from_term(
+        fixed = fixed_leg(
             notional=_NOTIONAL,
             start_date=start,
             term=self.term,
-            payment_frequency=self.fixed_leg.payment_frequency.value,
+            frequency=self.fixed_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            day_count_convention=self.fixed_leg.day_count_convention,
-            year_fraction_base=self.fixed_leg.year_fraction_base,
+            time_fraction=self.fixed_leg.time_fraction,
             rate=self.fixed_leg.rate.value,
             currency=self.fixed_leg.currency,
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
         )
-        spread_bps = self.floating_leg.spread.value if self.floating_leg.spread else 0.0
-        floating = TermRateLeg.from_term(
+        floating = term_rate_leg(
             notional=_NOTIONAL,
             start_date=start,
             term=self.term,
-            payment_frequency=self.floating_leg.payment_frequency.value,
+            frequency=self.floating_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            day_count_convention=self.floating_leg.day_count_convention,
-            year_fraction_base=self.floating_leg.year_fraction_base,
+            time_fraction=self.floating_leg.time_fraction,
             index=self.floating_leg.index,
-            spread_bps=spread_bps,
+            spread_bps=self.floating_leg.spread.value if self.floating_leg.spread else 0.0,
             maturity_date=mat,
         )
-        return IRS(
-            fixed_leg=fixed,
-            floating_leg=floating,
-            payment_currency=self.fixed_leg.currency,
-            collateral_index=self.collateral_index,
-        )
+        if self.quoted_side == QuotedSide.RECEIVE:
+            return Swap(receive_leg=fixed, pay_leg=floating, payment_currency=self.fixed_leg.currency, collateral_index=self.collateral_index)
+        return Swap(receive_leg=floating, pay_leg=fixed, payment_currency=self.fixed_leg.currency, collateral_index=self.collateral_index)
 
 
 @dataclass
@@ -325,22 +319,21 @@ class IRBasisQuote(_SwapQuote):
                 f"Got {self.receive_leg.currency} and {self.pay_leg.currency}."
             )
 
-    def get_instrument(self) -> IRBasis:
-        from ..derivatives.swaps.swaps import IRBasis
-        from ..derivatives.swaps.legs import TermRateLeg
+    def get_instrument(self) -> Swap:
+        from ..derivatives.swaps.swaps import Swap
+        from ..derivatives.swaps.builders import term_rate_leg
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
 
-        def _build(spec: FloatingLegSpec) -> TermRateLeg:
-            return TermRateLeg.from_term(
+        def _build(spec: FloatingLegSpec):
+            return term_rate_leg(
                 notional=_NOTIONAL,
                 start_date=start,
                 term=self.term,
-                payment_frequency=spec.payment_frequency.value,
+                frequency=spec.payment_frequency.value,
                 adj_convention=self.adj_convention,
-                day_count_convention=spec.day_count_convention,
-                year_fraction_base=spec.year_fraction_base,
+                time_fraction=spec.time_fraction,
                 index=spec.index,
                 spread_bps=spec.spread.value if spec.spread else 0.0,
                 stub_first=self.stub_first,
@@ -348,9 +341,9 @@ class IRBasisQuote(_SwapQuote):
                 maturity_date=mat,
             )
 
-        return IRBasis(
-            leg_a=_build(self.receive_leg),
-            leg_b=_build(self.pay_leg),
+        return Swap(
+            receive_leg=_build(self.receive_leg),
+            pay_leg=_build(self.pay_leg),
             payment_currency=self.receive_leg.currency,
             collateral_index=self.collateral_index,
         )
@@ -369,46 +362,41 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
                 "CrossCurrencyFixedFloat requires legs in different currencies."
             )
 
-    def get_instrument(self) -> CrossCurrencyFixFloat:
-        from ..derivatives.swaps.swaps import CrossCurrencyFixFloat
-        from ..derivatives.swaps.legs import FixedLeg, XCCYFloatingLeg
+    def get_instrument(self) -> Swap:
+        from ..derivatives.swaps.swaps import Swap
+        from ..derivatives.swaps.builders import fixed_leg, xccy_floating_leg
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
-        fixed = FixedLeg.from_term(
+        fixed = fixed_leg(
             notional=_NOTIONAL,
             start_date=start,
             term=self.term,
-            payment_frequency=self.fixed_leg.payment_frequency.value,
+            frequency=self.fixed_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            day_count_convention=self.fixed_leg.day_count_convention,
-            year_fraction_base=self.fixed_leg.year_fraction_base,
+            time_fraction=self.fixed_leg.time_fraction,
             rate=self.fixed_leg.rate.value,
             currency=self.fixed_leg.currency,
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
         )
-        floating = XCCYFloatingLeg.from_term(
+        floating = xccy_floating_leg(
             notional=_NOTIONAL,
             start_date=start,
             term=self.term,
-            payment_frequency=self.floating_leg.payment_frequency.value,
+            frequency=self.floating_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            day_count_convention=self.floating_leg.day_count_convention,
-            year_fraction_base=self.floating_leg.year_fraction_base,
+            time_fraction=self.floating_leg.time_fraction,
             index=self.floating_leg.index,
             spread_bps=self.floating_leg.spread.value if self.floating_leg.spread else 0.0,
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
         )
-        return CrossCurrencyFixFloat(
-            fixed_leg=fixed,
-            floating_leg=floating,
-            payment_currency=self.fixed_leg.currency,
-            collateral_index=self.collateral_index,
-        )
+        if self.quoted_side == QuotedSide.RECEIVE:
+            return Swap(receive_leg=fixed, pay_leg=floating, collateral_index=self.collateral_index, is_deliverable=True)
+        return Swap(receive_leg=floating, pay_leg=fixed, collateral_index=self.collateral_index, is_deliverable=True)
 
 
 @dataclass
@@ -424,22 +412,21 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
                 "CrossCurrencyFloatFloat requires legs in different currencies."
             )
 
-    def get_instrument(self) -> CrossCurrencyBasis:
-        from ..derivatives.swaps.swaps import CrossCurrencyBasis
-        from ..derivatives.swaps.legs import XCCYFloatingLeg
+    def get_instrument(self) -> Swap:
+        from ..derivatives.swaps.swaps import Swap
+        from ..derivatives.swaps.builders import xccy_floating_leg
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
 
-        def _build(spec: FloatingLegSpec) -> XCCYFloatingLeg:
-            return XCCYFloatingLeg.from_term(
+        def _build(spec: FloatingLegSpec):
+            return xccy_floating_leg(
                 notional=_NOTIONAL,
                 start_date=start,
                 term=self.term,
-                payment_frequency=spec.payment_frequency.value,
+                frequency=spec.payment_frequency.value,
                 adj_convention=self.adj_convention,
-                day_count_convention=spec.day_count_convention,
-                year_fraction_base=spec.year_fraction_base,
+                time_fraction=spec.time_fraction,
                 index=spec.index,
                 spread_bps=spec.spread.value if spec.spread else 0.0,
                 stub_first=self.stub_first,
@@ -447,9 +434,9 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
                 maturity_date=mat,
             )
 
-        return CrossCurrencyBasis(
-            leg_a=_build(self.receive_leg),
-            leg_b=_build(self.pay_leg),
-            payment_currency=self.receive_leg.currency,
+        return Swap(
+            receive_leg=_build(self.receive_leg),
+            pay_leg=_build(self.pay_leg),
             collateral_index=self.collateral_index,
+            is_deliverable=True,
         )

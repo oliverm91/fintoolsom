@@ -7,7 +7,7 @@ from fintoolsom.market.currencies import Currency, CurrencyPair
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 
-def test_forward_mtm_is_zero_at_fair_strike(sample_zero_coupon_curve, curve_date):
+def test_forward_mtm_is_zero_at_fair_strike(sample_zero_coupon_curve):
     spot = 900.0
     payment_date = date(2025, 1, 10)
     df_d = sample_zero_coupon_curve.get_df(payment_date)

@@ -130,6 +130,10 @@ class Rate:
     rate_convention: RateConvention
     rate_value: float
 
+    @property
+    def value(self) -> float:
+        return self.rate_value
+
     def __copy__(self) -> Self:
         return self.copy()
 
