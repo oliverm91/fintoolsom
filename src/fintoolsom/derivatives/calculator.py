@@ -35,11 +35,18 @@ class Calculator:
     @staticmethod
     def get_forward_mtm(
         forward: Forward,
-        spot: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
-        currency: Currency
+        market: Market,
+        riskless_index: Index,
+        currency: Currency,
     ) -> float:
+        """Deliverable FX forward MTM. Curves and spot are derived from `market`
+        (mirrors get_mtm_option): domestic = quote-currency curve, foreign =
+        base-currency curve, both under `riskless_index`."""
+        cp = forward.currency_pair
+        domestic_curve = market.get_curve(riskless_index, cp.quote_currency)
+        foreign_curve = market.get_curve(riskless_index, cp.base_currency)
+        spot = market.get_fx_rate(market.t, cp).value
+
         df_d = domestic_curve.get_df(forward.payment_date)
         df_f = foreign_curve.get_df(forward.payment_date)
         notional_leg_vp = spot * forward.notional * df_f
@@ -51,10 +58,18 @@ class Calculator:
     @staticmethod
     def get_ndf_mtm(
         ndf: NDF,
-        spot: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        market: Market,
+        riskless_index: Index,
+        currency: Currency,
     ) -> float:
+        """Non-deliverable FX forward MTM: the fixing (settlement) FX is projected
+        as spot * df_f / df_d at the fixing_date, and the settlement amount is
+        discounted from payment_date on the quote-currency (domestic) curve."""
+        cp = ndf.currency_pair
+        domestic_curve = market.get_curve(riskless_index, cp.quote_currency)
+        foreign_curve = market.get_curve(riskless_index, cp.base_currency)
+        spot = market.get_fx_rate(market.t, cp).value
+
         df_d = domestic_curve.get_df(ndf.fixing_date)
         df_f = foreign_curve.get_df(ndf.fixing_date)
 
@@ -431,7 +446,7 @@ class Calculator:
                 starts  = [s for s, f in zip(leg.start_dates, pure_future) if f]
                 ends    = [e for e, f in zip(leg.end_dates,   pure_future) if f]
                 fwd_dfs = proj_curve.get_dfs_fwds(starts, ends)
-                flows[pure_future[future_payment]] = leg.residuals[pure_future] * (fwd_dfs - 1) + leg.spreads[pure_future]
+                flows[pure_future[future_payment]] = leg.residuals[pure_future] * (fwd_dfs - 1) + leg.spreads_values[pure_future]
 
             if current_mask.any():
                 idx = int(np.where(current_mask)[0][0])
@@ -452,7 +467,7 @@ class Calculator:
                     interest = market.accrue_rates_reset_business_days(
                         c.residual, rate_name, c.start_date, c.end_date
                     )
-                flows[current_mask[future_payment]] = interest + leg.spreads[idx]
+                flows[current_mask[future_payment]] = interest + leg.spreads_values[idx]
 
         return float(np.dot(flows, dfs))
 
@@ -501,8 +516,14 @@ class Calculator:
     @staticmethod
     def valuate(instrument: Forward | NDF | Option | Swap, market: Market, riskless_index: Index, currency: Currency) -> float:
         """Dispatches to the matching MTM calculation using only `instrument` and
-        `market`. NDF must be checked before Forward since NDF is a subclass of
-        Forward — handled inside get_mtm_forward."""
+        `market`. NDF is checked before Forward since NDF is a subclass of Forward."""
+        if isinstance(instrument, NDF):
+            if instrument.is_uf_indexed:
+                raise NotImplementedError(
+                    "UF-indexed NDF valuation is not routed through valuate(); it needs a "
+                    "UF (CLF) curve and UF history — use get_uf_forward_mtm directly."
+                )
+            return Calculator.get_ndf_mtm(instrument, market, riskless_index, currency)
         if isinstance(instrument, Forward):
             return Calculator.get_forward_mtm(instrument, market, riskless_index, currency)
         if isinstance(instrument, Swap):
