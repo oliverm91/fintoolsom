@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
+from fintoolsom.rates.Rates import RateConvention
+
 from ..dates import AdjustmentDateConventionBase
 from ..dates.time_fractions import TimeFractionBase
 from .currencies import Currency
@@ -14,13 +16,6 @@ class PaymentFrequency(Enum):
     QUARTERLY = "QUARTERLY"
     SEMIANNUAL = "SEMIANNUAL"
     ANNUAL = "ANNUAL"
-
-
-@dataclass
-class BasisPoints:
-    """Spread in basis points over a floating index. Decimal rate = value / divisor."""
-    value: float
-    divisor: int = field(default=10_000)
 
 
 @dataclass
@@ -41,4 +36,4 @@ class FixedLegSpec(LegSpec):
 @dataclass
 class FloatingLegSpec(LegSpec):
     index: InterestIndex
-    spread: BasisPoints | None = field(default=None)
+    spread: Rate

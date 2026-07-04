@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from datetime import date
 
+from fintoolsom.rates.Rates import Rate
+
 
 @dataclass
 class SwapCoupon:
@@ -10,21 +12,20 @@ class SwapCoupon:
     start_date: date
     end_date: date
     payment_date: date
-    time_fraction: float
 
 
 @dataclass
 class FixedCoupon(SwapCoupon):
-    rate: float
+    rate: Rate
     flow: float = field(init=False)  # rate * time_fraction * residual + amortization
 
     def __post_init__(self):
-        self.flow = self.rate * self.time_fraction * self.residual + self.amortization
+        self.flow = self.rate.get_accrued_interest(self.residual, self.start_date, self.end_date) + self.amortization
 
 
 @dataclass
 class FloatingCoupon(SwapCoupon):
-    spread_bps: float = 0.0
+    spread: Rate
 
 
 @dataclass

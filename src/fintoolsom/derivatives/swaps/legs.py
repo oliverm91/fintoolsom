@@ -6,6 +6,8 @@ from typing import cast
 
 import numpy as np
 
+from fintoolsom.rates.Rates import Rate, RateConvention
+
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
 from ...dates import AdjustmentDateConventionBase, ScheduleGenerator
 from ...dates.term import Term
@@ -30,7 +32,6 @@ class SwapLeg:
 
     residuals: np.ndarray = field(init=False)
     amortizations: np.ndarray = field(init=False)
-    time_fractions: np.ndarray = field(init=False)
     start_dates: list[date] = field(init=False)
     end_dates: list[date] = field(init=False)
     payment_dates: list[date] = field(init=False)
@@ -38,7 +39,6 @@ class SwapLeg:
     def __post_init__(self):
         self.residuals = np.array([c.residual for c in self.coupons])
         self.amortizations = np.array([c.amortization for c in self.coupons])
-        self.time_fractions = np.array([c.time_fraction for c in self.coupons])
         self.start_dates = [c.start_date for c in self.coupons]
         self.end_dates = [c.end_date for c in self.coupons]
         self.payment_dates = [c.payment_date for c in self.coupons]
@@ -96,8 +96,7 @@ class FixedLeg(SwapLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        time_fraction: TimeFractionBase,
-        rate: float,
+        rate: Rate,
         currency: Currency,
         stub_first: bool = True,
         long_stub: bool = False,
@@ -108,14 +107,14 @@ class FixedLeg(SwapLeg):
             adj_convention, stub_first, long_stub, maturity_date,
         )
         n = len(schedule) - 1
+        maturity = max(schedule)
         coupons = [
             FixedCoupon(
                 residual=notional,
-                amortization=0.0,
+                amortization=0.0 if schedule[i+1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
                 rate=rate,
             )
             for i in range(n)
@@ -127,13 +126,12 @@ class FixedLeg(SwapLeg):
 class FloatingLeg(SwapLeg):
     """Floating-rate leg. Flow amounts are projected at valuation time using the index curve."""
     index: InterestIndex
-    spread_bps: float = 0.0
-    spreads: np.ndarray = field(init=False)
+    spread: Rate
+    spreads_values: np.ndarray = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
-        self.spreads = (self.spread_bps / 10_000) * self.time_fractions * self.residuals
-
+        self.spreads_values = self.residuals * (self.spread.get_wealth_factor(self.start_dates, self.end_dates) - 1)
     @property
     def currency(self) -> Currency:
         # All concrete InterestIndex types also extend Index, which holds currency.
@@ -145,7 +143,6 @@ class TermRateLeg(FloatingLeg):
     """Floating leg for a term-rate or price index.
     fixing_dates are explicit — they typically don't coincide with start_date."""
     fixing_dates: list[date] = field(default_factory=list)
-
     @classmethod
     def from_term(
         cls,
@@ -154,9 +151,8 @@ class TermRateLeg(FloatingLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        time_fraction: TimeFractionBase,
         index: InterestIndex,
-        spread_bps: float = 0.0,
+        spread: Rate = Rate(RateConvention(), 0.0),
         fixing_lag: int = 0,
         stub_first: bool = True,
         long_stub: bool = False,
@@ -169,20 +165,20 @@ class TermRateLeg(FloatingLeg):
         calendar = adj_convention.calendar
         n = len(schedule) - 1
         fixing_dates = [calendar.add_business_days(schedule[i], -fixing_lag) for i in range(n)]
+        maturity = max(schedule)
         coupons = [
             TermRateCoupon(
                 residual=notional,
-                amortization=0.0,
+                amortization=0.0 if schedule[i+1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
-                spread_bps=spread_bps,
+                spread=spread,
                 fixing_date=fixing_dates[i],
             )
             for i in range(n)
         ]
-        return cls(coupons=coupons, index=index, spread_bps=spread_bps, fixing_dates=fixing_dates)
+        return cls(coupons=coupons, index=index, spread=spread, fixing_dates=fixing_dates)
 
 
 @dataclass
@@ -197,9 +193,8 @@ class OvernightLeg(FloatingLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        time_fraction: TimeFractionBase,
         index: InterestIndex,
-        spread_bps: float = 0.0,
+        spread: Rate = Rate(RateConvention(), 0.0),
         stub_first: bool = True,
         long_stub: bool = False,
         maturity_date: date | None = None,
@@ -209,19 +204,19 @@ class OvernightLeg(FloatingLeg):
             adj_convention, stub_first, long_stub, maturity_date,
         )
         n = len(schedule) - 1
+        maturity = max(schedule)
         coupons = [
             OvernightCoupon(
                 residual=notional,
-                amortization=0.0,
+                amortization=0.0 if schedule[i+1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
-                spread_bps=spread_bps,
+                spread=spread,
             )
             for i in range(n)
         ]
-        return cls(coupons=coupons, index=index, spread_bps=spread_bps)
+        return cls(coupons=coupons, index=index, spread=spread)
 
 
 @dataclass
@@ -242,9 +237,8 @@ class XCCYFloatingLeg(FloatingLeg):
         term: Term,
         payment_frequency: str,
         adj_convention: AdjustmentDateConventionBase,
-        time_fraction: TimeFractionBase,
         index: InterestIndex,
-        spread_bps: float = 0.0,
+        spread: Rate = Rate(RateConvention(), 0.0),
         stub_first: bool = True,
         long_stub: bool = False,
         maturity_date: date | None = None,
@@ -254,17 +248,17 @@ class XCCYFloatingLeg(FloatingLeg):
             adj_convention, stub_first, long_stub, maturity_date,
         )
         n = len(schedule) - 1
+        maturity = max(schedule)
         coupons = [
             XCCYCoupon(
                 residual=notional,
-                amortization=0.0,
+                amortization=0.0 if schedule[i+1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
                 payment_date=schedule[i + 1],
-                time_fraction=time_fraction.get_day_count_factor(schedule[i], schedule[i + 1]),
-                spread_bps=spread_bps,
+                spread=spread,
                 fx_fixing_date=schedule[i + 1],
             )
             for i in range(n)
         ]
-        return cls(coupons=coupons, index=index, spread_bps=spread_bps)
+        return cls(coupons=coupons, index=index, spread=spread)

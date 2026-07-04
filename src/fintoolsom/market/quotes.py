@@ -6,6 +6,8 @@ from datetime import date
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from fintoolsom.rates.Rates import Rate, RateConvention
+
 from .conventions import FixedLegSpec, FloatingLegSpec
 from .currencies import CurrencyPair, FX_Rate
 from .localities import Locality
@@ -22,6 +24,12 @@ if TYPE_CHECKING:
 
 class InstrumentQuote(ABC):
     """Enforces get_instrument() on all concrete quote subclasses."""
+
+    __hash__ = object.__hash__
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.__hash__ = object.__hash__  # type: ignore[method-assign]
 
     @abstractmethod
     def get_instrument(self) -> object:
@@ -282,8 +290,7 @@ class IRSQuote(_SwapQuote):
             term=self.term,
             frequency=self.fixed_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            time_fraction=self.fixed_leg.time_fraction,
-            rate=self.fixed_leg.rate.value,
+            rate=self.fixed_leg.rate,
             currency=self.fixed_leg.currency,
             stub_first=self.stub_first,
             long_stub=self.long_stub,
@@ -295,9 +302,8 @@ class IRSQuote(_SwapQuote):
             term=self.term,
             frequency=self.floating_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            time_fraction=self.floating_leg.time_fraction,
             index=self.floating_leg.index,
-            spread_bps=self.floating_leg.spread.value if self.floating_leg.spread else 0.0,
+            spread=self.floating_leg.spread,
             maturity_date=mat,
         )
         if self.quoted_side == QuotedSide.RECEIVE:
@@ -333,9 +339,8 @@ class IRBasisQuote(_SwapQuote):
                 term=self.term,
                 frequency=spec.payment_frequency.value,
                 adj_convention=self.adj_convention,
-                time_fraction=spec.time_fraction,
                 index=spec.index,
-                spread_bps=spec.spread.value if spec.spread else 0.0,
+                spread=spec.spread,
                 stub_first=self.stub_first,
                 long_stub=self.long_stub,
                 maturity_date=mat,
@@ -374,8 +379,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             term=self.term,
             frequency=self.fixed_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            time_fraction=self.fixed_leg.time_fraction,
-            rate=self.fixed_leg.rate.value,
+            rate=self.fixed_leg.rate,
             currency=self.fixed_leg.currency,
             stub_first=self.stub_first,
             long_stub=self.long_stub,
@@ -387,9 +391,8 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             term=self.term,
             frequency=self.floating_leg.payment_frequency.value,
             adj_convention=self.adj_convention,
-            time_fraction=self.floating_leg.time_fraction,
             index=self.floating_leg.index,
-            spread_bps=self.floating_leg.spread.value if self.floating_leg.spread else 0.0,
+            spread=spec.spread,
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
@@ -426,9 +429,8 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
                 term=self.term,
                 frequency=spec.payment_frequency.value,
                 adj_convention=self.adj_convention,
-                time_fraction=spec.time_fraction,
                 index=spec.index,
-                spread_bps=spec.spread.value if spec.spread else 0.0,
+                spread=spec.spread,
                 stub_first=self.stub_first,
                 long_stub=self.long_stub,
                 maturity_date=mat,

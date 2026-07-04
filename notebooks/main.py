@@ -2,14 +2,26 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from fintoolsom.dates.adjustments import FollowingConvention
+from fintoolsom.dates.calendars import Calendar
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from build_quotes import build_quotes
+from fintoolsom.curve_builder import build_curves
+from fintoolsom.dates.term import Term, TermUnit
+from fintoolsom.dates import ActualDayCountConvention
 from fintoolsom.market import IRSQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
+from fintoolsom.market import CurrencyName, Currency, CurrencyPair, Market
+from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
+from fintoolsom.market.currencies import FX_RateData, FX_Rate
+from fintoolsom.market.index import RateIndex
+from fintoolsom.market.index_history import OvernightRateHistory
 
 QUOTES_FILE = Path(__file__).parent / "quotes.json"
 
-quotes = build_quotes(date(2026, 6, 29), str(QUOTES_FILE))
+t = date(2026, 6, 29)
+quotes = build_quotes(t, str(QUOTES_FILE))
 
 print(f"Total quotes loaded: {len(quotes)}\n")
 
@@ -29,3 +41,16 @@ for type_name, qs in by_type.items():
         elif isinstance(q, ForwardPointsQuote):
             print(f"  {q.term}  points={q.value}")
     print()
+
+usd = Currency(CurrencyName.USD)
+clp = Currency(CurrencyName.CLP)
+sofr = RateIndex("SOFR", Term(1, TermUnit.D, FollowingConvention(Calendar("US"))), currency=usd)
+
+sofr_data = OvernightRateHistory(sofr, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.25/100)})
+icp = RateIndex("ICP", Term(1, TermUnit.D, FollowingConvention(Calendar(country="CL"))), currency=clp)
+icp_data =  OvernightRateHistory(icp, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.75/100)})
+cp = CurrencyPair(usd, clp)
+
+fx_rate_data = FX_RateData(cp, {t: FX_Rate(cp, 900)})
+market = Market(t, fx_history={cp: fx_rate_data}, indexes_history={"SOFR": sofr_data, "ICP": icp_data})
+build_curves(quotes, icp, market)

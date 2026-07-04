@@ -10,6 +10,7 @@ from .adjustments import AdjustmentDateConventionBase
 
 
 class TermUnit(Enum):
+    D = "D"
     W = "W"
     M = "M"
     Y = "Y"
@@ -33,8 +34,10 @@ class Term:
             raw = from_date + relativedelta(weeks=self.value)
         elif self.unit == TermUnit.M:
             raw = from_date + relativedelta(months=self.value)
-        else:  # Y
+        elif self.unit == TermUnit.Y:
             raw = from_date + relativedelta(years=self.value)
+        else: # D
+            raw = self.adj_convention.calendar.add_business_days(from_date, self.value)
         return self.adj_convention.adjust(raw)
 
     def __str__(self) -> str:

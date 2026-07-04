@@ -1,281 +1,213 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
-from typing import Any
+from scipy.optimize import least_squares
 
-import numpy as np
-from scipy.optimize import brentq, fsolve, least_squares  # type: ignore[import-untyped]
+from fintoolsom.rates.Rates import RateConvention  # type: ignore[import-untyped]
 
-from ..dates import ActualDayCountConvention
 from ..market.index import Index
-from ..market.currencies import Currency
+from ..market.currencies import Currency, CurrencyName, CurrencyPair
+from ..derivatives.calculator import Calculator
 from ..market.market import Market
-from ..market.quotes import IRSQuote
+from ..market.index_history import RateHistory
+from ..market.quotes import InstrumentQuote
+from ..derivatives.swaps import Swap, FloatingLeg
+from ..derivatives.forwards import Forward, NDF
 from ..rates import ZeroCouponCurve
-from ._needs import CurveKey, _curves_needed
-from ._grouping import _group_by_maturity
 
 
-class InsufficientQuotesError(ValueError):
-    """Raised when a maturity bucket has more unknown curves than available quotes.
-
-    Example: two curves (SOFR + LIBOR) need pillars at 3Y but only one
-    instrument is available. The system is under-determined."""
+CurveKey = tuple[Index, Currency]
 
 
-def _build_market(
-    curve_pillars: dict[CurveKey, list[tuple[date, float]]],
-    riskless_index: Index,
-    t: date,
-) -> Market:
-    """Construct a Market from the currently solved curve pillars.
+def _curves_needed(quote: InstrumentQuote, riskless_index: Index) -> frozenset[CurveKey]:
+    keys: set[CurveKey] = set()
 
-    Index keys that equal riskless_index are the normalised form of
-    (riskless_index, riskless_index.currency) and populate both
-    projection_curves and discount_curves for that currency.
-    All other Index keys (floating projection indices) go into
-    projection_curves only. Tuple keys go into discount_curves only."""
-    projection_curves: dict[Index, ZeroCouponCurve] = {}
-    discount_curves: dict[tuple[Index, Currency], ZeroCouponCurve] = {}
+    instrument = quote.get_instrument()
+    if isinstance(instrument, Swap):
+        for leg in (instrument.receive_leg, instrument.pay_leg):
+            keys.add((riskless_index, leg.currency))
+            if isinstance(leg, FloatingLeg):
+                keys.add((leg.index, leg.index.currency))
+    elif isinstance(instrument, NDF) and instrument.is_uf_indexed:
+        # UF curve structure (CLP riskless + UF index) needs a UF Index that quotes
+        # don't carry; not covered by this pass (mirrors historical behavior).
+        return frozenset()
+    else:  # Forward / FX NDF
+        curr_pair: CurrencyPair = instrument.currency_pair
+        for curr in (curr_pair.base_currency, curr_pair.quote_currency):
+            keys.add((riskless_index, curr))
 
-    for key, pillars in curve_pillars.items():
-        if not pillars:
-            continue
-        curve = ZeroCouponCurve(curve_date=t, date_dfs=pillars)
-        if isinstance(key, tuple):
-            idx, ccy = key
-            discount_curves[(idx, ccy)] = curve
-        elif key == riskless_index:
-            # Normalised riskless: serves as both projection and self-currency discount.
-            projection_curves[key] = curve
-            discount_curves[(riskless_index, key.currency)] = curve
-        else:
-            projection_curves[key] = curve
+    # Not all quote types carry collateral_index (only _SwapQuote does).
+    collateral: Index | None = getattr(quote, "collateral_index", None)
+    if collateral:
+        keys.add((collateral, collateral.currency))
+        keys.add((riskless_index, collateral.currency))
 
-    return Market(t=t, discount_curves=discount_curves, projection_curves=projection_curves)
+    return frozenset(keys)
 
 
-def _initial_df(
-    unknown_key: CurveKey,
-    solver_quotes: list,
-    curve_pillars: dict[CurveKey, list[tuple[date, float]]],
-    t: date,
-    pillar_date: date,
-) -> float:
-    """Compute an initial DF guess for the solver.
-
-    Strategy (in order):
-    1. Log-linear extrapolation from the curve's most recent solved pillar.
-    2. For IRSQuote: approximate zero rate ≈ fixed rate → DF = exp(-r * yf).
-    3. Fallback: 0.99."""
-    existing = curve_pillars.get(unknown_key, [])
-    if existing:
-        last_date, last_df = existing[-1]
-        days_last = (last_date - t).days
-        days_new = (pillar_date - t).days
-        if days_last > 0 and days_new > days_last and last_df > 0:
-            zero_rate = -np.log(last_df) / days_last * 365
-            return float(np.exp(-zero_rate * days_new / 365))
-
-    for q in solver_quotes:
-        if isinstance(q, IRSQuote):
-            rate_val = q.fixed_leg.rate.value
-            yf = ActualDayCountConvention.get_time_fraction(t, pillar_date, 365)
-            if yf > 0:
-                return float(np.exp(-rate_val * yf))
-
-    return 0.99
-
-
-def _get_spot(spot_rates: dict, cp) -> float:
-    """Look up a spot rate for cp, trying the inverted pair if needed."""
-    v = spot_rates.get(cp)
-    if v is not None:
-        return float(v)
-    inv = cp.invert()
-    v2 = spot_rates.get(inv)
-    if v2 is not None:
-        return 1.0 / float(v2)
-    raise ValueError(f"spot_rates has no entry for {cp} or {inv}")
-
-
-def _instrument_mtm(quote, market: Market, riskless_index: Index, spot_rates: dict | None) -> float:
-    """Compute par-MTM for a single InstrumentQuote given a partial Market.
-
-    Dispatches to swap MTM or FX forward/NDF MTM based on quote type.
-    For forward quotes, spot_rates must contain the relevant CurrencyPair."""
-    from ..market.quotes import _SwapQuote as _SQ, _ForwardQuote as _FQ
-    from ..derivatives.calculator import Calculator
-    from ..derivatives.forwards.forwards import NDF
-
-    if isinstance(quote, _SQ):
-        inst = quote.get_instrument()
-        return Calculator.get_swap_mtm(inst, market, riskless_index, inst.receive_leg.currency)  # type: ignore
-
-    if isinstance(quote, _FQ):
-        inst: Any = quote.get_instrument()
-        cp = inst.currency_pair
-        dc = market.discount_curves.get((riskless_index, cp.quote_currency))
-        fc = market.discount_curves.get((riskless_index, cp.base_currency))
-        if dc is None or fc is None:
-            return 0.0  # curves not yet built for this pair
-        if spot_rates is None:
-            raise ValueError(f"spot_rates required to value {type(quote).__name__}")
-        spot = _get_spot(spot_rates, cp)
-        sign = 1.0 if inst.is_buy else -1.0
-        if isinstance(inst, NDF):
-            df_d_fix = dc.get_df(inst.fixing_date)
-            df_f_fix = fc.get_df(inst.fixing_date)
-            fwd = spot * df_f_fix / df_d_fix
-            df_d_pmt = dc.get_df(inst.payment_date)
-            return sign * inst.notional * (fwd - inst.strike) * df_d_pmt
-        df_d = dc.get_df(inst.payment_date)
-        df_f = fc.get_df(inst.payment_date)
-        return sign * inst.notional * (spot * df_f - inst.strike * df_d)
-
-    raise NotImplementedError(f"No MTM implementation for {type(quote).__name__}")
-
+def _get_maturity(curve_key: CurveKey, instrument: Swap | Forward, riskless_index: Index) -> date | None:
+    maturity_candidates: set[date] = set()
+    if isinstance(instrument, Swap):
+        for leg in (instrument.receive_leg, instrument.pay_leg):
+            if leg.currency == curve_key[1] and curve_key[0] == riskless_index:
+                maturity_candidates.add(max(leg.payment_dates))
+            if isinstance(leg, FloatingLeg):
+                if leg.index == curve_key[0] and leg.index.currency == curve_key[1]:
+                    maturity_candidates.add(max(leg.end_dates))
+    elif isinstance(instrument, Forward):
+        if instrument.currency_pair is None:
+            # UF-indexed NDF: excluded from this pass (see _curves_needed).
+            return None
+        currencies = (instrument.currency_pair.base_currency, instrument.currency_pair.quote_currency)
+        for currency in currencies:
+            if currency == curve_key[1] and curve_key[0] == riskless_index:
+                if isinstance(instrument, NDF):
+                    maturity_candidates.add(instrument.fixing_date)
+                else:
+                    maturity_candidates.add(instrument.payment_date)
+    else:
+        raise TypeError(
+            f"_get_maturity only supports Swap and Forward instruments, got {type(instrument).__name__}."
+        )
+    if maturity_candidates:
+        return max(maturity_candidates)
+    # This should only happen when an instrument not affected by curve_key was passed.
+    return None
 
 def build_curves(
     quotes: list,
     riskless_index: Index,
-    spot_rates: dict | None = None,
-) -> tuple[dict[Index, ZeroCouponCurve], dict[tuple[Index, Currency], ZeroCouponCurve]]:
-    """Bootstrap ZeroCouponCurve objects from a list of InstrumentQuotes.
+    market: Market,
+) -> None:
+    """Bootstrap ZeroCouponCurve objects from `quotes` and store them in
+    `market.curves`, keyed by (Index, Currency). Mutates `market` in place;
+    does not return anything. `market` must already be valued as of the
+    quotes' quote_date and carry whatever FX/other data Calculator.valuate
+    needs at that date (e.g. spot rates for FX forwards)."""
 
-    Returns (projection_curves, discount_curves) where the two dicts share the same
-    ZeroCouponCurve object for curves that are both a projection index and the riskless
-    discount for their own currency (e.g. SOFR for USD, ICP for CLP).
-
-    Algorithm
-    ---------
-    1.  Derive valuation date t from the earliest quote_date across all quotes.
-    2.  Build a dependency graph: each quote → frozenset[CurveKey] of curves it needs.
-    3.  Collect all unique CurveKeys across all quotes.
-    4.  Sort quotes by terminal pillar date (shortest tenor first).
-    5.  Iterate maturity buckets:
-        a.  Identify all CurveKeys referenced by this bucket's quotes.
-        b.  Raise InsufficientQuotesError if the system is under-determined
-            (#quotes < #unknown_curves). Over-determined systems are solved via
-            least-squares.
-        c.  Build a partial Market from all pillars solved in previous iterations.
-        d.  Find DF values for each curve's new pillar:
-            - 1 unknown, 1 quote  → brentq (DF ∈ (1e-8, 2.0))
-            - N unknowns, N quotes → fsolve
-            - N unknowns, M>N quotes → least_squares (minimise residual MTMs)
-        e.  Append the solved (pillar_date, df) to each curve's pillar list.
-    6.  Build final ZeroCouponCurve objects from the accumulated pillar lists.
-    7.  Assemble and return the two output dicts.
-
-    Parameters
-    ----------
-    spot_rates:
-        Required when forwards or NDFs are included in quotes. Maps CurrencyPair
-        to spot rate (or its inverse — both directions are tried)."""
-    # 1. Derive t from any quote that carries quote_date
-    all_dates = [q.quote_date for q in quotes if getattr(q, "quote_date", None) is not None]
+    # 1. Derive valuation date from quotes and cross-check against market.t, since
+    # Calculator.valuate reads FX (and other) market data off market.t internally.
+    all_dates = {q.quote_date for q in quotes if getattr(q, "quote_date", None) is not None}
     if not all_dates:
-        return {}, {}
-    t: date = min(all_dates)  # type: ignore[type-var]
+        raise ValueError("No quotes with a quote_date were provided; cannot derive a valuation date.")
+    if len(all_dates) > 1:
+        raise ValueError(f"All quotes must share the same quote_date; got {sorted(all_dates)}.")
+    t: date = next(iter(all_dates))
+    if t != market.t:
+        raise ValueError(
+            f"Quotes' quote_date ({t}) does not match market.t ({market.t}); market must be "
+            "valued as of the same date as the quotes (Calculator.valuate reads FX and other "
+            "data off market.t)."
+        )
 
     # 2. Dependency graph (all quote types)
-    needs: dict = {q: _curves_needed(q, riskless_index) for q in quotes}
+    needs: dict[InstrumentQuote, frozenset[CurveKey]] = {q: _curves_needed(q, riskless_index) for q in quotes}
 
-    # 3. All curve keys
-    all_keys: set[CurveKey] = set()
-    for ks in needs.values():
-        all_keys.update(ks)
+    curve_key_count: defaultdict[frozenset[CurveKey], int] = defaultdict(int)
+    for needed_curves in needs.values():
+        curve_key_count[needed_curves] += 1
 
-    if not all_keys:
-        return {}, {}
+    # Solve curve groups with fewer curves first, so simpler/more fundamental
+    # curves are available as x0 seeds when solving more complex groups.
+    curves_groups_count: list[tuple[frozenset[CurveKey], int]] = list(curve_key_count.items())
+    curves_groups_count.sort(key=lambda x: len(x[0]))
+    curves_groups = [group for group, _ in curves_groups_count]
 
-    # 4. Group by maturity (shortest first)
-    maturity_groups = _group_by_maturity(quotes)
+    for curve_group in curves_groups:
+        if not curve_group:
+            # Quotes needing no curves here (e.g. UF-indexed NDFs; see _curves_needed).
+            continue
 
-    # 5. Bootstrap
-    curve_pillars: dict[CurveKey, list[tuple[date, float]]] = {k: [] for k in all_keys}
+        # Loop to solve curves in group. Each solve iteration will save a different combination of discount factors in a ZeroCouponCurve
+        # object in Market and solve instrument mtms with current calculator definitons.
+        # Once solved, solution will be saved in market.
+        group_instruments = [q.get_instrument() for q, curves in needs.items() if curves == curve_group]
 
-    for pillar_date, bucket_quotes in maturity_groups:
-        bucket_keys: set[CurveKey] = set()
-        for q in bucket_quotes:
-            bucket_keys.update(needs[q])
-        unknown_keys = list(bucket_keys)
+        # First, let's check which curves need solving. Some might have been solved in previous iteration.
+        curves_to_build: dict[CurveKey, list[tuple[date, float]]] = {}  # curve -> pillars to solve with x0 estimation.
+        for curve in curve_group:
+            # Curve maturities are all maturities information that instruments that have an impact on `curve` can give
+            curve_maturities = {_get_maturity(curve, instr, riskless_index) for instr in group_instruments}
+            curve_maturities.discard(None)
 
-        if len(bucket_quotes) < len(unknown_keys):
-            raise InsufficientQuotesError(
-                f"At pillar {pillar_date}: {len(unknown_keys)} curve(s) need new pillars "
-                f"but only {len(bucket_quotes)} quote(s) available (under-determined)."
+            # TODO: Number of curve points to be solved should be equal to new maturities being added in each curve only. Not the whole curve.
+            if not curve_maturities:
+                continue
+            x0 = None
+            if curve not in market.curves:
+                # If not present in market, need solving. Seed with a flat 4% guess.
+                # If curve index currency and curve currency are the same, look for index history for better guess
+                guess = 0.04
+                curve_index, curve_currency = curve
+                if curve_currency==curve_index.currency:
+                    try:
+                        index_history = market.get_index(curve_index.name)
+                        if isinstance(index_history, RateHistory):
+                            r = index_history.rates[t].copy()
+                            r.convert_rate_convention(RateConvention())
+                            guess = r.rate_value
+                            curve_maturities.add(index_history.index.term.advance(t)) # TODO: Avoid this maturity from being solved
+                    except KeyError:
+                        pass
+
+                x0 = sorted(
+                    (maturity, (1 + guess) ** (-(maturity - t).days / 365)) for maturity in curve_maturities
+                )
+            else:
+                # Curve was solved before, but this group of instruments might introduce extra information from new maturities.
+                # Those will be added and use previous discount factors from existing maturities as x0.
+                built_curve = market.curves[curve]
+                built_curve_date_dfs: list[tuple[date, float]] = list(built_curve.date_dfs)
+                built_curve_dates = {d for d, _ in built_curve_date_dfs}
+                for curve_maturity in curve_maturities:
+                    if curve_maturity not in built_curve_dates:
+                        # This curve_maturity is not in current market curve
+                        x0_df = built_curve.get_df(curve_maturity)
+                        built_curve_date_dfs.append((curve_maturity, x0_df))
+                    else:
+                        ... # TODO: Avoid this maturity from being solved as it was previously solved for other instruments.
+                if len(built_curve_date_dfs) > len(built_curve.curve_points):
+                    built_curve_date_dfs.sort(key=lambda pt: pt[0])
+                    x0 = built_curve_date_dfs
+            if x0:
+                curves_to_build[curve] = x0
+
+        if not curves_to_build:
+            continue
+
+        curves_quotes: set[InstrumentQuote] = set()
+        flat_x0s: list[float] = []
+        curve_key_startend_index: dict[CurveKey, tuple[int, int]] = {}
+        start = 0
+        # Now let's build a x0 vector with all dfs of all of the curves that need rebuilding.
+        for curve_to_build, x0 in curves_to_build.items():
+            end = start + len(x0)
+            curve_key_startend_index[curve_to_build] = (start, end)
+            curves_quotes.update({q for q, curves_needed in needs.items() if curves_needed.issubset(curves_to_build)}) # Quotes used to solve are those that uses curves to build or less.
+            flat_x0s += [df for _, df in x0]
+            start = end
+
+        instruments = [q.get_instrument() for q in curves_quotes]
+
+        def f(flat_x: list[float]) -> list[float]:
+            for curve, (start, end) in curve_key_startend_index.items():
+                dfs = flat_x[start:end]
+                dates = [d for d, _ in curves_to_build[curve]]
+                market.curves[curve] = ZeroCouponCurve(t, date_dfs=list(zip(dates, dfs)))
+            return [Calculator.valuate(instrument, market, riskless_index, Currency(CurrencyName.CLP)) for instrument in instruments]
+
+        result = least_squares(f, flat_x0s, bounds=(5e-2, 1.5))
+        if not result.success:
+            raise ValueError(
+                f"Curve solve failed to converge for curve group {set(curves_to_build)}: {result.message}"
             )
-
-        x0 = [_initial_df(k, bucket_quotes, curve_pillars, t, pillar_date) for k in unknown_keys]
-
-        def _mtm(q, mkt: Market) -> float:
-            return _instrument_mtm(q, mkt, riskless_index, spot_rates)
-
-        if len(unknown_keys) == 1 and len(bucket_quotes) == 1:
-            key = unknown_keys[0]
-            quote = bucket_quotes[0]
-
-            def _obj(df_val, _key=key, _quote=quote):
-                test = {k: list(v) for k, v in curve_pillars.items()}
-                test[_key] = curve_pillars[_key] + [(pillar_date, float(df_val))]
-                return _mtm(_quote, _build_market(test, riskless_index, t))
-
-            try:
-                df_sol: float = brentq(_obj, 1e-8, 2.0, xtol=1e-10)  # type: ignore[assignment]
-            except ValueError as exc:
-                raise ValueError(
-                    f"brentq failed at pillar {pillar_date} for curve {key}: {exc}"
-                ) from exc
-            curve_pillars[key].append((pillar_date, df_sol))
-
-        elif len(bucket_quotes) == len(unknown_keys):
-            # Exactly determined N-D system
-            def _res_exact(dfs, _keys=unknown_keys, _quotes=bucket_quotes):
-                test = {k: list(v) for k, v in curve_pillars.items()}
-                for k_i, df_i in zip(_keys, dfs):
-                    test[k_i] = curve_pillars[k_i] + [(pillar_date, float(df_i))]
-                mkt = _build_market(test, riskless_index, t)
-                return [_mtm(q, mkt) for q in _quotes]
-
-            dfs_sol = fsolve(_res_exact, x0)  # type: ignore[assignment]
-            for k_i, df_i in zip(unknown_keys, np.asarray(dfs_sol, dtype=float)):
-                curve_pillars[k_i].append((pillar_date, float(df_i)))
-
-        else:
-            # Over-determined: minimise sum of squared MTMs
-            bounds_lo = [1e-8] * len(unknown_keys)
-            bounds_hi = [2.0] * len(unknown_keys)
-
-            def _res_over(dfs, _keys=unknown_keys, _quotes=bucket_quotes):
-                test = {k: list(v) for k, v in curve_pillars.items()}
-                for k_i, df_i in zip(_keys, dfs):
-                    test[k_i] = curve_pillars[k_i] + [(pillar_date, float(df_i))]
-                mkt = _build_market(test, riskless_index, t)
-                return [_mtm(q, mkt) for q in _quotes]
-
-            result = least_squares(_res_over, x0, bounds=(bounds_lo, bounds_hi))
-            for k_i, df_i in zip(unknown_keys, np.asarray(result.x, dtype=float)):
-                curve_pillars[k_i].append((pillar_date, float(df_i)))
-
-    # 6. Build final ZeroCouponCurve objects
-    final: dict[CurveKey, ZeroCouponCurve] = {}
-    for key, pillars in curve_pillars.items():
-        if pillars:
-            final[key] = ZeroCouponCurve(curve_date=t, date_dfs=pillars)
-
-    # 7. Assemble output dicts (shared objects where keys are equivalent)
-    projection_curves: dict[Index, ZeroCouponCurve] = {}
-    discount_curves: dict[tuple[Index, Currency], ZeroCouponCurve] = {}
-
-    for key, curve in final.items():
-        if isinstance(key, tuple):
-            idx, ccy = key
-            discount_curves[(idx, ccy)] = curve
-        elif key == riskless_index:
-            projection_curves[key] = curve
-            discount_curves[(riskless_index, key.currency)] = curve
-        else:
-            projection_curves[key] = curve
-
-    return projection_curves, discount_curves
+        
+        # Add solved curves to market
+        for curve, (start, end) in curve_key_startend_index.items():
+            solved_dfs = result.x[start:end]
+            dates_dfs = curves_to_build[curve]
+            dates, _ = zip(*dates_dfs)
+            solved_curve = ZeroCouponCurve(t, date_dfs=list(zip(dates, solved_dfs)))
+            market.curves[curve] = solved_curve

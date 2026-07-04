@@ -1,14 +1,22 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
-from .localities import Locality
 from ..rates import Rate, ZeroCouponCurve
 from ..dates import Calendar
+
+if TYPE_CHECKING:
+    # Deferred: volatility_surface imports derivatives.calculator, which imports
+    # Swap (derivatives.swaps -> market.currencies), so a runtime import here
+    # would cycle back into this module before Market is defined.
+    from .volatility_surface import VolatilitySurface
 
 
 @dataclass(slots=True)
@@ -26,18 +34,14 @@ class Market:
 
     interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
 
-    # How should curves be assigned?
-    # All curves have a currency. Curves might or not be assigned to an index (ICP, Term, or USD_CL which has no Index)
-    # First filter per Currency.
-    # Filter per Index.
-    zero_coupon_curve_mapper: dict[
-        str, ZeroCouponCurve | dict[Locality, dict[Currency, ZeroCouponCurve]]
-    ] = field(default_factory=dict)  # First key is index_name which can be None.
-
-    discount_curves: dict[tuple[Index, Currency], ZeroCouponCurve] = field(default_factory=dict)
-    projection_curves: dict[Index, ZeroCouponCurve] = field(default_factory=dict)
+    # Every curve is keyed by (index, currency). A projection curve for `index` is
+    # simply the curve at (index, index.currency) — the same object doubles as the
+    # discount curve when `index` is used as collateral in its own currency.
+    curves: dict[tuple[Index, Currency], ZeroCouponCurve] = field(default_factory=dict)
+    volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(default_factory=dict)
 
     def __post_init__(self):
+        fxs_to_add = {}
         for cp, fx_data in self.fx_history.items():
             # Check fx_history FX_RateData is correctly mapped to CurrencyPairs.
             if cp != fx_data.currency_pair:
@@ -46,11 +50,9 @@ class Market:
                 )
             # Add inverted data
             if cp.invert() not in self.fx_history:
-                self.fx_history[cp.invert()] = fx_data.invert()
-
-        for k in list(self.zero_coupon_curve_mapper.keys()):
-            v = self.zero_coupon_curve_mapper.pop(k)
-            self.zero_coupon_curve_mapper[k.upper()] = v
+                fxs_to_add[cp.invert()] = fx_data.invert()
+        for cp, fx_data in fxs_to_add.items():
+            self.fx_history[cp] = fx_data
 
         for k in list(self.interest_rates.keys()):
             v = self.interest_rates.pop(k)
@@ -73,17 +75,20 @@ class Market:
                     cp_date
                 ] = inverted_cp
 
+    def get_curve(self, index: Index, currency: Currency) -> ZeroCouponCurve:
+        return self.curves[(index, currency)]
+
     def get_discount_df(self, riskless_index: Index, currency: Currency, t: date) -> float:
-        return self.discount_curves[(riskless_index, currency)].get_df(t)
+        return self.curves[(riskless_index, currency)].get_df(t)
 
     def get_discount_dfs(self, riskless_index: Index, currency: Currency, dates: list[date]) -> np.ndarray:
-        return self.discount_curves[(riskless_index, currency)].get_dfs(dates)
+        return self.curves[(riskless_index, currency)].get_dfs(dates)
 
     def get_projection_df(self, index: Index, t: date) -> float:
-        return self.projection_curves[index].get_df(t)
+        return self.curves[(index, index.currency)].get_df(t)
 
     def get_projection_dfs(self, index: Index, dates: list[date]) -> np.ndarray:
-        return self.projection_curves[index].get_dfs(dates)
+        return self.curves[(index, index.currency)].get_dfs(dates)
 
     def add_index(self, history: IndexHistory):
         self.indexes_history[history.name.upper()] = history
@@ -232,42 +237,10 @@ class Market:
         )
         return rate.get_accrued_interest(notional, start_date, end_date)
 
-    def get_zero_coupon_curve(
-        self, currency: Currency, locality: Locality = None, index_name: str = None
-    ) -> ZeroCouponCurve:
-        currency_str = currency.value
-        if currency_str not in self.zero_coupon_curve_mapper:
-            raise KeyError(f"No zero coupon curve found for currency {currency_str}.")
-        currency_curves_dict = self.zero_coupon_curve_mapper[
-            currency_str
-        ]  # This dict has locality and index_name as keys
-
-        if locality is None and index_name is None:
-            raise ValueError("locality and index_name cannot both be None.")
-
-        if locality is not None:
-            if locality not in currency_curves_dict:
-                raise KeyError(
-                    f"No zero coupon curve found for currency {currency_str} and locality {locality}."
-                )
-            return currency_curves_dict[locality]
-        else:
-            index_name = index_name.upper()
-            if index_name not in currency_curves_dict:
-                raise KeyError(
-                    f"No zero coupon curve found for currency {currency_str} and index {index_name}."
-                )
-            return currency_curves_dict[index_name]
-
-    def get_discount_curve(
-        self,
-        currency: Currency,
-        collateral_index_name: str = None,
-        locality: Locality = None,
-    ) -> ZeroCouponCurve:
-        return self.get_zero_coupon_curve(
-            currency, locality=locality, index_name=collateral_index_name
-        )
+    def get_volatility_surface(self, currency_pair: CurrencyPair) -> VolatilitySurface:
+        if currency_pair not in self.volatility_surfaces:
+            raise KeyError(f"No volatility surface found for currency pair {currency_pair}.")
+        return self.volatility_surfaces[currency_pair]
 
     def add_fx_rate(self, t: date, fx_rate: FX_Rate):
         if fx_rate.currency_pair not in self.fx_history:

@@ -10,7 +10,6 @@ from fintoolsom.dates.date_counts import ActualDayCountConvention
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.dates.time_fractions import TimeFractionBase
 from fintoolsom.market import (
-    BasisPoints,
     Currency,
     CurrencyPair,
     FX_Rate,
@@ -25,6 +24,7 @@ from fintoolsom.market import (
 )
 from fintoolsom.market.index import InterestPriceIndex, RateIndex
 from fintoolsom.market.localities import Locality
+from fintoolsom.dates import Term, TermUnit, ActualDayCountConvention
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention, CompoundedInterestConvention
 
 
@@ -38,9 +38,8 @@ _CURRENCY: dict[str, Currency] = {
 }
 
 _INDEX: dict[str, RateIndex | InterestPriceIndex] = {
-    "SOFR":   RateIndex("SOFR",   currency=Currency.USD),
-    "CAMARA": RateIndex("CAMARA", currency=Currency.CLP),
-    "ICP":    InterestPriceIndex("ICP", currency=Currency.CLP),
+    "SOFR":   RateIndex("SOFR", Term(1, TermUnit.D, ActualDayCountConvention()),  currency=Currency.USD),
+    "ICP":    RateIndex("ICP", Term(1, TermUnit.D, ActualDayCountConvention), currency=Currency.CLP),
 }
 
 _DAY_COUNT: dict[str, TimeFractionBase] = {
@@ -93,14 +92,16 @@ def _float_spec(leg: dict, adj_conv, tf: TimeFractionBase) -> FloatingLegSpec:
     index = _INDEX[leg["index"]]
     currency_str = leg.get("currency")
     currency = _CURRENCY[currency_str] if currency_str else index.currency
-    spread_bps = leg.get("spread_bps")
+    spread_value = float(leg.get("spread", 0)) / 10_000
+    from fintoolsom.rates.Rates import Rate, RateConvention, LinearInterestConvention
+    spread = Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), spread_value)
     return FloatingLegSpec(
         currency=currency,
         payment_frequency=PaymentFrequency[leg["payment_frequency"]],
         adj_convention=adj_conv,
         time_fraction=tf,
         index=index,
-        spread=BasisPoints(spread_bps) if spread_bps is not None else None,
+        spread=spread,
     )
 
 

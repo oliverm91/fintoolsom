@@ -11,7 +11,6 @@ from scipy.interpolate import CubicSpline, interp1d
 from scipy.optimize import minimize, LinearConstraint
 
 from ..rates import ZeroCouponCurve
-from ..derivatives.calculator import Calculator
 
 
 class InterpolationMethod(Enum):
@@ -31,6 +30,11 @@ class InterpolationModel(ABC):
     days: np.ndarray = field(init=False)
 
     def __post_init__(self):
+        # Deferred: derivatives.calculator ultimately imports Swap, which needs
+        # market.currencies, which needs this package's __init__ to finish —
+        # a module-level import here would cycle back before that's done.
+        from ..derivatives.calculator import Calculator
+
         delta_puts = self.vol_surface_df.columns.to_numpy()
         self.days = self.vol_surface_df.index.to_numpy()
 

@@ -1,7 +1,14 @@
+from __future__ import annotations
+
 from abc import ABC
 from dataclasses import dataclass, field, KW_ONLY
+from datetime import date
+from typing import TYPE_CHECKING
 
 from .currencies import Currency
+
+if TYPE_CHECKING:
+    from ..dates.term import Term
 
 
 @dataclass(eq=False)
@@ -35,7 +42,11 @@ class InterestIndex(ABC):
 @dataclass(eq=False)
 class RateIndex(Index, InterestIndex):
     """Index whose fixings are :class:`Rate` values (e.g. SOFR, ESTR, LIBOR 3M).
-    Always interest-bearing."""
+    Always interest-bearing.
+
+    term: None means overnight (1 business day); a Term value means a term rate
+    (e.g. Term(3, M) for 3-month SOFR)."""
+    term: Term
 
 
 @dataclass(eq=False)

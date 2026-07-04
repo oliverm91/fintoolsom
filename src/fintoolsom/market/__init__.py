@@ -24,7 +24,6 @@ from .localities import Locality
 from .market import Market
 from .conventions import (
     PaymentFrequency,
-    BasisPoints,
     LegSpec,
     FixedLegSpec,
     FloatingLegSpec,

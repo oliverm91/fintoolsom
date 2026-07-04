@@ -158,7 +158,10 @@ class ZeroCouponCurve:
             )
 
         # Start of interpolation part
-        if self.df_interpolation_method == InterpolationMethod.HermiteCubicSpline:
+        if len(self.days) == 1:
+            # Single pillar: normal_tenors can only be the pillar's exact date; return it directly.
+            interp_dfs = np.full(len(normal_tenors), self.dfs[0])
+        elif self.df_interpolation_method == InterpolationMethod.HermiteCubicSpline:
             chs = PchipInterpolator(self.days, self.dfs)
             interp_dfs = chs(normal_tenors)
         elif self.df_interpolation_method == InterpolationMethod.LogLinear:
