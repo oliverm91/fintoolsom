@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, KW_ONLY
 from datetime import date
 from typing import TYPE_CHECKING
 
 from .currencies import Currency
+from ..dates import Calendar
 
 if TYPE_CHECKING:
     from ..dates.term import Term
@@ -23,12 +24,27 @@ class Index(ABC):
     name: str
     _: KW_ONLY
     currency: Currency = field(default=None)
+    # Fixing / business-day calendar, resolved from the currency's locality in __post_init__.
+    calendar: Calendar = field(init=False, default=None)
+
+    def __post_init__(self):
+        self.calendar = (
+            Calendar(country=self.currency.locality.value)
+            if self.currency is not None
+            else Calendar()
+        )
 
     def __hash__(self) -> int:
         return hash(self.name)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Index) and self.name == other.name
+
+    @abstractmethod
+    def get_maturity(self, start_date: date) -> date:
+        """End date of one accrual period of this index starting on ``start_date``
+        (overnight → the next business day; term rate → advanced by the tenor)."""
+        ...
 
 
 class InterestIndex(ABC):
@@ -54,14 +70,18 @@ class OvernightIndex(ABC):
     It is orthogonal to rate-vs-price — it combines with :class:`RateIndex` or
     :class:`InterestPriceIndex`, mirroring ``OvernightHistory`` on the history side — and
     it is what lets a swap builder pick an ``OvernightLeg`` (daily compounding) over a
-    ``TermRateLeg`` for legs on this index."""
+    ``TermRateLeg`` for legs on this index. Concrete overnight indexes advance one
+    business day (see e.g. :meth:`OvernightRateIndex.get_maturity`)."""
 
 
 @dataclass(eq=False)
 class OvernightRateIndex(OvernightIndex, RateIndex):
     """Overnight rate index (e.g. SOFR, ESTR, ICP-as-rate). It has no tenor — it accrues
-    by daily compounding — and its fixing/publication calendar lives on the index history
-    (:class:`OvernightHistory`), not on the definition."""
+    by daily compounding over a single business day of its fixing calendar."""
+
+    def get_maturity(self, start_date: date) -> date:
+        # Overnight accrual spans one business day on the index's fixing calendar.
+        return self.calendar.add_business_days(start_date, 1)
 
 
 @dataclass(eq=False)
@@ -69,6 +89,10 @@ class TermRateIndex(RateIndex):
     """Term rate index (e.g. LIBOR 3M, Term SOFR). ``term`` is the rate's tenor — the
     period a single fixing covers."""
     term: Term
+
+    def get_maturity(self, start_date: date) -> date:
+        # A term rate covers a full tenor: advance start_date by the term.
+        return self.term.advance(start_date)
 
 
 @dataclass(eq=False)

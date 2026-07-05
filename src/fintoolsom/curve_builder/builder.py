@@ -204,9 +204,9 @@ def build_curves(
                         index_history = market.get_index(curve_index.name)
                         if isinstance(index_history, OvernightRateHistory):
                             r = index_history.rates[t].copy()
-                            # Overnight anchor: next fixing = one business day on the
-                            # index's own fixing calendar (which the history owns).
-                            anchor_date = index_history.calendar.add_business_days(t, 1)
+                            # Overnight anchor date = the index's next fixing (its accrual
+                            # period from t: one business day for an overnight index).
+                            anchor_date = curve_index.get_maturity(t)
                             r.convert_rate_convention(RateConvention(), t, anchor_date)
                             guess = r.rate_value
                             anchor = (anchor_date, (1 + guess) ** (-(anchor_date - t).days / 365))
