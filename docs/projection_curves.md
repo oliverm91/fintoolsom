@@ -138,6 +138,37 @@ Build the `interpolation_method` seam now (an enum + strategy, mirroring `Interp
 `ZeroCouponCurve`), so `get_accrual` / `get_equivalent_forward_rate` dispatch on it — but implement
 **piecewise-constant only**.
 
+### Configuration — defaults on `Market`, overridable per call
+
+`interpolation_method` is threaded through `build_curves` and the curve store, but to keep call sites
+clean the **`Market` holds the defaults, one per curve role**:
+
+- `discount_interpolation_method`   = **LogLinear**
+- `projection_interpolation_method` = **PiecewiseConstant**
+
+Usage:
+
+- `build_curves(..., interpolation_method=None)` — optional; when omitted, each curve is bootstrapped
+  with the market default for its role (discount vs projection). An explicit value overrides both; a
+  `{role-or-index: method}` mapping overrides selectively.
+- The `Market` curve accessors carry the same optional kwarg defaulting to the role default, so the
+  common case passes nothing:
+  - discount:   `market.get_curve(index, currency, *, interpolation_method=None)` / `set_curve(...)`
+  - projection: `market.get_projection(index, *, interpolation_method=None)` / `set_projection(...)`
+
+**Consistency** (from §3 and the "can't swap post-hoc" rule): the method is **baked at bootstrap** —
+it is the curve's calibration identity. So on **set / build** the resolved method *is* how the curve
+is solved and stored; on **get** the accessor returns the as-built curve, and passing a *different*
+method yields a **resampled view** (representation / what-if / warm-start) that does **not** reprice
+the calibration instruments. Changing the calibration method means re-solving that curve — per-curve,
+scoped by the dependency DAG, never the whole market.
+
+**Phase-1 note.** "Piecewise-constant forward" is realised as **LogLinear on the pseudo-DF backing**
+(§3), and LogLinear on discount DFs is likewise piecewise-constant *discount* forward — so under the
+hood both roles use the `ZeroCouponCurve` LogLinear kernel in Phase 1; they differ only in *what* they
+interpolate (real vs pseudo DFs) and their semantics. They diverge numerically only once a genuine
+forward-space projection method (piecewise-linear / cubic forward) is added.
+
 ## 5. The overnight worry: does a 1Y coupon interpolate 252 times?
 
 **No.** Two independent reasons, and the step representation makes it explicit:
@@ -261,11 +292,15 @@ separate projection unknown yet.)
    replace the backing later.
 2. Add `market.projection_curves: dict[Index, ProjectionCurve]`; route `_leg_pv` projection there,
    discount unchanged. Curve-key equality for projection drops the currency dimension.
-3. Bootstrap projection curves in `build_curves` (given discount), with the spot-fixing short-end
+3. Add the `Market` interpolation-method defaults (`discount_interpolation_method = LogLinear`,
+   `projection_interpolation_method = PiecewiseConstant`) and the optional `interpolation_method`
+   kwarg on `build_curves` and the curve get/set accessors (§4 Configuration).
+4. Bootstrap projection curves in `build_curves` (given discount), with the spot-fixing short-end
    anchor.
-4. (Optional) pluggable forward interpolation (step vs monotone-convex).
+5. (Optional) pluggable forward-space interpolation (piecewise-linear / cubic / monotone-convex),
+   replacing the wrapped `ZeroCouponCurve` backing behind the unchanged `get_accrual` seam.
 
-Phases 1–3 can land incrementally; the current single-curve behaviour is preserved until each
+Phases 1–4 can land incrementally; the current single-curve behaviour is preserved until each
 index is given a real `ProjectionCurve`.
 
 ## 10. Open questions / risks
