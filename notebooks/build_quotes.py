@@ -37,8 +37,8 @@ _CURRENCY: dict[str, Currency] = {
 }
 
 _INDEX: dict[str, RateIndex | InterestPriceIndex] = {
-    "SOFR":   OvernightRateIndex("SOFR", Term(1, TermUnit.D, ActualDayCountConvention()),  currency=Currency.USD),
-    "ICP":    OvernightRateIndex("ICP", Term(1, TermUnit.D, ActualDayCountConvention()), currency=Currency.CLP),
+    "SOFR":   OvernightRateIndex("SOFR", currency=Currency.USD),
+    "ICP":    OvernightRateIndex("ICP", currency=Currency.CLP),
 }
 
 _DAY_COUNT: dict[str, TimeFractionBase] = {

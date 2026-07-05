@@ -2,15 +2,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from fintoolsom.dates.adjustments import FollowingConvention
-from fintoolsom.dates.calendars import Calendar
-
 sys.path.insert(0, str(Path(__file__).parent))
 
 from build_quotes import build_quotes
 from fintoolsom.curve_builder import build_curves
-from fintoolsom.dates.term import Term, TermUnit
-from fintoolsom.dates import ActualDayCountConvention
 from fintoolsom.market import IRSQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from fintoolsom.market import CurrencyName, Currency, CurrencyPair, Market
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
@@ -44,10 +39,10 @@ for type_name, qs in by_type.items():
 
 usd = Currency(CurrencyName.USD)
 clp = Currency(CurrencyName.CLP)
-sofr = OvernightRateIndex("SOFR", Term(1, TermUnit.D, FollowingConvention(Calendar("US"))), currency=usd)
+sofr = OvernightRateIndex("SOFR", currency=usd)
 
 sofr_data = OvernightRateHistory(sofr, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.25/100)})
-icp = OvernightRateIndex("ICP", Term(1, TermUnit.D, FollowingConvention(Calendar(country="CL"))), currency=clp)
+icp = OvernightRateIndex("ICP", currency=clp)
 icp_data =  OvernightRateHistory(icp, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.75/100)})
 cp = CurrencyPair(usd, clp)
 

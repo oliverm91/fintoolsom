@@ -41,13 +41,10 @@ class InterestIndex(ABC):
 
 @dataclass(eq=False)
 class RateIndex(Index, InterestIndex):
-    """Index whose fixings are :class:`Rate` values (e.g. SOFR, ESTR, LIBOR 3M).
-    Always interest-bearing.
-
-    Overnight vs term is expressed by the concrete type (:class:`OvernightRateIndex` /
-    :class:`TermRateIndex`), not by the value of ``term`` — ``term`` always carries the
-    index's accrual period (1 business day for overnight, the tenor for a term rate)."""
-    term: Term
+    """Index whose fixings are :class:`Rate` values (e.g. SOFR, ESTR, LIBOR 3M). Always
+    interest-bearing. Abstract by convention — use a concrete kind:
+    :class:`OvernightRateIndex` (daily compounding, no tenor) or :class:`TermRateIndex`
+    (a single fixing over an explicit tenor)."""
 
 
 class OvernightIndex(ABC):
@@ -62,14 +59,16 @@ class OvernightIndex(ABC):
 
 @dataclass(eq=False)
 class OvernightRateIndex(OvernightIndex, RateIndex):
-    """Overnight rate index (e.g. SOFR, ESTR). ``term`` is the overnight accrual period
-    (typically 1 business day), used to advance to the next fixing date."""
+    """Overnight rate index (e.g. SOFR, ESTR, ICP-as-rate). It has no tenor — it accrues
+    by daily compounding — and its fixing/publication calendar lives on the index history
+    (:class:`OvernightHistory`), not on the definition."""
 
 
 @dataclass(eq=False)
 class TermRateIndex(RateIndex):
-    """Term rate index (e.g. LIBOR 3M, Term SOFR). ``term`` is the rate's tenor, fixed
-    once per accrual period on a fixing date."""
+    """Term rate index (e.g. LIBOR 3M, Term SOFR). ``term`` is the rate's tenor — the
+    period a single fixing covers."""
+    term: Term
 
 
 @dataclass(eq=False)

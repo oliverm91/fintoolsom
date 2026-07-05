@@ -11,7 +11,7 @@ from ..market.index import Index
 from ..market.currencies import Currency, CurrencyName, CurrencyPair
 from ..derivatives.calculator import Calculator
 from ..market.market import Market
-from ..market.index_history import RateHistory
+from ..market.index_history import OvernightRateHistory
 from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
@@ -202,12 +202,14 @@ def build_curves(
                 if curve_currency == curve_index.currency:
                     try:
                         index_history = market.get_index(curve_index.name)
-                        if isinstance(index_history, RateHistory):
+                        if isinstance(index_history, OvernightRateHistory):
                             r = index_history.rates[t].copy()
-                            index_term = index_history.index.term.advance(t)
-                            r.convert_rate_convention(RateConvention(), t, index_term)
+                            # Overnight anchor: next fixing = one business day on the
+                            # index's own fixing calendar (which the history owns).
+                            anchor_date = index_history.calendar.add_business_days(t, 1)
+                            r.convert_rate_convention(RateConvention(), t, anchor_date)
                             guess = r.rate_value
-                            anchor = (index_term, (1 + guess) ** (-(index_term - t).days / 365))
+                            anchor = (anchor_date, (1 + guess) ** (-(anchor_date - t).days / 365))
                     except KeyError:
                         pass
                 new_dts = sorted(curve_maturities)
