@@ -60,7 +60,12 @@ class RateIndex(Index, InterestIndex):
     """Index whose fixings are :class:`Rate` values (e.g. SOFR, ESTR, LIBOR 3M). Always
     interest-bearing. Abstract by convention — use a concrete kind:
     :class:`OvernightRateIndex` (daily compounding, no tenor) or :class:`TermRateIndex`
-    (a single fixing over an explicit tenor)."""
+    (a single fixing over an explicit tenor).
+
+    ``spot_lag`` is the business-day offset from the fixing date to the accrual (value)
+    start: 0 for an overnight index (the fixing applies from ``t``), non-zero for a term
+    rate (typically 2 for Term SOFR / LIBOR)."""
+    spot_lag: int = field(default=0, kw_only=True)
 
 
 class OvernightIndex(ABC):
@@ -87,8 +92,9 @@ class OvernightRateIndex(OvernightIndex, RateIndex):
 @dataclass(eq=False)
 class TermRateIndex(RateIndex):
     """Term rate index (e.g. LIBOR 3M, Term SOFR). ``term`` is the rate's tenor — the
-    period a single fixing covers."""
+    period a single fixing covers; ``spot_lag`` (default 2) is the fixing→value offset."""
     term: Term
+    spot_lag: int = field(default=2, kw_only=True)
 
     def get_maturity(self, start_date: date) -> date:
         # A term rate covers a full tenor: advance start_date by the term.
