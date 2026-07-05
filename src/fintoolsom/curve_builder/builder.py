@@ -12,7 +12,7 @@ from ..market.currencies import Currency, CurrencyName, CurrencyPair
 from ..derivatives.calculator import Calculator
 from ..market.market import Market
 from ..market.index_history import RateHistory
-from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote
+from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
 from ..rates import ZeroCouponCurve
@@ -160,11 +160,13 @@ def build_curves(
         """Try to solve `curve_group` against the market's current curves. Returns
         'solved', 'nothing' (all needed pillars already exist) or 'defer' (not yet
         ready: a curve it reads is still unbuilt, or it is not square yet)."""
-        # XCCY quotes need the market FX to size their legs' notionals consistently with
-        # valuation; other quote types ignore it. (Currencies/dates used elsewhere do not
-        # depend on notional, so structure-only get_instrument() calls stay FX-free.)
+        # Some quotes need the market FX to fully materialise for valuation: XCCY (to size
+        # matched leg notionals) and forward-points (to build the outright strike off the
+        # market spot). Other quote types ignore it, and structure-only get_instrument()
+        # calls elsewhere stay FX-free (currencies/dates don't depend on it).
+        _fx_dependent = (CrossCurrencyFloatFloatQuote, ForwardPointsQuote)
         group_instruments = [
-            q.get_instrument(market) if isinstance(q, CrossCurrencyFloatFloatQuote) else q.get_instrument()
+            q.get_instrument(market) if isinstance(q, _fx_dependent) else q.get_instrument()
             for q in groups[curve_group]
         ]
 

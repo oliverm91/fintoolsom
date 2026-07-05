@@ -12,7 +12,6 @@ from fintoolsom.dates.time_fractions import TimeFractionBase
 from fintoolsom.market import (
     Currency,
     CurrencyPair,
-    FX_Rate,
     FixedLegSpec,
     FloatingLegSpec,
     ForwardPointsQuote,
@@ -173,13 +172,11 @@ def build_quotes(
             elif quote_type == "ForwardPointsQuote":
                 cp_arr: list[str] = group["currency_pair"]
                 cp = CurrencyPair(_CURRENCY[cp_arr[0]], _CURRENCY[cp_arr[1]])
-                spot = FX_Rate(cp, group["spot"])
                 locality_str: str | None = group.get("locality")
                 result.append(ForwardPointsQuote(
                     currency_pair=cp,
                     value=q["value"],
                     is_buy=group["is_buy"],
-                    spot=spot,
                     points_divisor=group.get("points_divisor", 1),
                     term=term,
                     quote_date=quote_date,

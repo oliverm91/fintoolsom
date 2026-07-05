@@ -184,8 +184,9 @@ class ForwardPriceQuote(_ForwardQuote):
 
 @dataclass(kw_only=True)
 class ForwardPointsQuote(_ForwardQuote):
-    """Forward quoted as points over spot. Requires spot to compute the outright strike."""
-    spot: FX_Rate
+    """Forward quoted as points over spot. The outright strike is built from the market
+    spot at valuation time (see get_instrument), so it stays consistent with the FX used
+    to valuate the forward."""
     points_divisor: int = field(default=1)
 
     def __post_init__(self):
@@ -206,9 +207,12 @@ class ForwardPointsQuote(_ForwardQuote):
             )
         return effective_spot + self.value / self.points_divisor
 
-    def get_instrument(self) -> Forward | NDF:
+    def get_instrument(self, market=None) -> Forward | NDF:
         from ..derivatives.forwards.forwards import Forward, NDF
-        strike = self.to_outright(self.spot)
+        # Outright strike = market spot + points, using the market FX at quote_date (the
+        # same rate used to valuate the forward). Structure-only calls (no market) never
+        # read the strike, so a 0 placeholder is fine there.
+        strike = self.to_outright(market.get_fx_rate(self.quote_date, self.currency_pair)) if market is not None else 0.0
         fixing = self._effective_fixing_date()
         pmt = self._effective_payment_date()
         if fixing is not None:
