@@ -12,7 +12,7 @@ from ..market.currencies import Currency, CurrencyName, CurrencyPair
 from ..derivatives.calculator import Calculator
 from ..market.market import Market
 from ..market.index_history import RateHistory
-from ..market.quotes import InstrumentQuote
+from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
 from ..rates import ZeroCouponCurve
@@ -160,7 +160,13 @@ def build_curves(
         """Try to solve `curve_group` against the market's current curves. Returns
         'solved', 'nothing' (all needed pillars already exist) or 'defer' (not yet
         ready: a curve it reads is still unbuilt, or it is not square yet)."""
-        group_instruments = [q.get_instrument() for q in groups[curve_group]]
+        # XCCY quotes need the market FX to size their legs' notionals consistently with
+        # valuation; other quote types ignore it. (Currencies/dates used elsewhere do not
+        # depend on notional, so structure-only get_instrument() calls stay FX-free.)
+        group_instruments = [
+            q.get_instrument(market) if isinstance(q, CrossCurrencyFloatFloatQuote) else q.get_instrument()
+            for q in groups[curve_group]
+        ]
 
         # Valuable? Every curve these instruments touch but do NOT pin (e.g. a riskless
         # curve that cancels in the collateral discounting) must already exist, or

@@ -446,7 +446,14 @@ class Calculator:
                 starts  = [s for s, f in zip(leg.start_dates, pure_future) if f]
                 ends    = [e for e, f in zip(leg.end_dates,   pure_future) if f]
                 fwd_dfs = proj_curve.get_dfs_fwds(starts, ends)
-                flows[pure_future[future_payment]] = leg.residuals[pure_future] * (fwd_dfs - 1) + leg.spreads_values[pure_future]
+                # `amortizations` carries each coupon's notional repayment (non-zero only on
+                # the final coupon): the notional exchange at maturity. For same-currency
+                # swaps it cancels between legs; for XCCY it is the cross-currency exchange.
+                flows[pure_future[future_payment]] = (
+                    leg.residuals[pure_future] * (fwd_dfs - 1)
+                    + leg.spreads_values[pure_future]
+                    + leg.amortizations[pure_future]
+                )
 
             if current_mask.any():
                 idx = int(np.where(current_mask)[0][0])
@@ -467,7 +474,7 @@ class Calculator:
                     interest = market.accrue_rates_reset_business_days(
                         c.residual, rate_name, c.start_date, c.end_date
                     )
-                flows[current_mask[future_payment]] = interest + leg.spreads_values[idx]
+                flows[current_mask[future_payment]] = interest + leg.spreads_values[idx] + leg.amortizations[idx]
 
         return float(np.dot(flows, dfs))
 

@@ -415,16 +415,28 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
                 "CrossCurrencyFloatFloat requires legs in different currencies."
             )
 
-    def get_instrument(self) -> Swap:
+    def get_instrument(self, market=None) -> Swap:
         from ..derivatives.swaps.swaps import Swap
         from ..derivatives.swaps.builders import xccy_floating_leg
+        from .currencies import CurrencyPair
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
 
-        def _build(spec: FloatingLegSpec):
+        # Size the two legs so their notionals match at the market FX — the same rate used
+        # to valuate the swap: N_receive = N_pay * FX(pay_ccy -> receive_ccy). Without a
+        # market (structure-only calls that just read currencies/dates) both legs use the
+        # base notional.
+        recv_notional = pay_notional = _NOTIONAL
+        if market is not None:
+            fx = market.get_fx_rate(
+                self.quote_date, CurrencyPair(self.pay_leg.currency, self.receive_leg.currency)
+            ).value
+            recv_notional = pay_notional * fx
+
+        def _build(spec: FloatingLegSpec, notional: float):
             return xccy_floating_leg(
-                notional=_NOTIONAL,
+                notional=notional,
                 start_date=start,
                 term=self.term,
                 frequency=spec.payment_frequency.value,
@@ -437,8 +449,8 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
             )
 
         return Swap(
-            receive_leg=_build(self.receive_leg),
-            pay_leg=_build(self.pay_leg),
+            receive_leg=_build(self.receive_leg, recv_notional),
+            pay_leg=_build(self.pay_leg, pay_notional),
             collateral_index=self.collateral_index,
             is_deliverable=True,
         )
