@@ -67,24 +67,46 @@ curve   = [seg_0, seg_1, ...]   # contiguous, covering the modelled horizon
 Other interpolation families (below) can be layered on the same segment idea; piecewise-constant
 is the default because it keeps forwards stable and makes the accrual query trivial (§5).
 
-## 4. Interpolation math (pluggable)
+### Knots — one per maturity, defined by the builder
 
-The projection curve must expose **one** primitive:
+Knots (segment boundaries) are chosen by `build_curves`, **not** derived one-per-coupon. A knot
+per coupon breaks squareness: adding a 3Y quote to a 6M-frequency curve that already reaches 1Y
+introduces coupons at 18M / 24M / 30M / 36M — **4 new coupons for 1 new quote** — so the forward
+curve would gain 4 unknowns against 1 constraint and the solve goes under-determined
+(`InsufficientQuotesError`, builder.py:329). Instead:
+
+- **One knot per instrument maturity** → one new segment (hence one free forward) per new quote,
+  keeping the projection solve **square** (N quotes → N segments). Intermediate coupon reset/end
+  dates that fall inside an existing segment are read off by interpolation; they add no unknowns.
+- **Knot placement (open question).** Put the knot at the instrument's **maturity (last end date)**
+  so each new instrument extends the curve by exactly one segment `[prev_knot, maturity]` whose
+  constant forward is the unknown it pins — the natural, sequential, square choice, and the working
+  assumption. Reset/start-date knots are the alternative but complicate squareness when schedules
+  don't line up, so we default to maturity-knots unless a reason to switch appears.
+- The **first (spot) segment** starts at the short-end anchor (§6): `[t + spot_lag, spot maturity]`.
+
+## 4. Interpolation methods (pluggable; piecewise-constant first)
+
+A `ProjectionCurve` owns an **`interpolation_method`** — one of several — and the method is what
+changes how the curve answers its two public queries between *any* two dates:
 
 ```
-get_forward_wf(start: date, end: date) -> float      # compounded wealth factor over [start,end]
-# (+ a get_forward_rate(start, end, convention) wrapper)
+get_accrual(start, end) -> float                      # compounded factor the index earns over [start,end]
+get_equivalent_forward_rate(start, end, convention)   # the single equivalent forward rate over [start,end]
 ```
 
-The *interpolation strategy* decides how the internal representation answers that query:
+The same knots, under different methods, answer these differently:
 
-- **Piecewise-constant forward ("step-ladder")** — default. Also the natural choice for OIS
-  (FOMC steps) and single-tenor term forwards.
-- **Monotone convex (Hagan–West)** — forward-preserving, keeps forwards positive/stable, avoids
-  the sawtooth of smooth-DF interpolation.
-- **Piecewise-linear zero / log-linear DF** — for parity with the discount side if wanted.
+- **Piecewise-constant forward ("step-ladder")** — the **only method to implement now**. Also the
+  natural choice for OIS (FOMC steps) and single-tenor term forwards. `get_accrual` integrates the
+  step function over the window (§5); `get_equivalent_forward_rate` inverts that to one rate.
+- **Monotone convex (Hagan–West)** — *later.* Forward-preserving, keeps forwards positive/stable,
+  avoids the sawtooth of smooth-DF interpolation.
+- **Piecewise-linear zero / log-linear DF** — *later*; for parity with the discount side if wanted.
 
-Design the *interface* for a pluggable strategy now; commit to piecewise-constant first.
+Build the `interpolation_method` seam now (an enum + strategy, mirroring `InterpolationMethod` on
+`ZeroCouponCurve`), so `get_accrual` / `get_equivalent_forward_rate` dispatch on it — but implement
+**piecewise-constant only**.
 
 ## 5. The overnight worry: does a 1Y coupon interpolate 252 times?
 
@@ -94,7 +116,7 @@ Design the *interface* for a pluggable strategy now; commit to piecewise-constan
    obtained by walking only the **segments that overlap the window** and accumulating
    `rate × day_count_in_segment` (then compounding). For a 1Y overnight coupon with, say,
    FOMC-dated or monthly steps that is **~8–12 segments**, not 252. Because piecewise-constant
-   collapses runs of equal daily forward into one segment, `get_forward_wf(start, end)` is
+   collapses runs of equal daily forward into one segment, `get_accrual(start, end)` is
    `O(#segments ∩ window)`. This is exactly why "steps with a rate + start/end date" is the right
    shape — asking the curve for an accrual/equivalent rate between two dates is just integrating
    a step function.
@@ -104,7 +126,7 @@ Design the *interface* for a pluggable strategy now; commit to piecewise-constan
    pseudo-DF at each knot so the query is `O(1)` regardless of tenor.
 
 Only a *naïve daily simulation* would be 252 lookups; neither representation above does that.
-`_leg_pv` keeps calling one method (`get_forward_wf(start, end)`) for both `TermRateLeg` and
+`_leg_pv` keeps calling one method (`get_accrual(start, end)`) for both `TermRateLeg` and
 `OvernightLeg` — the curve absorbs the tenor/step detail.
 
 ## 6. Short-end anchor (ties to `spot_lag`)
@@ -127,18 +149,42 @@ So the first segment of a projection curve is seeded from the index history's sp
 ## 7. How `_leg_pv` and the bootstrap consume it
 
 - **Valuation** (`Calculator._leg_pv`): projection comes from `market.projection_curves[leg.index]`
-  via `get_forward_wf(start, end)`; discounting stays on the `(riskless/collateral, currency)`
+  via `get_accrual(start, end)`; discounting stays on the `(riskless/collateral, currency)`
   discount curves. `TermRateLeg` and `OvernightLeg` call the same projection primitive.
 - **Bootstrap** (`build_curves`):
   1. Discount/OIS + FX curves as today.
   2. For each rate index, bootstrap its `ProjectionCurve` **given** the discount curve — each swap
      pins the forward segment(s) it introduces; the short end is anchored from the spot fixing (§6).
-  3. Segments align to reset dates; the scheduler already orders "discount before projection".
+  3. Knots are one-per-maturity (§3); the scheduler already orders "discount before projection".
 
-## 8. Migration
+## 8. Projection == discount when they coincide — one unknown, not two
+
+The critical `build_curves` case: for an **overnight, self-discounted** index (OIS — e.g. SOFR
+swaps collateralised in SOFR) the projection curve `projection_curves[SOFR]` and the discount curve
+`curves[(SOFR, USD)]` are the **same curve** — SOFR both projects and discounts. There is no
+forwarding-vs-discounting basis, so they must be **one unknown**. If the builder treats them as two
+independent curves, each maturity yields two pillars for one quote, the group goes under-determined,
+and `InsufficientQuotesError` (builder.py:329) fires constantly.
+
+Rule:
+
+- **Overnight index used as its own collateral/riskless (OIS self-discounting):**
+  `projection_curves[I]` **is** the `(I, I.currency)` discount curve — a thin forward *view* over
+  the same DFs (`get_accrual(s, e) = df(s)/df(e) − 1`), **not** a second set of pillars. Build once.
+- **Term index, or an index discounted by a *different* collateral/currency (a real basis):**
+  `projection_curves[I]` is an **independent** unknown — the forwarding curve differs from every
+  discount curve — bootstrapped from the index swaps *given* the (already-built) discount curve.
+
+Equivalently: a separate projection unknown exists **iff there is a forwarding/discounting basis**
+for that index. Overnight-self-discounted → no basis → alias the discount curve. This is the same
+distinction the collateral-cancellation logic in `_curves_needed` already encodes (it is exactly
+why today's single `(SOFR,USD)` curve is one unknown, not two) — the projection split must reuse
+that logic, not fight it.
+
+## 9. Migration
 
 1. Introduce `DiscountCurve` (keep `ZeroCouponCurve` as-is or alias) and add `ProjectionCurve`
-   with the piecewise-constant strategy + `get_forward_wf`.
+   with the piecewise-constant strategy + `get_accrual`.
 2. Add `market.projection_curves: dict[Index, ProjectionCurve]`; route `_leg_pv` projection there,
    discount unchanged. Curve-key equality for projection drops the currency dimension.
 3. Bootstrap projection curves in `build_curves` (given discount), with the spot-fixing short-end
@@ -148,7 +194,7 @@ So the first segment of a projection curve is seeded from the index history's sp
 Phases 1–3 can land incrementally; the current single-curve behaviour is preserved until each
 index is given a real `ProjectionCurve`.
 
-## 9. Open questions / risks
+## 10. Open questions / risks
 
 - **Interpolation choice** is product-dependent — design the strategy hook, don't hardcode.
 - **Numeraire / normalisation** of the projection pseudo-DFs (self-consistent vs discount-tied).
