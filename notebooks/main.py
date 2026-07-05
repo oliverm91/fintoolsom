@@ -15,7 +15,7 @@ from fintoolsom.market import IRSQuote, CrossCurrencyFloatFloatQuote, ForwardPoi
 from fintoolsom.market import CurrencyName, Currency, CurrencyPair, Market
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
 from fintoolsom.market.currencies import FX_RateData, FX_Rate
-from fintoolsom.market.index import RateIndex
+from fintoolsom.market.index import OvernightRateIndex
 from fintoolsom.market.index_history import OvernightRateHistory
 
 QUOTES_FILE = Path(__file__).parent / "quotes.json"
@@ -44,10 +44,10 @@ for type_name, qs in by_type.items():
 
 usd = Currency(CurrencyName.USD)
 clp = Currency(CurrencyName.CLP)
-sofr = RateIndex("SOFR", Term(1, TermUnit.D, FollowingConvention(Calendar("US"))), currency=usd)
+sofr = OvernightRateIndex("SOFR", Term(1, TermUnit.D, FollowingConvention(Calendar("US"))), currency=usd)
 
 sofr_data = OvernightRateHistory(sofr, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.25/100)})
-icp = RateIndex("ICP", Term(1, TermUnit.D, FollowingConvention(Calendar(country="CL"))), currency=clp)
+icp = OvernightRateIndex("ICP", Term(1, TermUnit.D, FollowingConvention(Calendar(country="CL"))), currency=clp)
 icp_data =  OvernightRateHistory(icp, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.75/100)})
 cp = CurrencyPair(usd, clp)
 

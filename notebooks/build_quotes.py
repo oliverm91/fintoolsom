@@ -21,7 +21,7 @@ from fintoolsom.market import (
     PaymentFrequency,
     QuotedSide,
 )
-from fintoolsom.market.index import InterestPriceIndex, RateIndex
+from fintoolsom.market.index import InterestPriceIndex, RateIndex, OvernightRateIndex
 from fintoolsom.market.localities import Locality
 from fintoolsom.dates import Term, TermUnit, ActualDayCountConvention
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention, CompoundedInterestConvention
@@ -37,8 +37,8 @@ _CURRENCY: dict[str, Currency] = {
 }
 
 _INDEX: dict[str, RateIndex | InterestPriceIndex] = {
-    "SOFR":   RateIndex("SOFR", Term(1, TermUnit.D, ActualDayCountConvention()),  currency=Currency.USD),
-    "ICP":    RateIndex("ICP", Term(1, TermUnit.D, ActualDayCountConvention()), currency=Currency.CLP),
+    "SOFR":   OvernightRateIndex("SOFR", Term(1, TermUnit.D, ActualDayCountConvention()),  currency=Currency.USD),
+    "ICP":    OvernightRateIndex("ICP", Term(1, TermUnit.D, ActualDayCountConvention()), currency=Currency.CLP),
 }
 
 _DAY_COUNT: dict[str, TimeFractionBase] = {

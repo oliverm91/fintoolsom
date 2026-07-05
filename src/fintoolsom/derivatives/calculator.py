@@ -445,12 +445,15 @@ class Calculator:
             if pure_future.any():
                 starts  = [s for s, f in zip(leg.start_dates, pure_future) if f]
                 ends    = [e for e, f in zip(leg.end_dates,   pure_future) if f]
-                fwd_dfs = proj_curve.get_dfs_fwds(starts, ends)
+                # Overnight/XCCY coupons accrue the daily-compounded rate over [start, end],
+                # i.e. a forward WEALTH factor (>1) — use get_wfs_fwds, not get_dfs_fwds
+                # (which returns the reciprocal df ratio <1 and would give negative interest).
+                fwd_wfs = proj_curve.get_wfs_fwds(starts, ends)
                 # `amortizations` carries each coupon's notional repayment (non-zero only on
                 # the final coupon): the notional exchange at maturity. For same-currency
                 # swaps it cancels between legs; for XCCY it is the cross-currency exchange.
                 flows[pure_future[future_payment]] = (
-                    leg.residuals[pure_future] * (fwd_dfs - 1)
+                    leg.residuals[pure_future] * (fwd_wfs - 1)
                     + leg.spreads_values[pure_future]
                     + leg.amortizations[pure_future]
                 )
@@ -467,7 +470,7 @@ class Calculator:
                         c.residual, rate_name, c.start_date, market.t
                     )
                     interest = accrued + (c.residual + accrued) * (
-                        proj_curve.get_df_fwd(market.t, c.end_date) - 1
+                        proj_curve.get_wf_fwd(market.t, c.end_date) - 1
                     )
                 else:
                     # end_date ≤ t: fully accrued, awaiting payment only

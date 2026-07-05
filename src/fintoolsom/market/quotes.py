@@ -284,7 +284,8 @@ class IRSQuote(_SwapQuote):
 
     def get_instrument(self) -> Swap:
         from ..derivatives.swaps.swaps import Swap
-        from ..derivatives.swaps.builders import fixed_leg, term_rate_leg
+        from ..derivatives.swaps.builders import fixed_leg, term_rate_leg, overnight_leg
+        from .index import OvernightIndex
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
@@ -300,7 +301,10 @@ class IRSQuote(_SwapQuote):
             long_stub=self.long_stub,
             maturity_date=mat,
         )
-        floating = term_rate_leg(
+        # OvernightIndex legs (SOFR, ICP, …) compound daily → OvernightLeg; a term-rate
+        # index fixes once per accrual period → TermRateLeg.
+        float_builder = overnight_leg if isinstance(self.floating_leg.index, OvernightIndex) else term_rate_leg
+        floating = float_builder(
             notional=_NOTIONAL,
             start_date=start,
             term=self.term,
@@ -308,6 +312,8 @@ class IRSQuote(_SwapQuote):
             adj_convention=self.adj_convention,
             index=self.floating_leg.index,
             spread=self.floating_leg.spread,
+            stub_first=self.stub_first,
+            long_stub=self.long_stub,
             maturity_date=mat,
         )
         if self.quoted_side == QuotedSide.RECEIVE:
@@ -331,13 +337,15 @@ class IRBasisQuote(_SwapQuote):
 
     def get_instrument(self) -> Swap:
         from ..derivatives.swaps.swaps import Swap
-        from ..derivatives.swaps.builders import term_rate_leg
+        from ..derivatives.swaps.builders import term_rate_leg, overnight_leg
+        from .index import OvernightIndex
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
 
         def _build(spec: FloatingLegSpec):
-            return term_rate_leg(
+            builder = overnight_leg if isinstance(spec.index, OvernightIndex) else term_rate_leg
+            return builder(
                 notional=_NOTIONAL,
                 start_date=start,
                 term=self.term,
