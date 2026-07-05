@@ -140,9 +140,18 @@ So the first segment of a projection curve is seeded from the index history's sp
 
 - Overnight: `spot_lag = 0` → `[t, t+1bd]` (the existing overnight anchor).
 - Term (e.g. TermSOFR 3M, `spot_lag = 2`): `[t+2, t+2+3M]`, seeded from the live 3M print.
-- The `[t, t+spot_lag]` front stub is *not* pinned by the term fixing — take it from the OIS
-  curve (or treat a 2-day gap as negligible). This is why the projection bootstrap depends on the
-  discount/OIS curve existing first (the fixpoint scheduler already enforces such ordering).
+- **The `[t, t+spot_lag]` front stub (the t → t+2 gap).** No term fixing informs it — but the
+  projection curve is (almost) never *asked* about it. A coupon accruing inside `[t, t+spot_lag]`
+  has `fixing_date = start − fixing_lag ≤ t`, so it has **already fixed** and is read from the
+  index-history print, not projected. The first *unfixed* (projected) period is the spot period at
+  `t + spot_lag`, so the curve's natural domain begins there: anchor its pseudo-DF at the spot date
+  (`pseudo_df(t+spot_lag) = 1`) rather than at `t`, and the gap falls outside the curve.
+- Where the stub genuinely *is* needed it is a **discounting** question, not projection: the
+  OIS/discount curve has `spot_lag = 0` and covers `[t, …]` in full, so any DF inside `[t, t+2]`
+  comes from there — which is why the projection bootstrap needs the discount curve to exist first
+  (the fixpoint scheduler enforces that order). If a caller still asks the projection curve for a
+  sub-`spot_lag` forward, extrapolate flat from the first segment or borrow the OIS forward for the
+  stub; for a term index that path shouldn't arise, and two business days of it is sub-bp anyway.
 
 Crucially the spot fixing is a **published datum** (today's print), so the anchor segment is **fixed
 data, not a free variable** — it removes one unknown and is precisely what turns the short end from
