@@ -144,18 +144,39 @@ So the first segment of a projection curve is seeded from the index history's sp
   curve (or treat a 2-day gap as negligible). This is why the projection bootstrap depends on the
   discount/OIS curve existing first (the fixpoint scheduler already enforces such ordering).
 
+Crucially the spot fixing is a **published datum** (today's print), so the anchor segment is **fixed
+data, not a free variable** — it removes one unknown and is precisely what turns the short end from
+flat extrapolation into a determinate value. The first *solved* segment then runs from the anchor's
+end (`spot maturity`) to the first quoted instrument's maturity, and anchor + solved segments tile
+contiguously. A near-dated *unfixed* coupon whose accrual straddles that boundary reads the fixed
+forward inside the anchor segment and the solved forward beyond — never an extrapolated one. A
+coupon that has **already fixed** (`fixing_date ≤ t`) bypasses the curve entirely and uses the
+index-history print, exactly as `_leg_pv` does today; the anchor only matters for the first
+*unfixed* period.
+
 `index.spot_lag` and `Index.get_maturity` (both now on the index) provide exactly what this needs.
 
 ## 7. How `_leg_pv` and the bootstrap consume it
 
 - **Valuation** (`Calculator._leg_pv`): projection comes from `market.projection_curves[leg.index]`
   via `get_accrual(start, end)`; discounting stays on the `(riskless/collateral, currency)`
-  discount curves. `TermRateLeg` and `OvernightLeg` call the same projection primitive.
+  discount curves. `TermRateLeg` and `OvernightLeg` call the same projection primitive:
+  - `TermRateLeg` — each *unfixed* coupon (`fixing_date > t`) → `get_accrual(coupon.start, coupon.end)`;
+    already-fixed coupons still read the index-history print (unchanged).
+  - `OvernightLeg` — `get_accrual(coupon.start, coupon.end)` over the whole compounding period; the
+    curve integrates its steps / uses the pseudo-DF ratio, so **no daily loop** (§5). A
+    currently-accruing coupon splits into realised history `[start, t]` + `get_accrual(t, end)`.
+  - Discounting is untouched: collateral-adjusted DFs from the `(riskless/collateral, currency)`
+    curves — the projection change is orthogonal to it.
 - **Bootstrap** (`build_curves`):
   1. Discount/OIS + FX curves as today.
   2. For each rate index, bootstrap its `ProjectionCurve` **given** the discount curve — each swap
-     pins the forward segment(s) it introduces; the short end is anchored from the spot fixing (§6).
+     pins the one forward segment it extends the curve by; the short end is anchored from the spot
+     fixing (§6). One residual (par / MTM = 0) per instrument keeps the solve square, reusing the
+     existing `root` / least-squares machinery.
   3. Knots are one-per-maturity (§3); the scheduler already orders "discount before projection".
+  4. Because forwards are localised to segments, a curve bump is a localised delta — risk buckets
+     naturally by segment, which is usually what a desk wants.
 
 ## 8. Projection == discount when they coincide — one unknown, not two
 
@@ -180,6 +201,18 @@ for that index. Overnight-self-discounted → no basis → alias the discount cu
 distinction the collateral-cancellation logic in `_curves_needed` already encodes (it is exactly
 why today's single `(SOFR,USD)` curve is one unknown, not two) — the projection split must reuse
 that logic, not fight it.
+
+**Detection & worked cases.** Reuse `_curves_needed`: an index aliases the discount curve exactly
+when its instruments discount on that same index in its own currency (the cancellation already
+collapses projection and discount to one key). Cases: (a) SOFR OIS collateralised in SOFR → aliased,
+one curve; (b) TermSOFR-3M swaps collateralised in SOFR → the SOFR discount curve is already built
+and the TermSOFR-3M *projection* is a genuine second unknown (a real basis) built on top of it;
+(c) a USD-SOFR leg collateralised in CLP → discount `(ICP, USD)` ≠ projection SOFR → independent.
+So the invariant the squareness check must enforce is: **total unknown curves = discount curves +
+projection curves that carry a real basis.** `market.get_projection(index)` returns the wrapped
+discount curve when aliased and a standalone `ProjectionCurve` otherwise, so callers never branch.
+(ICP today is an overnight rate self-discounted in CLP, so its projection aliases `(ICP, CLP)` — no
+separate projection unknown yet.)
 
 ## 9. Migration
 
