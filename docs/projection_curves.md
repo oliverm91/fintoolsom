@@ -49,23 +49,49 @@ Discount stays `(index, currency)` because the *same* collateral index discounts
 currencies (the collateral-adjustment construct in `Calculator._leg_pv`). Projection does not
 have that degree of freedom.
 
-## 3. Representation — piecewise-constant forward "steps"
+## 3. Representation — a forward-rate function; interest is an integral
 
-A `ProjectionCurve` is a list of contiguous **segments**, each carrying a start date, an end
-date and a forward rate (plus the rate convention / day count):
+A `ProjectionCurve` represents a **forward-rate function `f(u)`** over the curve horizon, defined by
+**knot values** plus a chosen **interpolation method** (§4). It is *not* one fixed shape — the earlier
+"steps" wording described only the piecewise-constant special case.
+
+Its core query **integrates** that function:
 
 ```
-segment = (start_date, end_date, forward_rate)
-curve   = [seg_0, seg_1, ...]   # contiguous, covering the modelled horizon
+get_accrual(s, e)                = compound the index over [s, e]         # e.g. wealth factor − 1
+get_equivalent_forward_rate(s,e) = the single rate equivalent to that accrual
 ```
 
-- For a **single-tenor term index** (e.g. TermSOFR 3M) the natural segments are the 3M forward
-  periods aligned to the reset schedule: each step is "the 3M forward resetting at date X".
-- For an **overnight index** the segments are the instantaneous-forward buckets — piecewise
-  constant between knots (pillars, or FOMC/meeting dates, or turn-of-year points).
+With continuous compounding `WF(s, e) = exp(∫ₛᵉ f(u) du) = pseudo_df(s) / pseudo_df(e)`, where the
+pseudo-DF is `pseudo_df(u) = exp(−∫ f)`. **The interpolation method decides the shape of `f`, and hence
+how that integral is solved** — each has its own closed form:
 
-Other interpolation families (below) can be layered on the same segment idea; piecewise-constant
-is the default because it keeps forwards stable and makes the accrual query trivial (§5).
+- **piecewise-constant** forward → `∫ = Σ rateᵢ · Δtᵢ` over the knot intervals the window spans (the
+  "step-ladder"; a run of equal forward collapses to one term). Equivalent to log-linear pseudo-DFs.
+- **piecewise-linear** forward → integrate a linear piece per interval (trapezoidal).
+- **cubic-spline / cubic-hermite (Pchip)** forward → integrate the spline piece analytically per interval.
+
+`get_accrual` is the single interface; the **integrator behind it is swapped by method**. Only
+piecewise-constant is implemented first.
+
+### Pseudo-DF equivalence — can a `ProjectionCurve` just wrap a `ZeroCouponCurve`?
+
+Because `get_accrual` reduces to a **pseudo-DF ratio**, a projection curve *is* a curve of pseudo-DFs at
+its knots, with the interpolation acting on those pseudo-DFs (equivalently on `ln pseudo_df`, i.e. zero
+rates). Two consequences:
+
+- **Piecewise-constant forward → yes, wrap a `ZeroCouponCurve`.** It is exactly a `ZeroCouponCurve` of
+  pseudo-DFs under **log-linear (`LogLinear`) interpolation** (log-linear DFs ⟺ constant instantaneous
+  forward). So the Phase-1 `ProjectionCurve` can simply **hold a `ZeroCouponCurve`** and delegate
+  `get_accrual` to `df(s)/df(e)`, solving the knots **as pseudo-discount-factors** — the same machinery
+  as the discount bootstrap.
+- **Richer forward interpolation (linear / cubic *forward*) → no.** The forward shape is chosen in
+  *forward space* and does not correspond to any single DF-interpolation of a plain `ZeroCouponCurve`,
+  so those methods need the explicit forward-function representation and their own integrator.
+
+Recommendation: make `get_accrual` / `get_equivalent_forward_rate` the only public seam; back it with a
+wrapped `ZeroCouponCurve` (log-linear pseudo-DFs) for Phase 1, and add forward-space integrators later
+behind the same seam without changing callers.
 
 ### Knots — one per maturity, defined by the builder
 
@@ -81,8 +107,12 @@ curve would gain 4 unknowns against 1 constraint and the solve goes under-determ
 - **Knot placement (open question).** Put the knot at the instrument's **maturity (last end date)**
   so each new instrument extends the curve by exactly one segment `[prev_knot, maturity]` whose
   constant forward is the unknown it pins — the natural, sequential, square choice, and the working
-  assumption. Reset/start-date knots are the alternative but complicate squareness when schedules
-  don't line up, so we default to maturity-knots unless a reason to switch appears.
+  assumption. Reset/start-date knots are the alternative (one per coupon start is the same trap as
+  one-per-coupon → under-determined), so we default to maturity-knots unless a reason to switch appears.
+- **Solved as pseudo-DFs.** Each knot's unknown is the **pseudo-DF at that maturity** (equivalently a
+  zero rate), pinned by the instrument's par / MTM = 0 residual — identical in form to the discount
+  bootstrap. Under log-linear interpolation that pseudo-DF fixes the constant forward on
+  `[prev_knot, maturity]`. This is what lets Phase 1 back the curve with a `ZeroCouponCurve` (§3).
 - The **first (spot) segment** starts at the short-end anchor (§6): `[t + spot_lag, spot maturity]`.
 
 ## 4. Interpolation methods (pluggable; piecewise-constant first)
@@ -225,8 +255,10 @@ separate projection unknown yet.)
 
 ## 9. Migration
 
-1. Introduce `DiscountCurve` (keep `ZeroCouponCurve` as-is or alias) and add `ProjectionCurve`
-   with the piecewise-constant strategy + `get_accrual`.
+1. Introduce `DiscountCurve` (keep `ZeroCouponCurve` as-is or alias) and add `ProjectionCurve` — for
+   Phase 1 a thin wrapper over a log-linear `ZeroCouponCurve` of pseudo-DFs (§3), exposing
+   `get_accrual` / `get_equivalent_forward_rate` as the only seam so forward-space integrators can
+   replace the backing later.
 2. Add `market.projection_curves: dict[Index, ProjectionCurve]`; route `_leg_pv` projection there,
    discount unchanged. Curve-key equality for projection drops the currency dimension.
 3. Bootstrap projection curves in `build_curves` (given discount), with the spot-fixing short-end
