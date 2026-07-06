@@ -9,7 +9,14 @@ import numpy as np
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
-from ..rates import Rate, ZeroCouponCurve
+from ..rates import (
+    Rate,
+    ZeroCouponCurve,
+    ProjectionCurve,
+    DiscountProjectionView,
+    InterpolationMethod,
+    ProjectionInterpolationMethod,
+)
 from ..dates import Calendar
 
 if TYPE_CHECKING:
@@ -34,11 +41,27 @@ class Market:
 
     interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
 
-    # Every curve is keyed by (index, currency). A projection curve for `index` is
-    # simply the curve at (index, index.currency) — the same object doubles as the
+    # Discount curves, keyed by (index, currency). The same object doubles as the
     # discount curve when `index` is used as collateral in its own currency.
     curves: dict[tuple[Index, Currency], ZeroCouponCurve] = field(default_factory=dict)
+    # Projection (forward) curves, keyed by Index only (§ projection_curves design).
+    # An independent-basis index stores a real ProjectionCurve here; an aliased
+    # (OIS self-discounted) index need not — get_projection falls back to a forward
+    # view over its (index, index.currency) discount curve. See get_projection.
+    projection_curves: dict[Index, ProjectionCurve | DiscountProjectionView] = field(
+        default_factory=dict
+    )
     volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(default_factory=dict)
+
+    # Default interpolation per curve role, used when build_curves / the accessors are
+    # not given an explicit override. Discount curves interpolate log-linearly in DF
+    # (consistent with the log-df bootstrap); projection curves are piecewise-constant
+    # in forward. The method is baked at bootstrap — it is the curve's calibration
+    # identity — so changing it means re-solving that curve, not resampling in place.
+    discount_interpolation_method: InterpolationMethod = InterpolationMethod.LogLinear
+    projection_interpolation_method: ProjectionInterpolationMethod = (
+        ProjectionInterpolationMethod.PiecewiseConstant
+    )
 
     def __post_init__(self):
         fxs_to_add = {}
@@ -89,6 +112,28 @@ class Market:
 
     def get_projection_dfs(self, index: Index, dates: list[date]) -> np.ndarray:
         return self.curves[(index, index.currency)].get_dfs(dates)
+
+    def get_projection(
+        self, index: Index, *, interpolation_method=None
+    ) -> ProjectionCurve | DiscountProjectionView:
+        """Forward-projection curve for `index`, exposing the ``get_accrual`` seam.
+
+        Returns the stored :class:`ProjectionCurve` when `index` has an independent
+        forwarding basis. Otherwise (an OIS index self-discounted in its own
+        currency, or any index not yet given a projection curve) it falls back to a
+        :class:`DiscountProjectionView` over the ``(index, index.currency)`` discount
+        curve — the same DFs, viewed as forwards — which is exactly today's behaviour.
+
+        `interpolation_method` is accepted for forward-compatibility (a resampled
+        what-if view); the stored curve is returned as-built for now."""
+        if index in self.projection_curves:
+            return self.projection_curves[index]
+        return DiscountProjectionView(self.curves[(index, index.currency)])
+
+    def set_projection(
+        self, index: Index, curve: ProjectionCurve | DiscountProjectionView
+    ) -> None:
+        self.projection_curves[index] = curve
 
     def add_index(self, history: IndexHistory):
         self.indexes_history[history.name.upper()] = history

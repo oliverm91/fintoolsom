@@ -6,4 +6,9 @@ from .Rates import (
     CompoundedInterestConvention,
     ExponentialInterestConvention,
 )
-from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint
+from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint, InterpolationMethod
+from .ProjectionCurve import (
+    ProjectionCurve,
+    DiscountProjectionView,
+    ProjectionInterpolationMethod,
+)

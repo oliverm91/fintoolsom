@@ -15,7 +15,7 @@ from ..market.index_history import OvernightRateHistory
 from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
-from ..rates import ZeroCouponCurve
+from ..rates import ZeroCouponCurve, InterpolationMethod
 
 
 CurveKey = tuple[Index, Currency]
@@ -122,12 +122,19 @@ def build_curves(
     quotes: list,
     riskless_index: Index,
     market: Market,
+    *,
+    interpolation_method: InterpolationMethod | None = None,
 ) -> None:
     """Bootstrap ZeroCouponCurve objects from `quotes` and store them in
     `market.curves`, keyed by (Index, Currency). Mutates `market` in place;
     does not return anything. `market` must already be valued as of the
     quotes' quote_date and carry whatever FX/other data Calculator.valuate
-    needs at that date (e.g. spot rates for FX forwards)."""
+    needs at that date (e.g. spot rates for FX forwards).
+
+    `interpolation_method` overrides the discount-curve interpolation for this
+    build; when omitted, `market.discount_interpolation_method` (LogLinear by
+    default) is used — consistent with the log-df solve below."""
+    disc_method = interpolation_method or market.discount_interpolation_method
 
     # 1. Derive valuation date from quotes and cross-check against market.t, since
     # Calculator.valuate reads FX (and other) market data off market.t internally.
@@ -282,7 +289,9 @@ def build_curves(
                 free = list(zip(free_dates[curve], (math.exp(v) for v in y[s:e])))
                 date_dfs = fixed_pillars[curve] + free
                 date_dfs.sort(key=lambda p: p[0])
-                market.curves[curve] = ZeroCouponCurve(t, date_dfs=date_dfs)
+                market.curves[curve] = ZeroCouponCurve(
+                    t, date_dfs=date_dfs, df_interpolation_method=disc_method
+                )
 
         clp_currency = Currency(CurrencyName.CLP)
         def f(y) -> list[float]:
