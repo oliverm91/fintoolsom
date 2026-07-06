@@ -15,7 +15,13 @@ from ..market.index_history import OvernightRateHistory
 from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
-from ..rates import ZeroCouponCurve, InterpolationMethod
+from ..rates import (
+    ZeroCouponCurve,
+    InterpolationMethod,
+    ProjectionCurve,
+    DiscountProjectionView,
+    ProjectionInterpolationMethod,
+)
 
 
 CurveKey = tuple[Index, Currency]
@@ -117,6 +123,132 @@ def _get_maturity(curve_key: CurveKey, instrument: Swap | Forward, riskless_inde
         return max(maturity_candidates)
     # This should only happen when an instrument not affected by curve_key was passed.
     return None
+
+
+def _restore_projection(market: Market, index: Index, prev) -> None:
+    if prev is None:
+        market.projection_curves.pop(index, None)
+    else:
+        market.projection_curves[index] = prev
+
+
+def _bootstrap_projection_curve(
+    index: Index,
+    swaps: list[Swap],
+    market: Market,
+    riskless_index: Index,
+    method: ProjectionInterpolationMethod,
+) -> None:
+    """Bootstrap an INDEPENDENT-basis projection curve for `index` (a forwarding
+    curve distinct from every discount curve — a term index, or one discounted by a
+    different collateral/currency). The discount curves the swaps consume are already
+    built, so the only unknowns are `index`'s per-segment forward rates.
+
+    Knots are one per instrument maturity (keeping the solve square); a fixed spot
+    anchor segment ``[t + spot_lag, get_maturity(t + spot_lag)]`` is seeded from the
+    index-history spot fixing (an unknown removed, §5). Forward rates — not
+    pseudo-DFs — are solved so each swap reprices (``get_swap_mtm == 0``), reusing the
+    ``root`` solver via ``market.get_projection`` inside ``Calculator._leg_pv``."""
+    t = market.t
+    base = 365
+    cal = index.calendar
+    anchor_start = cal.add_business_days(t, getattr(index, "spot_lag", 0))
+    anchor_end = index.get_maturity(anchor_start)
+
+    history = market.get_index(index.name)
+    if not hasattr(history, "get_rate"):
+        raise InsufficientQuotesError(
+            f"Projection index '{index.name}' has no rate history to anchor its short end."
+        )
+    spot_rate = history.get_rate(t)  # type: ignore[attr-defined]
+    wf_anchor = spot_rate.get_wealth_factor(anchor_start, anchor_end)
+    f_anchor = math.log(wf_anchor) / ((anchor_end - anchor_start).days / base)
+
+    def _leg_maturity(swap: Swap) -> date:
+        return max(
+            max(leg.end_dates)
+            for leg in (swap.receive_leg, swap.pay_leg)
+            if isinstance(leg, FloatingLeg) and leg.index == index
+        )
+
+    dated = sorted(((_leg_maturity(s), s) for s in swaps), key=lambda ms: ms[0])
+    maturities = [m for m, _ in dated]
+    ordered_swaps = [s for _, s in dated]
+    # One distinct maturity beyond the spot anchor per instrument → one free forward
+    # per residual → square. Coincident or sub-spot maturities break that.
+    if len(set(maturities)) != len(maturities) or any(m <= anchor_end for m in maturities):
+        raise InsufficientQuotesError(
+            f"Projection curve for '{index.name}' is under-determined: it needs one "
+            f"distinct maturity beyond the spot end {anchor_end} per instrument; got "
+            f"maturities {maturities}."
+        )
+
+    knots = [anchor_start, anchor_end, *maturities]
+    reporting_ccy = index.currency
+    prev = market.projection_curves.get(index)
+
+    def _apply(free_forwards) -> None:
+        forwards = [f_anchor] + [float(v) for v in free_forwards]
+        market.set_projection(index, ProjectionCurve(t, knots, forwards, method, base))
+
+    def f(free_forwards) -> list[float]:
+        _apply(free_forwards)
+        return [
+            Calculator.get_swap_mtm(s, market, riskless_index, reporting_ccy)
+            for s in ordered_swaps
+        ]
+
+    y0 = [f_anchor] * len(ordered_swaps)
+    try:
+        result = root(f, y0, method="hybr")
+    except ValueError as exc:
+        _restore_projection(market, index, prev)
+        raise ValueError(
+            f"Projection solve for '{index.name}' produced non-finite residuals; the "
+            f"forward rates it is solving are ill-posed for these instruments ({exc})."
+        ) from exc
+    if not result.success:
+        _restore_projection(market, index, prev)
+        raise ValueError(
+            f"Projection solve for '{index.name}' failed to converge: {result.message}"
+        )
+    _apply(result.x)
+
+
+def _register_projection_curves(
+    quotes: list,
+    riskless_index: Index,
+    market: Market,
+    method: ProjectionInterpolationMethod,
+) -> None:
+    """After the discount curves are built, give every floating-leg index a projection
+    curve. An index self-discounted in its own currency (the riskless index, or one
+    used as its own collateral) aliases its discount curve — a forward view, one
+    unknown, not two (§7). Any other index has a genuine forwarding/discounting basis
+    and gets an independently bootstrapped :class:`ProjectionCurve`."""
+    _fx_dependent = (CrossCurrencyFloatFloatQuote, ForwardPointsQuote)
+    swaps_by_index: defaultdict[Index, list[Swap]] = defaultdict(list)
+    collateral_indices: set[Index] = set()
+    for q in quotes:
+        collateral = getattr(q, "collateral_index", None)
+        if collateral is not None:
+            collateral_indices.add(collateral)
+        instrument = q.get_instrument(market) if isinstance(q, _fx_dependent) else q.get_instrument()
+        if isinstance(instrument, Swap):
+            for leg in (instrument.receive_leg, instrument.pay_leg):
+                if isinstance(leg, FloatingLeg) and instrument not in swaps_by_index[leg.index]:
+                    swaps_by_index[leg.index].append(instrument)
+
+    for index, index_swaps in swaps_by_index.items():
+        aliased = index == riskless_index or index in collateral_indices
+        discount_key = (index, index.currency)
+        if aliased and discount_key in market.curves:
+            # Self-discounted (OIS): projection IS the discount curve, viewed as forwards.
+            market.set_projection(index, DiscountProjectionView(market.curves[discount_key]))
+        else:
+            # Real forwarding/discounting basis: solve forward rates of a standalone curve.
+            _bootstrap_projection_curve(index, index_swaps, market, riskless_index, method)
+
 
 def build_curves(
     quotes: list,
@@ -339,3 +471,8 @@ def build_curves(
                 "Curve build stalled: the remaining groups are under-determined given "
                 f"the available quotes: {[set(g) for g in pending]}."
             )
+
+    # 4. Discount curves are all built; now give each floating-leg index a projection
+    #    curve (an alias view for self-discounted OIS indices, an independently
+    #    bootstrapped ProjectionCurve for real forwarding bases). See §7 / §8.1.
+    _register_projection_curves(quotes, riskless_index, market, market.projection_interpolation_method)
