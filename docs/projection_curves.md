@@ -1,7 +1,17 @@
 # Plan: separate Projection curves from Discount curves
 
-Status: **design / not implemented.** This documents the target design so the multi-curve
-model can grow deliberately. No behaviour changes until each phase is picked up.
+Status: **Phases 1–4 implemented** (Phase 5 optional, not started). The forward-rate
+`ProjectionCurve` type, the `get_projection` valuation seam, the interpolation-method
+config, and the bootstrap (alias views for self-discounted indices + a real forward-rate
+solve for independent bases) are live. `get_projection` still falls back to a discount
+view when an index has no registered curve, so single-curve behaviour is preserved.
+Implemented in: `src/fintoolsom/rates/ProjectionCurve.py`, `market/market.py`
+(`projection_curves`, `get_projection`/`set_projection`, interpolation defaults),
+`derivatives/calculator.py` (`_leg_pv` projects via `get_projection(...).get_accrual`),
+`curve_builder/builder.py` (`_register_projection_curves` / `_bootstrap_projection_curve`);
+tests in `tests/test_projection_curve.py` and `tests/test_projection_bootstrap.py`.
+The sections below remain the design of record; Phase 5 (forward-space methods) is the
+only unimplemented part.
 
 ## 1. Why
 
