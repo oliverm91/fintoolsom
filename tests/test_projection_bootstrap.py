@@ -29,11 +29,19 @@ from fintoolsom.rates import (
 from fintoolsom.derivatives.swaps.builders import fixed_leg, term_rate_leg
 from fintoolsom.derivatives.swaps.swaps import Swap
 from fintoolsom.derivatives.calculator import Calculator
-from fintoolsom.curve_builder.builder import _bootstrap_projection_curve
+from fintoolsom.curve_builder.builder import _CurveBuilder, InsufficientQuotesError
 
 
 T = date(2026, 6, 29)
 USD = Currency(CurrencyName.USD)
+
+
+def _bootstrap_projection(index, swaps, market, riskless) -> None:
+    """Drive the independent-basis projection solve through a _CurveBuilder (the
+    bootstrap lives on the orchestrator; empty quotes since we invoke it directly)."""
+    _CurveBuilder(
+        [], riskless, market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
+    )._bootstrap_projection_curve(index, swaps)
 
 
 def _market_with_sofr_discount() -> tuple[Market, OvernightRateIndex, TermRateIndex, ModifiedFollowingConvention]:
@@ -83,7 +91,7 @@ def test_independent_projection_reprices_all_swaps():
         _term_swap(term3m, sofr, adj, 2, TermUnit.Y, 0.052),
     ]
 
-    _bootstrap_projection_curve(term3m, swaps, market, sofr, ProjectionInterpolationMethod.PiecewiseConstant)
+    _bootstrap_projection(term3m, swaps, market, sofr)
 
     proj = market.get_projection(term3m)
     assert isinstance(proj, ProjectionCurve)
@@ -101,7 +109,7 @@ def test_independent_projection_forwards_are_positive_and_near_par():
         _term_swap(term3m, sofr, adj, 1, TermUnit.Y, 0.050),
         _term_swap(term3m, sofr, adj, 2, TermUnit.Y, 0.050),
     ]
-    _bootstrap_projection_curve(term3m, swaps, market, sofr, ProjectionInterpolationMethod.PiecewiseConstant)
+    _bootstrap_projection(term3m, swaps, market, sofr)
     proj = market.get_projection(term3m)
     assert isinstance(proj, ProjectionCurve)
     # Solved forwards should be sane (positive, in a plausible rate range).
@@ -110,8 +118,6 @@ def test_independent_projection_forwards_are_positive_and_near_par():
 
 
 def test_non_square_projection_raises():
-    from fintoolsom.curve_builder.builder import InsufficientQuotesError
-
     market, sofr, term3m, adj = _market_with_sofr_discount()
     # Two swaps with the SAME maturity → two residuals, one segment → under-determined.
     swaps = [
@@ -119,4 +125,4 @@ def test_non_square_projection_raises():
         _term_swap(term3m, sofr, adj, 1, TermUnit.Y, 0.055),
     ]
     with pytest.raises(InsufficientQuotesError):
-        _bootstrap_projection_curve(term3m, swaps, market, sofr, ProjectionInterpolationMethod.PiecewiseConstant)
+        _bootstrap_projection(term3m, swaps, market, sofr)
