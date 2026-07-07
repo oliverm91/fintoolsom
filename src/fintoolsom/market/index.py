@@ -136,6 +136,12 @@ class UFIndex(PriceIndex):
     monthly inflation can be derived. Always denominated in CLP."""
 
     def get_maturity(self, start_date: date) -> date:
-        # UF is read for its level, not accrued, so a period end is vestigial; the
-        # next business day keeps the Index contract satisfied for the rare caller.
-        return self.calendar.add_business_days(start_date, 1)
+        # The UF's natural period is the reajuste month: the 9th to the 9th of the
+        # next month. Return the 9th that CLOSES the period containing start_date (a
+        # date on the 9th starts its own period). Unadjusted calendar 9th, matching
+        # the reajuste boundaries used by UFIndexHistory / UFConvention.
+        if start_date.day < 9:
+            return date(start_date.year, start_date.month, 9)
+        year = start_date.year + start_date.month // 12
+        month = start_date.month % 12 + 1
+        return date(year, month, 9)

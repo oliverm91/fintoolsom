@@ -278,6 +278,14 @@ def test_inflation_index_is_price_only_definition():
     assert not isinstance(UF, InterestIndex)
 
 
+def test_uf_index_maturity_is_next_reajuste_ninth():
+    # The UF period is the reajuste month (9th → 9th of next month), unadjusted.
+    assert UF.get_maturity(date(2026, 3, 5)) == date(2026, 3, 9)    # before the 9th → this month's 9th
+    assert UF.get_maturity(date(2026, 3, 9)) == date(2026, 4, 9)    # on the 9th → starts its own period
+    assert UF.get_maturity(date(2026, 3, 20)) == date(2026, 4, 9)   # after the 9th → next month's 9th
+    assert UF.get_maturity(date(2026, 12, 15)) == date(2027, 1, 9)  # year rollover
+
+
 def test_inflation_history_is_price_history_without_accrual():
     h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
     assert isinstance(h, PriceHistory)
