@@ -105,13 +105,27 @@ class TermRateIndex(RateIndex):
 class PriceIndex(Index):
     """Index published as price levels / floats and read only for its level
     (e.g. the UF). Price-only: it does not accrue interest, hence it is *not* an
-    :class:`InterestIndex`."""
+    :class:`InterestIndex`. Abstract by convention — use a concrete kind
+    (:class:`UFIndex`, :class:`OvernightInterestPriceIndex`)."""
 
 
 @dataclass(eq=False)
 class InterestPriceIndex(PriceIndex, InterestIndex):
     """Index published as price levels whose level ratio *does* accrue interest
-    (e.g. the Chilean ICP). Both a price index and interest-bearing."""
+    (e.g. the Chilean ICP). Both a price index and interest-bearing. Abstract by
+    convention — use a concrete kind (:class:`OvernightInterestPriceIndex`)."""
+
+
+@dataclass(eq=False)
+class OvernightInterestPriceIndex(OvernightIndex, InterestPriceIndex):
+    """Overnight interest-bearing price index (e.g. the Chilean ICP): published as
+    daily levels whose ratio accrues by daily compounding over a single business
+    day. Mirrors :class:`OvernightRateIndex` on the price side (paired with
+    :class:`OvernightInterestPriceHistory`)."""
+
+    def get_maturity(self, start_date: date) -> date:
+        # Overnight accrual spans one business day on the index's fixing calendar.
+        return self.calendar.add_business_days(start_date, 1)
 
 
 @dataclass(eq=False)
@@ -120,3 +134,8 @@ class UFIndex(PriceIndex):
     daily price levels (CLP per UF) and read only for its level. Price-only — it
     does not accrue interest — but its daily levels encode realised CPI, from which
     monthly inflation can be derived. Always denominated in CLP."""
+
+    def get_maturity(self, start_date: date) -> date:
+        # UF is read for its level, not accrued, so a period end is vestigial; the
+        # next business day keeps the Index contract satisfied for the rare caller.
+        return self.calendar.add_business_days(start_date, 1)
