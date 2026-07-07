@@ -14,7 +14,7 @@ from ..market.index import Index
 from ..market.currencies import Currency, CurrencyName
 from ..derivatives.calculator import Calculator
 from ..market.market import Market
-from ..market.index_history import OvernightRateHistory
+from ..market.index_history import OvernightHistory
 from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
@@ -345,13 +345,17 @@ class _CurveBuilder:
     def _short_end_anchor(self, curve: CurveKey) -> tuple[tuple[date, float] | None, float]:
         """FIXED short-end pillar + rate guess for a brand-new curve. When the curve is
         an overnight index's own-currency curve, anchor its first fixing from the index
-        history (seeded, never solved); otherwise no anchor and a flat 4% guess."""
+        history (seeded, never solved); otherwise no anchor and a flat 4% guess.
+
+        The overnight rate comes from the history polymorphically
+        (:meth:`OvernightHistory.spot_overnight_rate`): a rate index gives today's
+        fixing, a price index (e.g. ICP levels) the most recent realised one-day rate."""
         curve_index, curve_currency = curve
         if curve_currency == curve_index.currency:
             try:
                 history = self.market.get_index(curve_index.name)
-                if isinstance(history, OvernightRateHistory):
-                    rate = history.rates[self.t].copy()
+                if isinstance(history, OvernightHistory):
+                    rate = history.spot_overnight_rate(self.t).copy()
                     anchor_date = curve_index.get_maturity(self.t)  # overnight: next business day.
                     rate.convert_rate_convention(RateConvention(), self.t, anchor_date)
                     return (anchor_date, self._seed_df(rate.rate_value, anchor_date)), rate.rate_value

@@ -113,6 +113,12 @@ def test_overnight_rate_history_is_index_history():
     assert h.currency == Currency.USD
 
 
+def test_overnight_rate_history_spot_overnight_rate_is_todays_fixing():
+    # A rate index anchors from today's published fixing (applies to [t, t+1bd]).
+    h = OvernightRateHistory(index=SOFR, rates={D0: RATE_5PCT})
+    assert h.spot_overnight_rate(D0) == RATE_5PCT
+
+
 # ---------------------------------------------------------------------------
 # OvernightPriceHistory
 # ---------------------------------------------------------------------------
@@ -147,6 +153,23 @@ def test_overnight_price_history_accrued_interest():
     ai = h.get_accrued_interest(notional, D0, D2)
     expected = notional * (35014.0 / 35000.0 - 1.0)
     assert math.isclose(ai, expected, rel_tol=1e-9)
+
+
+def test_overnight_price_history_spot_overnight_rate_uses_last_realized_step():
+    # A price index has no forward level, so it anchors from the most recent realised
+    # one-business-day level ratio (D1→D2 here; D1 was gap-filled), act/360 linear.
+    h = OvernightInterestPriceHistory(index=ICP, values={D0: 35000.0, D2: 35014.0})
+    r = h.spot_overnight_rate(D2)
+    wf = h.values[D2] / h.values[D1]
+    expected = (wf - 1) / ((D2 - D1).days / 360)
+    assert r.rate_value == pytest.approx(expected)
+    assert r.rate_convention.time_fraction_base == 360
+
+
+def test_overnight_price_history_spot_overnight_rate_needs_two_levels():
+    h = OvernightInterestPriceHistory(index=ICP, values={D0: 35000.0})
+    with pytest.raises(KeyError):
+        h.spot_overnight_rate(D0)
 
 
 # ---------------------------------------------------------------------------

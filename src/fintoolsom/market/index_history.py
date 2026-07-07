@@ -3,8 +3,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from ..rates import Rate
-from ..dates import Calendar, PrecedingConvention
+from ..rates import Rate, RateConvention, LinearInterestConvention
+from ..dates import Calendar, PrecedingConvention, ActualDayCountConvention
 from .currencies import Currency
 from .index import (
     Index,
@@ -69,6 +69,16 @@ class OvernightHistory(IndexHistory, ABC):
     @property
     def calendar(self) -> Calendar:
         return self.index.calendar
+
+    @abstractmethod
+    def spot_overnight_rate(self, t: date) -> Rate:
+        """The overnight rate to anchor a curve's short end at valuation date ``t``
+        (the fixed ``[t, t+1bd]`` segment). A rate index returns today's published
+        fixing (which applies forward to ``[t, t+1bd]``); a price index — which does
+        not publish tomorrow's level — returns the most recent realised one-day rate
+        as the best available estimate. Raises ``KeyError`` when it cannot be
+        determined (no fixing at ``t`` / too few levels), so callers can fall back."""
+        ...
 
 
 # ── Price-only history (no accrual) ────────────────────────────────────────
@@ -322,6 +332,10 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
     def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float:
         return notional * (self._index_values[end_date] / self._index_values[start_date] - 1.0)
 
+    def spot_overnight_rate(self, t: date) -> Rate:
+        # Today's published overnight fixing applies forward to [t, t+1bd].
+        return self.get_rate(t)
+
 
 @dataclass
 class TermRateHistory(RateHistory):
@@ -388,3 +402,17 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
 
     def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float:
         return notional * (self.values[end_date] / self.values[start_date] - 1.0)
+
+    def spot_overnight_rate(self, t: date) -> Rate:
+        # No forward level is published, so estimate the overnight rate from the most
+        # recent realised one-business-day level ratio (act/360 linear, as elsewhere).
+        known = sorted(d for d in self.values if d <= t)
+        if len(known) < 2:
+            raise KeyError(
+                f"{self.name}: need at least two levels on/before {t} to imply an overnight rate."
+            )
+        prev, last = known[-2], known[-1]
+        wf = self.values[last] / self.values[prev]
+        year_fraction = (last - prev).days / 360
+        rate_value = float(LinearInterestConvention.get_rate_from_wf(wf, year_fraction))
+        return Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 360), rate_value)

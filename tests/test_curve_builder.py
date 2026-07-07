@@ -82,3 +82,30 @@ def test_curves_needed_forward_quote_does_not_crash_on_missing_collateral_index(
     )
     keys = _curves_needed(quote, RISKLESS)
     assert keys == frozenset({(RISKLESS, Currency.USD), (RISKLESS, Currency.CLP)})
+
+
+def test_short_end_anchor_supports_price_based_overnight_index():
+    # A price-based overnight index (ICP levels) must still anchor the short end, via
+    # OvernightInterestPriceHistory.spot_overnight_rate — not fall back to the flat guess.
+    from fintoolsom.curve_builder.builder import _CurveBuilder
+    from fintoolsom.market import OvernightInterestPriceIndex
+    from fintoolsom.market.index_history import OvernightInterestPriceHistory
+    from fintoolsom.rates import InterpolationMethod, ProjectionInterpolationMethod
+
+    t = date(2024, 1, 4)
+    icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
+    history = OvernightInterestPriceHistory(
+        index=icp,
+        values={date(2024, 1, 2): 100.00, date(2024, 1, 3): 100.01, date(2024, 1, 4): 100.02},
+    )
+    market = Market(t=t, indexes_history={"ICP": history})
+    builder = _CurveBuilder(
+        [], icp, market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
+    )
+
+    anchor, guess = builder._short_end_anchor((icp, Currency.CLP))
+    assert anchor is not None  # not the flat-guess fallback
+    anchor_date, df = anchor
+    assert anchor_date == icp.get_maturity(t)  # next business day
+    assert 0.0 < df < 1.0
+    assert guess > 0.0
