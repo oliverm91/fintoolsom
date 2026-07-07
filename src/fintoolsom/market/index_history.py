@@ -9,8 +9,10 @@ from .currencies import Currency
 from .index import (
     Index,
     RateIndex,
+    OvernightRateIndex,
     PriceIndex,
     InterestPriceIndex,
+    OvernightInterestPriceIndex,
     UFIndex,
 )
 
@@ -27,17 +29,6 @@ def _base_ninth(d: date) -> date:
     if d.day >= 9:
         return date(d.year, d.month, 9)
     return date(*_shift_month(d.year, d.month, -1), 9)
-
-
-def _resolve_overnight_calendar(provided: Calendar, currency: Currency) -> Calendar:
-    """Combine a user-provided calendar with the currency's locality calendar.
-    With no currency, fall back to a bare (weekends-only) calendar."""
-    locality_calendar = (
-        Calendar(country=currency.locality.value) if currency is not None else Calendar()
-    )
-    if provided is None:
-        return locality_calendar
-    return provided.combine(locality_calendar)
 
 
 @dataclass
@@ -71,12 +62,13 @@ class InterestHistory(IndexHistory, ABC):
 
 @dataclass
 class OvernightHistory(IndexHistory, ABC):
-    """Base for overnight histories. Owns the calendar field and resolves it from
-    any provided calendar combined with the currency's locality calendar."""
-    calendar: Calendar = field(default=None)
+    """Base for overnight histories: accrual advances one business day at a time, and
+    the 'next date' + calendar are owned by the index (:meth:`Index.get_maturity` /
+    :attr:`Index.calendar`) rather than duplicated on the history."""
 
-    def __post_init__(self):
-        self.calendar = _resolve_overnight_calendar(self.calendar, self.index.currency)
+    @property
+    def calendar(self) -> Calendar:
+        return self.index.calendar
 
 
 # ── Price-only history (no accrual) ────────────────────────────────────────
@@ -165,19 +157,9 @@ class UFIndexHistory(PriceHistory):
     and only up to the 9th of the current month before that release. See
     :meth:`get_last_known_date`.
 
-    The publication calendar is built from the index currency's locality (CLP → CL),
-    i.e. ``Calendar(country=index.currency.locality.value)``."""
+    The publication calendar is the index's own (built from the currency locality,
+    CLP → CL): ``index.calendar``."""
     index: UFIndex
-
-    _calendar: Calendar = field(init=False, repr=False, default=None)
-
-    def __post_init__(self):
-        currency = self.index.currency
-        self._calendar = (
-            Calendar(country=currency.locality.value)
-            if currency is not None
-            else Calendar()
-        )
 
     def get_inflation(self, year: int, month: int) -> float:
         """Realised monthly inflation of calendar month ``(year, month)``.
@@ -209,7 +191,7 @@ class UFIndexHistory(PriceHistory):
         are known; on/after it, up to the 9th of next month. ``calendar`` defaults
         to the index locality calendar (CLP → CL)."""
         if calendar is None:
-            calendar = self._calendar
+            calendar = self.index.calendar
         publication_date = PrecedingConvention(calendar).adjust(
             date(today.year, today.month, 8)
         )
@@ -289,11 +271,11 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
     Maintains a private index starting at 100 on the earliest rate date;
     accrual is index_end/index_start - 1. Gaps are filled by repeating the last
     known rate."""
+    index: OvernightRateIndex
 
     _index_values: dict[date, float] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self):
-        super().__post_init__()  # resolves calendar via OvernightHistory
         if self.rates:
             self._check_for_gaps()
             self._rebuild_index()
@@ -306,7 +288,7 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
         end_t = max(self.rates)
         t = min(self.rates)
         while t < end_t:
-            next_t = self.calendar.add_business_days(t, 1)
+            next_t = self.index.get_maturity(t)  # next business day (overnight accrual step)
             if next_t not in self.rates:
                 self.rates[next_t] = self.rates[t]
                 if verbose:
@@ -321,12 +303,12 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
             return
         start_t = min(self.rates)
         # A rate on day t covers t → next_business_day(t), so extend one BD past the last rate.
-        end_t = self.calendar.add_business_days(max(self.rates), 1)
+        end_t = self.index.get_maturity(max(self.rates))
         self._index_values = {start_t: 100.0}
         r = None
         t = start_t
         while t < end_t:
-            next_t = self.calendar.add_business_days(t, 1)
+            next_t = self.index.get_maturity(t)
             if t in self.rates:
                 r = self.rates[t]
             self._index_values[next_t] = self._index_values[t] * r.get_wealth_factor(t, next_t)
@@ -373,9 +355,9 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
     """Overnight index defined by published index levels (e.g. ICP).
     Accrual is level_end/level_start - 1. Missing business-day entries are filled
     by geometric interpolation between surrounding known values."""
+    index: OvernightInterestPriceIndex
 
     def __post_init__(self):
-        super().__post_init__()  # resolves calendar via OvernightHistory
         if not self.values:
             raise ValueError("values must be non-empty.")
         self._check_for_gaps()
@@ -391,14 +373,14 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
             t_end = sorted_known[i + 1]
             days_total = (t_end - t_start).days
             ratio = self.values[t_end] / self.values[t_start]
-            t = self.calendar.add_business_days(t_start, 1)
+            t = self.index.get_maturity(t_start)  # next business day (overnight accrual step)
             while t < t_end:
                 if t not in self.values:
                     days_elapsed = (t - t_start).days
                     self.values[t] = self.values[t_start] * ratio ** (days_elapsed / days_total)
                     if verbose:
                         warnings.warn(f"{self.name}: no value for {t}, filled by interpolation.")
-                t = self.calendar.add_business_days(t, 1)
+                t = self.index.get_maturity(t)
 
     def add_value(self, t: date, value: float):
         self.values[t] = value
