@@ -5,10 +5,13 @@ from datetime import date
 from fintoolsom.market import (
     Currency,
     InterestIndex,
-    RateIndex,
+    OvernightRateIndex,
+    TermRateIndex,
     PriceIndex,
-    InterestPriceIndex,
+    OvernightInterestPriceIndex,
     UFIndex,
+    Term,
+    TermUnit,
     IndexHistory,
     InterestHistory,
     RateHistory,
@@ -20,7 +23,7 @@ from fintoolsom.market import (
     UFConvention,
 )
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
-from fintoolsom.dates import ActualDayCountConvention
+from fintoolsom.dates import ActualDayCountConvention, Calendar, ModifiedFollowingConvention
 
 RATE_5PCT = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 365), 0.05)
 RATE_3PCT = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 365), 0.03)
@@ -32,9 +35,10 @@ D2 = date(2024, 1, 4)  # Thu
 D3 = date(2024, 1, 5)  # Fri
 
 # Definitions (identity only — name + currency, value type fixed by class).
-SOFR = RateIndex("SOFR", currency=Currency.USD)
-SOFR3M = RateIndex("SOFR3M", currency=Currency.USD)
-ICP = InterestPriceIndex("ICP", currency=Currency.CLP)
+_ADJ = ModifiedFollowingConvention(Calendar())
+SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
+SOFR3M = TermRateIndex("SOFR3M", currency=Currency.USD, term=Term(3, TermUnit.M, _ADJ))
+ICP = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
 UF = UFIndex("UF", currency=Currency.CLP)
 
 

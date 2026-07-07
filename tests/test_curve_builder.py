@@ -7,13 +7,13 @@ from fintoolsom.curve_builder.builder import (
     build_curves,
     _curves_needed,
 )
-from fintoolsom.market import Currency, Market, RateIndex
+from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.market.quotes import ForwardPriceQuote
 from fintoolsom.rates import ZeroCouponCurve
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
-RISKLESS = RateIndex("OIS")  # generic index, reused across currencies
+RISKLESS = OvernightRateIndex("OIS")  # generic overnight index, reused across currencies
 
 
 def _market(t: date, spot: float, usd_df: float, payment_date: date) -> Market:
