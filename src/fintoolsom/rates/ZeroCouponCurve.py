@@ -7,6 +7,7 @@ from typing import Self
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 
+from .Curve import Curve, forward_rates_from_wfs
 from .Rates import Rate, RateConvention
 from ..dates import ActualDayCountConvention
 
@@ -32,7 +33,11 @@ class ZeroCouponCurvePoint:
 
 
 @dataclass(slots=True)
-class ZeroCouponCurve:
+class ZeroCouponCurve(Curve):
+    """Curve backed by pillars (ZeroCouponCurvePoint) interpolated in DF.
+
+    Beyond the Curve interface it exposes pillar mechanics: add_point, delete_point,
+    sort, len(), and get_zero_rates / get_zero_rates_values (the rates AT the pillars)."""
     curve_date: date
 
     curve_points: list[ZeroCouponCurvePoint] = field(default_factory=list)
@@ -227,16 +232,7 @@ class ZeroCouponCurve:
         if isinstance(end_dates, date):
             end_wfs = end_wfs[0]
         fwd_wfs = end_wfs / start_wfs
-        tfb = rate_convention.time_fraction_base
-        tfs = rate_convention.day_count_convention.get_time_fraction(
-            start_dates, end_dates, tfb
-        )
-        fwd_rates = rate_convention.interest_convention.get_rate_from_wf(fwd_wfs, tfs)
-        if isinstance(fwd_rates, np.ndarray):
-            fwd_rates = [Rate(rate_convention, rate) for rate in fwd_rates]
-        else:
-            fwd_rates = Rate(rate_convention, fwd_rates)
-        return fwd_rates
+        return forward_rates_from_wfs(fwd_wfs, start_dates, end_dates, rate_convention)
 
     def get_forward_rates_values(
         self,
@@ -306,7 +302,9 @@ class ZeroCouponCurve:
         fwd_dates = [cp.date for cp in self.curve_points if cp.date > date]
         fwd_dfs = self.get_dfs_fwds([date] * len(fwd_dates), fwd_dates)
         date_dfs = [(fwd_dates[i], fwd_dfs[i]) for i in range(len(fwd_dates))]
-        fwd_zcc = ZeroCouponCurve(date, date_dfs=date_dfs)
+        fwd_zcc = ZeroCouponCurve(
+            date, date_dfs=date_dfs, df_interpolation_method=self.df_interpolation_method
+        )
         return fwd_zcc
 
     def __len__(self) -> int:
@@ -314,7 +312,9 @@ class ZeroCouponCurve:
 
     def copy(self) -> Self:
         return ZeroCouponCurve(
-            self.curve_date, [zccp.copy() for zccp in self.curve_points]
+            self.curve_date,
+            [zccp.copy() for zccp in self.curve_points],
+            df_interpolation_method=self.df_interpolation_method,
         )
 
     def __copy__(self) -> Self:

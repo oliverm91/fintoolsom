@@ -298,7 +298,7 @@ class CLBond:
         return total_pv
 
     def get_present_value_zc(
-        self, date: date, zc_curve: rates.ZeroCouponCurve
+        self, date: date, zc_curve: rates.Curve
     ) -> float:
         """
         Retuns present value using a Zero Coupon Curve object.
@@ -320,7 +320,7 @@ class CLBond:
         self,
         date: date,
         irr: rates.Rate,
-        zc_curve: rates.ZeroCouponCurve,
+        zc_curve: rates.Curve,
         initial_guess: float = None,
         maxiter: int = 50,
     ) -> float:
@@ -394,7 +394,7 @@ class CLBond:
     def get_irr_with_zcc(
         self,
         date: date,
-        zero_coupon_curve: rates.ZeroCouponCurve,
+        zero_coupon_curve: rates.Curve,
         irr_rate_convention: RateConvention,
         initial_guess: float = None,
     ) -> Rate:

@@ -16,9 +16,9 @@ FIXED_RATE = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvent
 
 
 def _sofr_market(curve_date, sample_zero_coupon_curve) -> Market:
-    # A single curve stored at (SOFR, USD) serves both as the riskless discount curve
+    # A single curve stored under SOFR (the riskless index) serves both as the USD discount curve
     # for USD and — via get_projection's fallback view — as SOFR's projection curve.
-    return Market(t=curve_date, curves={(SOFR, Currency.USD): sample_zero_coupon_curve})
+    return Market(t=curve_date, riskless_index=SOFR, curves={SOFR: sample_zero_coupon_curve})
 
 
 def test_leg_pv_projects_overnight_leg_via_projection_curve(
@@ -38,7 +38,7 @@ def test_leg_pv_projects_overnight_leg_via_projection_curve(
     )
     leg = OvernightLeg(coupons=[coupon], index=SOFR, spread=ZERO_SPREAD)
 
-    pv = Calculator._leg_pv(leg, None, market, SOFR)
+    pv = Calculator._leg_pv(leg, None, market)
 
     # Overnight coupon accrues the forward WEALTH factor (>1): interest = residual*(wf-1).
     wf_fwd = sample_zero_coupon_curve.get_wf_fwd(start_date, end_date)
@@ -77,7 +77,7 @@ def test_swap_mtm_discounts_projected_floating_leg_against_fixed_leg(
 
     swap = Swap(receive_leg=receive_leg, pay_leg=pay_leg)
 
-    mtm = Calculator.get_swap_mtm(swap, market, SOFR, Currency.USD)
+    mtm = Calculator.get_swap_mtm(swap, market, Currency.USD)
 
     fixed_pv = fixed_coupon.flow * sample_zero_coupon_curve.get_df(end_date)
     wf_fwd = sample_zero_coupon_curve.get_wf_fwd(start_date, end_date)

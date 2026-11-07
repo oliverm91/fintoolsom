@@ -6,17 +6,18 @@ from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
-# One riskless index discounts both currencies; get_forward_mtm/get_ndf_mtm derive the
+# CLP riskless index; USD discounts on its own (non-riskless) currency curve. get_forward_mtm/get_ndf_mtm derive the
 # quote-ccy (domestic) and base-ccy (foreign) curves and the spot off the market.
-RISKLESS = OvernightRateIndex("OIS")
+RISKLESS = OvernightRateIndex("OIS", currency=Currency.CLP)
 
 
 def _market(curve_date, zero_coupon_curve, spot: float) -> Market:
     market = Market(
         t=curve_date,
+        riskless_index=RISKLESS,
         curves={
-            (RISKLESS, Currency.USD): zero_coupon_curve,
-            (RISKLESS, Currency.CLP): zero_coupon_curve,
+            RISKLESS: zero_coupon_curve,  # CLP: the riskless index's own curve
+            Currency.USD: zero_coupon_curve,  # USD: uncollateralised, non-riskless currency
         },
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))
@@ -34,7 +35,7 @@ def test_forward_mtm_is_zero_at_fair_strike(sample_zero_coupon_curve, curve_date
     forward = Forward(
         1_000_000, fair_strike, payment_date, is_buy=True, currency_pair=USDCLP
     )
-    mtm = Calculator.get_forward_mtm(forward, market, RISKLESS, Currency.CLP)
+    mtm = Calculator.get_forward_mtm(forward, market, Currency.CLP)
     assert mtm == 0
 
 
@@ -51,8 +52,8 @@ def test_forward_mtm_sign_flips_with_is_buy(sample_zero_coupon_curve, curve_date
         1_000_000, strike, payment_date, is_buy=False, currency_pair=USDCLP
     )
 
-    buy_mtm = Calculator.get_forward_mtm(buy_forward, market, RISKLESS, Currency.CLP)
-    sell_mtm = Calculator.get_forward_mtm(sell_forward, market, RISKLESS, Currency.CLP)
+    buy_mtm = Calculator.get_forward_mtm(buy_forward, market, Currency.CLP)
+    sell_mtm = Calculator.get_forward_mtm(sell_forward, market, Currency.CLP)
     assert buy_mtm == -sell_mtm
     assert buy_mtm > 0  # spot > strike, buying is in the money
 
@@ -75,8 +76,8 @@ def test_ndf_mtm_matches_forward_when_fixing_equals_payment(sample_zero_coupon_c
         fixing_date=payment_date,
     )
 
-    forward_mtm = Calculator.get_forward_mtm(forward, market, RISKLESS, Currency.CLP)
-    ndf_mtm = Calculator.get_ndf_mtm(ndf, market, RISKLESS, Currency.CLP)
+    forward_mtm = Calculator.get_forward_mtm(forward, market, Currency.CLP)
+    ndf_mtm = Calculator.get_ndf_mtm(ndf, market, Currency.CLP)
     assert ndf_mtm == forward_mtm
 
 

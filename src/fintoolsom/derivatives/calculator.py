@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.stats import norm
 
-from ..rates import ZeroCouponCurve, RateConvention, ExponentialInterestConvention
+from ..rates import Curve, RateConvention, ExponentialInterestConvention
 from ..dates import ActualDayCountConvention
 from .forwards.forwards import Forward, NDF
 from .options.options import Option
@@ -16,7 +16,6 @@ from .swaps.swaps import Swap
 if TYPE_CHECKING:
     from ..market import Market
     from ..market.currencies import Currency
-    from ..market.index import Index
 
 _default_option_rate_convention = RateConvention(
     interest_convention=ExponentialInterestConvention,
@@ -36,15 +35,14 @@ class Calculator:
     def get_forward_mtm(
         forward: Forward,
         market: Market,
-        riskless_index: Index,
         currency: Currency,
     ) -> float:
         """Deliverable FX forward MTM. Curves and spot are derived from `market`
         (mirrors get_mtm_option): domestic = quote-currency curve, foreign =
-        base-currency curve, both under `riskless_index`."""
+        base-currency curve, both uncollateralised (market funding curves)."""
         cp = forward.currency_pair
-        domestic_curve = market.get_curve(riskless_index, cp.quote_currency)
-        foreign_curve = market.get_curve(riskless_index, cp.base_currency)
+        domestic_curve = market.get_funding_curve(cp.quote_currency)
+        foreign_curve = market.get_funding_curve(cp.base_currency)
         spot = market.get_fx_rate(market.t, cp).value
 
         df_d = domestic_curve.get_df(forward.payment_date)
@@ -59,15 +57,14 @@ class Calculator:
     def get_ndf_mtm(
         ndf: NDF,
         market: Market,
-        riskless_index: Index,
         currency: Currency,
     ) -> float:
         """Non-deliverable FX forward MTM: the fixing (settlement) FX is projected
         as spot * df_f / df_d at the fixing_date, and the settlement amount is
         discounted from payment_date on the quote-currency (domestic) curve."""
         cp = ndf.currency_pair
-        domestic_curve = market.get_curve(riskless_index, cp.quote_currency)
-        foreign_curve = market.get_curve(riskless_index, cp.base_currency)
+        domestic_curve = market.get_funding_curve(cp.quote_currency)
+        foreign_curve = market.get_funding_curve(cp.base_currency)
         spot = market.get_fx_rate(market.t, cp).value
 
         df_d = domestic_curve.get_df(ndf.fixing_date)
@@ -83,8 +80,8 @@ class Calculator:
     def get_uf_forward_mtm(
         ndf: NDF,
         uf_history: dict[date, float],
-        clp_curve: ZeroCouponCurve,
-        uf_curve: ZeroCouponCurve,
+        clp_curve: Curve,
+        uf_curve: Curve,
     ) -> float:
         """Values an NDF settling against the Chilean UF (ndf.is_uf_indexed=True).
         The UF value is known in advance until the 9th of the following month. If
@@ -116,8 +113,8 @@ class Calculator:
     def get_option_log_moneyness(
         option: Option,
         spot: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
     ) -> float:
         df_r = domestic_curve.get_df(option.maturity)
         df_q = foreign_curve.get_df(option.maturity)
@@ -132,8 +129,8 @@ class Calculator:
     def _get_option_rates(
         option: Option,
         t: date,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
     ) -> tuple[float, float]:
         rc = rate_convention or _default_option_rate_convention
@@ -153,8 +150,8 @@ class Calculator:
         t: date,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
         return_vol_sqrt_yf: bool = False,
     ) -> float | tuple[float, float]:
@@ -176,8 +173,8 @@ class Calculator:
         t: date,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
         return_both_ds: bool = False,
     ) -> float | tuple[float, float]:
@@ -202,8 +199,8 @@ class Calculator:
         t: date,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
     ) -> float:
         d1, d2 = Calculator._get_option_d2(
@@ -236,8 +233,8 @@ class Calculator:
         t: date,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
     ) -> float:
         _, q = Calculator._get_option_rates(
@@ -261,8 +258,8 @@ class Calculator:
         t: date,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
     ) -> float:
         _, q = Calculator._get_option_rates(
@@ -290,8 +287,8 @@ class Calculator:
         t: date,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         rate_convention: RateConvention = None,
     ) -> float:
         _, q = Calculator._get_option_rates(
@@ -309,8 +306,8 @@ class Calculator:
         delta: float,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         maturity: date,
         sign: int,
         rate_convention: RateConvention = None,
@@ -338,8 +335,8 @@ class Calculator:
         delta: float,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         maturity: date,
         rate_convention: RateConvention = None,
     ) -> float:
@@ -359,8 +356,8 @@ class Calculator:
         delta: float,
         spot: float,
         volatility: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         maturity: date,
         rate_convention: RateConvention = None,
     ) -> float:
@@ -378,7 +375,7 @@ class Calculator:
     # --- Swaps ---
 
     @staticmethod
-    def _leg_pv(leg, collateral, market: Market, riskless_index: Index) -> float:
+    def _leg_pv(leg, collateral, market: Market) -> float:
         """PV of one leg in its own currency, vectorised over future coupons.
 
         TermRateLeg — split by fixing_date:
@@ -399,13 +396,7 @@ class Calculator:
 
         # Collateral-adjusted DFs for all future payment dates
         future_pay_dates = [t for t, f in zip(leg.payment_dates, future_payment) if f]
-        base_dfs = market.get_discount_dfs(riskless_index, currency, future_pay_dates)
-        if collateral is not None:
-            proj_dfs = market.get_projection_dfs(collateral, future_pay_dates)
-            riskless_coll_dfs = market.get_discount_dfs(riskless_index, collateral.currency, future_pay_dates)  # type: ignore[union-attr]
-            dfs = base_dfs * proj_dfs / riskless_coll_dfs
-        else:
-            dfs = base_dfs
+        dfs = market.get_discount_dfs(currency, future_pay_dates, collateral)
 
         if isinstance(leg, _FixedLeg):
             return float(np.dot(leg.flows[future_payment], dfs))
@@ -439,7 +430,7 @@ class Calculator:
                 starts  = [s for s, f in zip(leg.start_dates, to_proj_mask) if f]
                 ends    = [e for e, f in zip(leg.end_dates,   to_proj_mask) if f]
                 accruals = proj_curve.get_accrual(starts, ends)
-                flows[to_proj_mask[future_payment]] = leg.residuals[to_proj_mask] * accruals + leg.spreads_values[to_proj_mask] + leg.amortizations
+                flows[to_proj_mask[future_payment]] = leg.residuals[to_proj_mask] * accruals + leg.spreads_values[to_proj_mask] + leg.amortizations[to_proj_mask]
 
         else:
             # OvernightLeg (and XCCYFloatingLeg): split by start_date
@@ -487,7 +478,7 @@ class Calculator:
         return float(np.dot(flows, dfs))
 
     @staticmethod
-    def get_swap_mtm(swap: Swap, market: Market, riskless_index: Index, currency: Currency) -> float:
+    def get_swap_mtm(swap: Swap, market: Market, currency: Currency) -> float:
         """Generic swap valuation in the requested reporting currency.
 
         Discounts receive_leg (positive) and pay_leg (negative) in their own currencies,
@@ -498,7 +489,7 @@ class Calculator:
         from ..market.currencies import CurrencyPair as _CurrencyPair
 
         def _pv(leg) -> float:
-            pv = Calculator._leg_pv(leg, swap.collateral_index, market, riskless_index)
+            pv = Calculator._leg_pv(leg, swap.collateral_index, market)
             if leg.currency != currency:
                 cp = _CurrencyPair(leg.currency, currency)
                 pv *= market.get_fx_rate(market.t, cp).value
@@ -509,12 +500,12 @@ class Calculator:
     # --- Dispatcher ---
 
     @staticmethod
-    def get_mtm_option(instrument: Option, market: Market, riskless_index: Index) -> float:
-        """MTM for an Option. Curves come from instrument.domestic_index /
-        foreign_index (as in get_mtm_forward); volatility is read off the
+    def get_mtm_option(instrument: Option, market: Market) -> float:
+        """MTM for an Option. Curves are the market funding curves of each side of
+        instrument.currency_pair (as in get_forward_mtm); volatility is read off the
         VolatilitySurface market keeps for instrument.currency_pair."""
-        domestic_curve = market.get_curve(riskless_index, instrument.currency_pair.quote_currency)
-        foreign_curve = market.get_curve(riskless_index, instrument.currency_pair.base_currency)
+        domestic_curve = market.get_funding_curve(instrument.currency_pair.quote_currency)
+        foreign_curve = market.get_funding_curve(instrument.currency_pair.base_currency)
         spot = market.get_fx_rate(market.t, instrument.currency_pair).value
 
         log_moneyness = Calculator.get_option_log_moneyness(
@@ -529,7 +520,7 @@ class Calculator:
         )
 
     @staticmethod
-    def valuate(instrument: Forward | NDF | Option | Swap, market: Market, riskless_index: Index, currency: Currency) -> float:
+    def valuate(instrument: Forward | NDF | Option | Swap, market: Market, currency: Currency) -> float:
         """Dispatches to the matching MTM calculation using only `instrument` and
         `market`. NDF is checked before Forward since NDF is a subclass of Forward."""
         if isinstance(instrument, NDF):
@@ -538,13 +529,13 @@ class Calculator:
                     "UF-indexed NDF valuation is not routed through valuate(); it needs a "
                     "UF (CLF) curve and UF history — use get_uf_forward_mtm directly."
                 )
-            return Calculator.get_ndf_mtm(instrument, market, riskless_index, currency)
+            return Calculator.get_ndf_mtm(instrument, market, currency)
         if isinstance(instrument, Forward):
-            return Calculator.get_forward_mtm(instrument, market, riskless_index, currency)
+            return Calculator.get_forward_mtm(instrument, market, currency)
         if isinstance(instrument, Swap):
-            return Calculator.get_swap_mtm(instrument, market, riskless_index, currency)
+            return Calculator.get_swap_mtm(instrument, market, currency)
         if isinstance(instrument, Option):
-            return Calculator.get_mtm_option(instrument, market, riskless_index)
+            return Calculator.get_mtm_option(instrument, market)
 
         raise NotImplementedError(
             f"No valuation routing implemented for instrument type {type(instrument).__name__}."

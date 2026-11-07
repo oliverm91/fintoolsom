@@ -32,6 +32,6 @@ class Swap(SwapBase):
     pay_leg: SwapLeg
     is_deliverable: bool = False
 
-    def valuate(self, market, riskless_index, currency: Currency) -> float:
+    def valuate(self, market, currency: Currency) -> float:
         from ..calculator import Calculator
-        return Calculator.get_swap_mtm(self, market, riskless_index, currency)
+        return Calculator.get_swap_mtm(self, market, currency)

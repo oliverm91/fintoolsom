@@ -10,7 +10,7 @@ import numpy as np
 from .Rates import Rate, RateConvention
 
 if TYPE_CHECKING:
-    from .ZeroCouponCurve import ZeroCouponCurve
+    from .Curve import Curve
 
 
 class ProjectionInterpolationMethod(Enum):
@@ -159,14 +159,14 @@ class ProjectionCurve:
 
 @dataclass(slots=True)
 class DiscountProjectionView:
-    """Thin forward *view* over a discount :class:`ZeroCouponCurve`, used when an
+    """Thin forward *view* over a discount :class:`Curve`, used when an
     overnight index is self-discounted (OIS) so its projection and discount curves
     are the **same** unknown (§7 of the design). It exposes the exact same seam as
     :class:`ProjectionCurve` (``get_accrual`` / ``get_wealth_factor`` / ``pseudo_df``)
     but reads the wealth/discount factors straight off the underlying curve — no
     separate pillars — so callers never branch on aliased vs independent."""
 
-    discount_curve: "ZeroCouponCurve"
+    discount_curve: "Curve"
 
     def pseudo_df(self, t: date) -> float:
         return self.discount_curve.get_df(t)

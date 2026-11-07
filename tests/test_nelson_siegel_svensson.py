@@ -112,7 +112,7 @@ def test_get_curve_is_consistent_with_calibrated_model_df():
 
     maturity = bonds_irr_list[0][0].get_maturity_date()
     t = (maturity - calibration_date).days / 365
-    assert curve.get_df(maturity) == pytest.approx(nss.get_df(t), abs=1e-3)
+    assert curve.get_df(maturity) == pytest.approx(nss.get_df(t), abs=1e-15)  # closed form: exact
 
 
 def test_design_matrix_is_finite_at_calibration_bounds():

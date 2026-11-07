@@ -124,13 +124,22 @@ def test_market_get_projection_falls_back_to_discount_view():
     pc = _pc()
     zcc = _equivalent_loglinear_zcc(pc)
     market = Market(T)
-    market.curves[(sofr, usd)] = zcc
+    market.curves[sofr] = zcc
 
-    # No projection curve registered -> fallback view over the (index, index.currency) discount curve.
+    # No projection curve registered -> fallback view over the index's own discount curve.
     proj = market.get_projection(sofr)
     assert isinstance(proj, DiscountProjectionView)
     assert proj.discount_curve is zcc
 
-    # After set_projection, the stored curve is returned as-built.
-    market.set_projection(sofr, pc)
-    assert market.get_projection(sofr) is pc
+    # One curve per index: an index with a discount curve cannot also hold a projection curve.
+    with pytest.raises(ValueError):
+        market.set_projection(sofr, pc)
+
+
+def test_market_get_projection_returns_stored_curve_for_projection_only_index():
+    usd = Currency(CurrencyName.USD)
+    term = OvernightRateIndex("TERMSOFR", currency=usd)  # no discount curve: projection-only
+    pc = _pc()
+    market = Market(T)
+    market.set_projection(term, pc)
+    assert market.get_projection(term) is pc

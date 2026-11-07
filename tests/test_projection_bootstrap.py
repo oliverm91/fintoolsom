@@ -36,11 +36,11 @@ T = date(2026, 6, 29)
 USD = Currency(CurrencyName.USD)
 
 
-def _bootstrap_projection(index, swaps, market, riskless) -> None:
+def _bootstrap_projection(index, swaps, market) -> None:
     """Drive the independent-basis projection solve through a _CurveBuilder (the
     bootstrap lives on the orchestrator; empty quotes since we invoke it directly)."""
     _CurveBuilder(
-        [], riskless, market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
+        [], market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
     )._bootstrap_projection_curve(index, swaps)
 
 
@@ -58,8 +58,8 @@ def _market_with_sofr_discount() -> tuple[Market, OvernightRateIndex, TermRateIn
         term3m,
         {T: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 0.052)},
     )
-    market = Market(T, indexes_history={"TERM3M": term_hist})
-    market.curves[(sofr, USD)] = sofr_curve
+    market = Market(T, indexes_history={"TERM3M": term_hist}, riskless_index=sofr)
+    market.curves[sofr] = sofr_curve
     return market, sofr, term3m, adj
 
 
@@ -91,7 +91,7 @@ def test_independent_projection_reprices_all_swaps():
         _term_swap(term3m, sofr, adj, 2, TermUnit.Y, 0.052),
     ]
 
-    _bootstrap_projection(term3m, swaps, market, sofr)
+    _bootstrap_projection(term3m, swaps, market)
 
     proj = market.get_projection(term3m)
     assert isinstance(proj, ProjectionCurve)
@@ -99,7 +99,7 @@ def test_independent_projection_reprices_all_swaps():
     assert len(proj) == 1 + len(swaps)
 
     for s in swaps:
-        mtm = Calculator.get_swap_mtm(s, market, sofr, USD)
+        mtm = Calculator.get_swap_mtm(s, market, USD)
         assert mtm == pytest.approx(0.0, abs=1e-6)
 
 
@@ -109,7 +109,7 @@ def test_independent_projection_forwards_are_positive_and_near_par():
         _term_swap(term3m, sofr, adj, 1, TermUnit.Y, 0.050),
         _term_swap(term3m, sofr, adj, 2, TermUnit.Y, 0.050),
     ]
-    _bootstrap_projection(term3m, swaps, market, sofr)
+    _bootstrap_projection(term3m, swaps, market)
     proj = market.get_projection(term3m)
     assert isinstance(proj, ProjectionCurve)
     # Solved forwards should be sane (positive, in a plausible rate range).
@@ -125,4 +125,4 @@ def test_non_square_projection_raises():
         _term_swap(term3m, sofr, adj, 1, TermUnit.Y, 0.055),
     ]
     with pytest.raises(InsufficientQuotesError):
-        _bootstrap_projection(term3m, swaps, market, sofr)
+        _bootstrap_projection(term3m, swaps, market)

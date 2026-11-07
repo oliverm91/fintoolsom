@@ -13,21 +13,19 @@ from fintoolsom.rates.Rates import RateConvention  # type: ignore[import-untyped
 from ..market.index import Index
 from ..market.currencies import Currency, CurrencyName
 from ..derivatives.calculator import Calculator
-from ..market.market import Market
+from ..market.market import CurveKey, Market, funding_key
 from ..market.index_history import OvernightHistory
 from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, ForwardPointsQuote
 from ..derivatives.swaps import Swap, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
 from ..rates import (
+    Curve,
     ZeroCouponCurve,
     InterpolationMethod,
     ProjectionCurve,
-    DiscountProjectionView,
     ProjectionInterpolationMethod,
 )
 
-
-CurveKey = tuple[Index, Currency]
 
 # Curve-solve residuals are valued in one reporting currency; a par/MTM==0 residual
 # is zero in any currency, so the choice is arbitrary — CLP by convention.
@@ -59,33 +57,65 @@ def _set_or_pop(store: dict, key, previous) -> None:
 
 # ── Curve dependency analysis ───────────────────────────────────────────────
 
-def _curve_keys(quote: InstrumentQuote, riskless_index: Index, *, cancel_collateral: bool) -> frozenset[CurveKey]:
-    """The curve keys a quote relates to.
+def _discount_indexes(quote: InstrumentQuote, riskless_index: Index, extra: frozenset[Index]) -> set[Index]:
+    """Indexes whose own curve is a discount curve for `quote`: the riskless index, the
+    quote's collateral, and `extra` (collateral of other quotes, curves already in market)."""
+    collateral: Index | None = getattr(quote, "collateral_index", None)
+    return {riskless_index, *extra, *([collateral] if collateral is not None else [])}
+
+
+def _projection_indexes(
+    quote: InstrumentQuote, riskless_index: Index, discount_indexes: frozenset[Index] = frozenset()
+) -> set[Index]:
+    """Floating-leg indexes of `quote` that are projection-only (not discount curves):
+    they get an independent ProjectionCurve, never an entry in ``market.curves``."""
+    instrument = quote.get_instrument()
+    if not isinstance(instrument, Swap):
+        return set()
+    discounting = _discount_indexes(quote, riskless_index, discount_indexes)
+    return {
+        leg.index
+        for leg in (instrument.receive_leg, instrument.pay_leg)
+        if isinstance(leg, FloatingLeg) and leg.index not in discounting
+    }
+
+
+def _curve_keys(
+    quote: InstrumentQuote,
+    riskless_index: Index,
+    *,
+    cancel_collateral: bool,
+    discount_indexes: frozenset[Index] = frozenset(),
+) -> frozenset[CurveKey]:
+    """The discount-curve keys a quote relates to. A floating leg's index is a key
+    only when its curve is a discount curve (see ``_discount_indexes``); a
+    projection-only index is solved separately (``_bootstrap_projection_curve``).
 
     With ``cancel_collateral=True`` (``_curves_needed``) this is the set the quote
     actually *pins*: under collateral C the effective discount factor is
-    ``base(R, leg.ccy) * proj(C, C.ccy) / base(R, C.ccy)`` (see ``Calculator._leg_pv``),
-    and when ``leg.currency == C.currency`` the two ``base(R, …)`` factors are the same
-    curve and cancel, so the riskless curve of that currency is not pinned.
+    ``funding(leg.ccy) * curve(C) / funding(C.ccy)`` (see ``Market.get_discount_dfs``),
+    and when ``leg.currency == C.currency`` the two ``funding(…)`` factors are the same
+    curve and cancel, so that currency's funding curve is not pinned.
 
     With ``cancel_collateral=False`` (``_curves_touched``) no cancellation is applied:
     it is the superset that must merely *exist* to value the quote, used to order the
     build so a group is solved only once every curve it reads already exists."""
     instrument = quote.get_instrument()
     collateral: Index | None = getattr(quote, "collateral_index", None)
+    discounting = _discount_indexes(quote, riskless_index, discount_indexes)
     keys: set[CurveKey] = set()
 
     if isinstance(instrument, Swap):
         for leg in (instrument.receive_leg, instrument.pay_leg):
             if collateral is None:
-                keys.add((riskless_index, leg.currency))
+                keys.add(funding_key(riskless_index, leg.currency))
             else:
                 if not (cancel_collateral and leg.currency == collateral.currency):
-                    keys.add((riskless_index, leg.currency))
-                    keys.add((riskless_index, collateral.currency))
-                keys.add((collateral, collateral.currency))
-            if isinstance(leg, FloatingLeg):
-                keys.add((leg.index, leg.index.currency))
+                    keys.add(funding_key(riskless_index, leg.currency))
+                    keys.add(funding_key(riskless_index, collateral.currency))
+                keys.add(collateral)
+            if isinstance(leg, FloatingLeg) and leg.index in discounting:
+                keys.add(leg.index)
     elif isinstance(instrument, NDF) and instrument.is_uf_indexed:
         # UF curve structure (CLP riskless + UF index) needs a UF Index quotes don't
         # carry; not covered by this pass (mirrors historical behavior).
@@ -93,21 +123,25 @@ def _curve_keys(quote: InstrumentQuote, riskless_index: Index, *, cancel_collate
     else:  # Forward / FX NDF
         pair = instrument.currency_pair
         for currency in (pair.base_currency, pair.quote_currency):
-            keys.add((riskless_index, currency))
+            keys.add(funding_key(riskless_index, currency))
 
     return frozenset(keys)
 
 
-def _curves_needed(quote: InstrumentQuote, riskless_index: Index) -> frozenset[CurveKey]:
+def _curves_needed(
+    quote: InstrumentQuote, riskless_index: Index, discount_indexes: frozenset[Index] = frozenset()
+) -> frozenset[CurveKey]:
     """Curves a quote pins (collateral cancellation applied). Groups instruments and
     chooses which pillars a group solves."""
-    return _curve_keys(quote, riskless_index, cancel_collateral=True)
+    return _curve_keys(quote, riskless_index, cancel_collateral=True, discount_indexes=discount_indexes)
 
 
-def _curves_touched(quote: InstrumentQuote, riskless_index: Index) -> frozenset[CurveKey]:
+def _curves_touched(
+    quote: InstrumentQuote, riskless_index: Index, discount_indexes: frozenset[Index] = frozenset()
+) -> frozenset[CurveKey]:
     """Every curve that must EXIST to value a quote (no cancellation) — a superset of
     ``_curves_needed`` used only to order the build."""
-    return _curve_keys(quote, riskless_index, cancel_collateral=False)
+    return _curve_keys(quote, riskless_index, cancel_collateral=False, discount_indexes=discount_indexes)
 
 
 def _get_maturity(curve_key: CurveKey, instrument, riskless_index: Index) -> date | None:
@@ -116,16 +150,16 @@ def _get_maturity(curve_key: CurveKey, instrument, riskless_index: Index) -> dat
     candidates: set[date] = set()
     if isinstance(instrument, Swap):
         for leg in (instrument.receive_leg, instrument.pay_leg):
-            if leg.currency == curve_key[1] and curve_key[0] == riskless_index:
+            if funding_key(riskless_index, leg.currency) == curve_key:
                 candidates.add(max(leg.payment_dates))
-            if isinstance(leg, FloatingLeg) and (leg.index, leg.index.currency) == curve_key:
+            if isinstance(leg, FloatingLeg) and leg.index == curve_key:
                 candidates.add(max(leg.end_dates))
     elif isinstance(instrument, Forward):
         if instrument.currency_pair is None:
             return None  # UF-indexed NDF: excluded from this pass (see _curve_keys).
         pair = instrument.currency_pair
         for currency in (pair.base_currency, pair.quote_currency):
-            if currency == curve_key[1] and curve_key[0] == riskless_index:
+            if funding_key(riskless_index, currency) == curve_key:
                 candidates.add(instrument.fixing_date if isinstance(instrument, NDF) else instrument.payment_date)
     else:
         raise TypeError(
@@ -177,7 +211,7 @@ class _GroupSolve:
     free_dates: dict[CurveKey, list[date]]
     curve_slice: dict[CurveKey, tuple[int, int]]
     y0: list[float]
-    _snapshot: dict[CurveKey, ZeroCouponCurve | None] = field(init=False, default=None)
+    _snapshot: dict[CurveKey, Curve | None] = field(init=False, default=None)
 
     @classmethod
     def from_free_pillars(
@@ -222,30 +256,46 @@ class _GroupSolve:
 
 class _CurveBuilder:
     """Bootstraps discount curves from `quotes` into ``market.curves`` via a fixpoint
-    scheduler, then registers each floating index's projection curve. Mutates `market`
-    in place. Instantiated per build; holds only that build's state."""
+    scheduler, then bootstraps a ProjectionCurve for each projection-only index. Every
+    index ends up with exactly one curve: a discount curve (projected through
+    ``Market.get_projection``'s fallback view) or a ProjectionCurve, never both.
+    Mutates `market` in place. Instantiated per build; holds only that build's state."""
 
     def __init__(
         self,
         quotes: list,
-        riskless_index: Index,
         market: Market,
         discount_method: InterpolationMethod,
         projection_method: ProjectionInterpolationMethod,
     ):
+        if market.riskless_index is None:
+            raise ValueError("Market has no riskless_index; curve building needs one.")
         self.quotes = quotes
-        self.riskless_index = riskless_index
+        self.riskless_index = riskless_index = market.riskless_index
         self.market = market
         self.t = market.t
         self.discount_method = discount_method
         self.projection_method = projection_method
 
+        # Indexes whose curve discounts: the riskless index, any quote's collateral, and
+        # any index curve already in the market. Other floating indexes are projection-only.
+        collaterals = {c for q in quotes if (c := getattr(q, "collateral_index", None)) is not None}
+        self.discount_indexes: frozenset[Index] = frozenset(
+            {riskless_index, *collaterals, *(k for k in market.curves if isinstance(k, Index))}
+        )
+        # Quotes on a projection-only index are solved in the projection phase, after
+        # every discount curve exists; all others form the discount-curve groups.
+        self.projection_quotes = {
+            q: _projection_indexes(q, riskless_index, self.discount_indexes) for q in quotes
+        }
+        discount_quotes = [q for q in quotes if not self.projection_quotes[q]]
+
         # pinned  (_curves_needed): the curves each quote determines — groups instruments.
         # touched (_curves_touched): every curve that must exist to value it — orders the build.
-        self.pinned = {q: _curves_needed(q, riskless_index) for q in quotes}
-        self.touched = {q: _curves_touched(q, riskless_index) for q in quotes}
+        self.pinned = {q: _curves_needed(q, riskless_index, self.discount_indexes) for q in discount_quotes}
+        self.touched = {q: _curves_touched(q, riskless_index, self.discount_indexes) for q in discount_quotes}
         self.groups: dict[frozenset[CurveKey], list[InstrumentQuote]] = defaultdict(list)
-        for q in quotes:
+        for q in discount_quotes:
             self.groups[self.pinned[q]].append(q)
 
     def build(self) -> None:
@@ -299,7 +349,7 @@ class _CurveBuilder:
         def residual(y) -> list[float]:
             solve.apply(y)
             return [
-                Calculator.valuate(instr, self.market, self.riskless_index, _REPORT_CURRENCY)
+                Calculator.valuate(instr, self.market, _REPORT_CURRENCY)
                 for instr in residual_instruments
             ]
 
@@ -329,17 +379,18 @@ class _CurveBuilder:
                 fixed_pillars[curve] = [anchor] if anchor is not None else []
                 free_dates[curve] = new_dates
                 free_seed_dfs[curve] = [self._seed_df(guess, m) for m in new_dates]
-            else:
+            elif isinstance(built := self.market.curves[curve], ZeroCouponCurve):
                 # Existing curve: keep solved pillars, only extend past its last one;
                 # maturities inside the range are read off by interpolation (no unknown).
-                built = self.market.curves[curve]
-                existing = list(built.date_dfs)
+                existing = list(zip(built.dates, built.dfs))
                 last = max(d for d, _ in existing)
                 new_dates = sorted(m for m in maturities if m > last)
                 fixed_pillars[curve] = existing
                 if new_dates:
                     free_dates[curve] = new_dates
                     free_seed_dfs[curve] = [built.get_df(m) for m in new_dates]
+            # else: a non-pillar curve (e.g. NSSCurve) is defined at every date and has
+            # no pillars to extend — it is read as fixed, never solved.
         return fixed_pillars, free_dates, free_seed_dfs
 
     def _short_end_anchor(self, curve: CurveKey) -> tuple[tuple[date, float] | None, float]:
@@ -350,8 +401,8 @@ class _CurveBuilder:
         The overnight rate comes from the history polymorphically
         (:meth:`OvernightHistory.spot_overnight_rate`): a rate index gives today's
         fixing, a price index (e.g. ICP levels) the most recent realised one-day rate."""
-        curve_index, curve_currency = curve
-        if curve_currency == curve_index.currency:
+        if isinstance(curve, Index):
+            curve_index = curve
             try:
                 history = self.market.get_index(curve_index.name)
                 if isinstance(history, OvernightHistory):
@@ -382,29 +433,17 @@ class _CurveBuilder:
     # -- projection curves ----------------------------------------------------
 
     def _register_projection_curves(self) -> None:
-        """Give every floating-leg index a projection curve. An index self-discounted in
-        its own currency (the riskless index, or one used as its own collateral) aliases
-        its discount curve — a forward view, one unknown not two (§7). Any other index has
-        a real forwarding/discounting basis and gets an independently bootstrapped curve."""
+        """Bootstrap a ProjectionCurve for each projection-only index (a term index, or
+        an overnight index that discounts nothing here). A discount index needs nothing:
+        ``Market.get_projection`` already views its discount curve as forwards (§7)."""
         swaps_by_index: dict[Index, list[Swap]] = defaultdict(list)
-        collateral_indices: set[Index] = set()
-        for q in self.quotes:
-            collateral = getattr(q, "collateral_index", None)
-            if collateral is not None:
-                collateral_indices.add(collateral)
+        for q, indexes in self.projection_quotes.items():
             instrument = _instrument_of(q, self.market)
-            if isinstance(instrument, Swap):
-                for leg in (instrument.receive_leg, instrument.pay_leg):
-                    if isinstance(leg, FloatingLeg) and instrument not in swaps_by_index[leg.index]:
-                        swaps_by_index[leg.index].append(instrument)
+            for index in indexes:
+                swaps_by_index[index].append(instrument)
 
         for index, swaps in swaps_by_index.items():
-            aliased = index == self.riskless_index or index in collateral_indices
-            discount_key = (index, index.currency)
-            if aliased and discount_key in self.market.curves:
-                self.market.set_projection(index, DiscountProjectionView(self.market.curves[discount_key]))
-            else:
-                self._bootstrap_projection_curve(index, swaps)
+            self._bootstrap_projection_curve(index, swaps)
 
     def _bootstrap_projection_curve(self, index: Index, swaps: list[Swap]) -> None:
         """Bootstrap an INDEPENDENT-basis projection curve (a forwarding curve distinct
@@ -453,7 +492,7 @@ class _CurveBuilder:
         def residual(free_forwards) -> list[float]:
             apply(free_forwards)
             return [
-                Calculator.get_swap_mtm(s, market, self.riskless_index, index.currency)
+                Calculator.get_swap_mtm(s, market, index.currency)
                 for s in ordered_swaps
             ]
 
@@ -468,13 +507,12 @@ class _CurveBuilder:
 
 def build_curves(
     quotes: list,
-    riskless_index: Index,
     market: Market,
     *,
     interpolation_method: InterpolationMethod | None = None,
 ) -> None:
     """Bootstrap ZeroCouponCurve objects from `quotes` and store them in
-    ``market.curves`` (keyed by (Index, Currency)), then register each floating index's
+    ``market.curves`` (keyed by CurveKey: an Index, or a non-riskless Currency), then register each floating index's
     projection curve in ``market.projection_curves``. Mutates `market` in place; returns
     nothing. `market` must already be valued as of the quotes' quote_date and carry
     whatever FX/other data ``Calculator.valuate`` needs at that date (e.g. spot rates).
@@ -499,7 +537,6 @@ def build_curves(
 
     _CurveBuilder(
         quotes,
-        riskless_index,
         market,
         discount_method=interpolation_method or market.discount_interpolation_method,
         projection_method=market.projection_interpolation_method,

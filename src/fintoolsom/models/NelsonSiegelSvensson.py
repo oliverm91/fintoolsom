@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import date
-from dateutil.relativedelta import relativedelta
 from typing import Optional
 from scipy.optimize import minimize
 
@@ -9,30 +8,8 @@ import numpy as np
 from ..fixedIncome.CLBonds import CLBond
 from ..rates.Rates import Rate, RateConvention, ExponentialInterestConvention
 from ..rates.ZeroCouponCurve import ZeroCouponCurve
+from ..rates.NSSCurve import NSSCurve, nss_df, nss_factors, nss_rate
 from ..dates import ActualDayCountConvention
-
-
-def _nss_rate(
-    t: float | np.ndarray,
-    beta0: float,
-    beta1: float,
-    beta2: float,
-    beta3: float,
-    lambda_: float,
-    mu_: float,
-) -> float | np.ndarray:
-    lambda_t = t / lambda_
-    mu_t = mu_ * t
-
-    e_minus_lambda_t = np.exp(-lambda_t)
-    aux_term_lambda = (1 - e_minus_lambda_t) / lambda_t
-    e_minus_mu_t = np.exp(-mu_t)
-    return (
-        beta0
-        + beta1 * aux_term_lambda
-        + beta2 * (aux_term_lambda - e_minus_lambda_t)
-        + beta3 * ((1 - e_minus_mu_t) / mu_t - e_minus_mu_t)
-    )
 
 
 @dataclass
@@ -55,12 +32,10 @@ class NelsonSiegelSvensson:
         )
 
     def get_rate(self, t: float | np.ndarray) -> float | np.ndarray:
-        return NelsonSiegelSvensson._get_rate(
-            t, self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_
-        )
+        return nss_rate(t, *self.get_params())
 
     def get_df(self, t: float | np.ndarray) -> float | np.ndarray:
-        return np.exp(-self.get_rate(t) * t)
+        return nss_df(t, *self.get_params())
 
     def calibrate(
         self,
@@ -103,7 +78,7 @@ class NelsonSiegelSvensson:
         ns_pvs = np.zeros(len(bonds_ts))
 
         def get_valuation_error(params):
-            ns_dfs = np.exp(-NelsonSiegelSvensson._get_rate(flat_ts, *params) * flat_ts)
+            ns_dfs = nss_df(flat_ts, *params)
             flows_vps = ns_dfs * flat_flows
             for ix, start_length in enumerate(starts_lengths):
                 start, length = start_length
@@ -211,43 +186,10 @@ class NelsonSiegelSvensson:
         betas, *_ = np.linalg.lstsq(design_matrix, target_rates, rcond=None)
         self.b0, self.b1, self.b2, self.b3 = betas
 
-    @staticmethod
-    def _get_design_matrix(t: np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
-        lambda_t = t / lambda_
-        mu_t = mu_ * t
-        e_minus_lambda_t = np.exp(-lambda_t)
-        aux_term_lambda = (1 - e_minus_lambda_t) / lambda_t
-        e_minus_mu_t = np.exp(-mu_t)
-        x1 = aux_term_lambda
-        x2 = aux_term_lambda - e_minus_lambda_t
-        x3 = (1 - e_minus_mu_t) / mu_t - e_minus_mu_t
-        return np.column_stack((np.ones_like(t), x1, x2, x3))
-
-    @staticmethod
-    def _get_rate(
-        t: float | np.ndarray,
-        b0: float,
-        b1: float,
-        b2: float,
-        b3: float,
-        lambda_: float,
-        mu_: float,
-    ) -> float | np.ndarray:
-        return _nss_rate(t, b0, b1, b2, b3, lambda_, mu_)
-
-    @staticmethod
-    def _get_df(
-        t: float | np.ndarray,
-        b0: float,
-        b1: float,
-        b2: float,
-        b3: float,
-        lambda_: float,
-        mu_: float,
-    ) -> float | np.ndarray:
-        return np.exp(
-            -NelsonSiegelSvensson._get_rate(t, b0, b1, b2, b3, lambda_, mu_) * t
-        )
+    # The formulas live in rates.NSSCurve (shared with NSSCurve); these are aliases.
+    _get_design_matrix = staticmethod(nss_factors)
+    _get_rate = staticmethod(nss_rate)
+    _get_df = staticmethod(nss_df)
 
     def get_curve(
         self,
@@ -255,7 +197,9 @@ class NelsonSiegelSvensson:
         bonds_irr_list: list[tuple[CLBond, Rate]],
         initial_guess: list[float] | None = None,
         method: str = "powell",
-    ) -> ZeroCouponCurve:
+    ) -> NSSCurve:
+        """Calibrate to `bonds_irr_list`, then return the fitted curve, evaluated in
+        closed form at any date (no sampling or interpolation)."""
         bonds_irr_list = [
             (bond, irr)
             for bond, irr in bonds_irr_list
@@ -264,15 +208,9 @@ class NelsonSiegelSvensson:
         self.calibrate(
             calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method
         )
-        dates = [
-            calibration_date + relativedelta(months=i) + relativedelta(days=1)
-            for i in range(0, 12 * 20, 1)
-        ]
-        dfs = self.get_df(
-            np.array([(mat - calibration_date).days / 365 for mat in dates])
+        return NSSCurve(
+            calibration_date, self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_
         )
-        curve = ZeroCouponCurve(calibration_date, date_dfs=list(zip(dates, dfs)))
-        return curve
 
     def get_params(self) -> list[float]:
         return [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]

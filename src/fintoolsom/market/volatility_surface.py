@@ -10,7 +10,7 @@ import pandas as pd
 from scipy.interpolate import CubicSpline, interp1d
 from scipy.optimize import minimize, LinearConstraint
 
-from ..rates import ZeroCouponCurve
+from ..rates import Curve
 
 
 class InterpolationMethod(Enum):
@@ -23,8 +23,8 @@ class InterpolationMethod(Enum):
 class InterpolationModel(ABC):
     vol_surface_df: pd.DataFrame = field(repr=False)
     spot: float
-    domestic_curve: ZeroCouponCurve
-    foreign_curve: ZeroCouponCurve
+    domestic_curve: Curve
+    foreign_curve: Curve
 
     log_moneyness_df: pd.DataFrame = field(repr=False, init=False)
     days: np.ndarray = field(init=False)
@@ -350,8 +350,8 @@ class VolatilitySurface:
         self,
         vol_surface_df: pd.DataFrame,
         spot: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
+        domestic_curve: Curve,
+        foreign_curve: Curve,
         interpolation_method: InterpolationMethod = InterpolationMethod.DoubleCubicSpline,
         **kwargs,
     ):

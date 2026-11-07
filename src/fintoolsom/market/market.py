@@ -11,7 +11,7 @@ from .index import Index
 from .index_history import IndexHistory
 from ..rates import (
     Rate,
-    ZeroCouponCurve,
+    Curve,
     ProjectionCurve,
     DiscountProjectionView,
     InterpolationMethod,
@@ -24,6 +24,19 @@ if TYPE_CHECKING:
     # Swap (derivatives.swaps -> market.currencies), so a runtime import here
     # would cycle back into this module before Market is defined.
     from .volatility_surface import VolatilitySurface
+
+
+# A discount curve is identified by an Index (that index's own curve) or by a
+# Currency (that currency's uncollateralised, cross-currency-implied curve).
+CurveKey = Index | Currency
+
+
+def funding_key(riskless_index: Index, currency: Currency) -> CurveKey:
+    """Key of `currency`'s uncollateralised discount curve: the riskless index itself
+    for its own currency, otherwise the currency (a cross-currency-implied curve)."""
+    if currency == riskless_index.currency:
+        return riskless_index
+    return currency
 
 
 @dataclass(slots=True)
@@ -41,16 +54,21 @@ class Market:
 
     interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
 
-    # Discount curves, keyed by (index, currency). The same object doubles as the
-    # discount curve when `index` is used as collateral in its own currency.
-    curves: dict[tuple[Index, Currency], ZeroCouponCurve] = field(default_factory=dict)
-    # Projection (forward) curves, keyed by Index only (§ projection_curves design).
-    # An independent-basis index stores a real ProjectionCurve here; an aliased
-    # (OIS self-discounted) index need not — get_projection falls back to a forward
-    # view over its (index, index.currency) discount curve. See get_projection.
-    projection_curves: dict[Index, ProjectionCurve | DiscountProjectionView] = field(
-        default_factory=dict
-    )
+    # The market's funding index (Chile: ICP). Uncollateralised flows in its own
+    # currency discount on its curve; it says nothing about any other currency.
+    riskless_index: Index | None = None
+
+    # Discount-factor curves, each stored once under a CurveKey:
+    #   Index    → that index's own curve (e.g. ICP, SOFR, Cámara). Used to discount
+    #              (as funding or collateral) and, via get_projection, to project it.
+    #   Currency → the uncollateralised curve of a currency other than the riskless
+    #              index's, implied from cross-currency products (USD/UF/EUR in Chile).
+    # Collateralised curves are not stored: get_discount_dfs derives them.
+    curves: dict[CurveKey, Curve] = field(default_factory=dict)
+    # Independent-basis forward curves (e.g. a term index such as TAB 3M), keyed by
+    # Index. An index with a discount curve in `curves` needs no entry here:
+    # get_projection falls back to a forward view over that curve.
+    projection_curves: dict[Index, ProjectionCurve] = field(default_factory=dict)
     volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(default_factory=dict)
 
     # Default interpolation per curve role, used when build_curves / the accessors are
@@ -64,6 +82,10 @@ class Market:
     )
 
     def __post_init__(self):
+        if self.riskless_index is not None and self.riskless_index.currency is None:
+            raise ValueError(
+                f"riskless_index '{self.riskless_index.name}' needs a currency: it funds that currency."
+            )
         fxs_to_add = {}
         for cp, fx_data in self.fx_history.items():
             # Check fx_history FX_RateData is correctly mapped to CurrencyPairs.
@@ -98,20 +120,44 @@ class Market:
                     cp_date
                 ] = inverted_cp
 
-    def get_curve(self, index: Index, currency: Currency) -> ZeroCouponCurve:
-        return self.curves[(index, currency)]
+    def get_curve(self, key: CurveKey) -> Curve:
+        try:
+            return self.curves[key]
+        except KeyError:
+            kind = "index" if isinstance(key, Index) else "currency"
+            raise KeyError(f"No discount curve for {kind} '{key}' in market.") from None
 
-    def get_discount_df(self, riskless_index: Index, currency: Currency, t: date) -> float:
-        return self.curves[(riskless_index, currency)].get_df(t)
+    def funding_key(self, currency: Currency) -> CurveKey:
+        """Key of `currency`'s uncollateralised curve. See :func:`funding_key`."""
+        if self.riskless_index is None:
+            raise ValueError("Market has no riskless_index; cannot resolve funding curves.")
+        return funding_key(self.riskless_index, currency)
 
-    def get_discount_dfs(self, riskless_index: Index, currency: Currency, dates: list[date]) -> np.ndarray:
-        return self.curves[(riskless_index, currency)].get_dfs(dates)
+    def get_funding_curve(self, currency: Currency) -> Curve:
+        """Uncollateralised discount curve of `currency`."""
+        return self.get_curve(self.funding_key(currency))
 
-    def get_projection_df(self, index: Index, t: date) -> float:
-        return self.curves[(index, index.currency)].get_df(t)
+    def get_discount_dfs(
+        self, currency: Currency, dates: list[date], collateral: Index | None = None
+    ) -> np.ndarray:
+        """DFs for `currency` flows paid on `dates`, under `collateral` (None = uncollateralised):
 
-    def get_projection_dfs(self, index: Index, dates: list[date]) -> np.ndarray:
-        return self.curves[(index, index.currency)].get_dfs(dates)
+            df = funding(ccy) · curve(collateral) / funding(collateral.ccy)
+
+        When the collateral is the funding index of its own currency the ratio is 1, so
+        e.g. CLP flows under ICP collateral in an ICP market discount on plain ICP."""
+        dfs = self.get_funding_curve(currency).get_dfs(dates)
+        if collateral is None:
+            return dfs
+        collateral_ccy = collateral.currency  # type: ignore[attr-defined]
+        return (
+            dfs
+            * self.get_curve(collateral).get_dfs(dates)
+            / self.get_funding_curve(collateral_ccy).get_dfs(dates)
+        )
+
+    def get_discount_df(self, currency: Currency, t: date, collateral: Index | None = None) -> float:
+        return float(self.get_discount_dfs(currency, [t], collateral)[0])
 
     def get_projection(
         self, index: Index, *, interpolation_method=None
@@ -119,20 +165,29 @@ class Market:
         """Forward-projection curve for `index`, exposing the ``get_accrual`` seam.
 
         Returns the stored :class:`ProjectionCurve` when `index` has an independent
-        forwarding basis. Otherwise (an OIS index self-discounted in its own
-        currency, or any index not yet given a projection curve) it falls back to a
-        :class:`DiscountProjectionView` over the ``(index, index.currency)`` discount
-        curve — the same DFs, viewed as forwards — which is exactly today's behaviour.
+        forwarding basis. Otherwise it falls back to a :class:`DiscountProjectionView`
+        over the index's own discount curve (``curves[index]``) — the same DFs, viewed
+        as forwards — so an overnight index's curve is never stored twice.
 
         `interpolation_method` is accepted for forward-compatibility (a resampled
         what-if view); the stored curve is returned as-built for now."""
         if index in self.projection_curves:
             return self.projection_curves[index]
-        return DiscountProjectionView(self.curves[(index, index.currency)])
+        if index not in self.curves:
+            raise KeyError(f"No projection or discount curve for index '{index.name}' in market.")
+        return DiscountProjectionView(self.curves[index])
 
-    def set_projection(
-        self, index: Index, curve: ProjectionCurve | DiscountProjectionView
-    ) -> None:
+    def set_projection(self, index: Index, curve: ProjectionCurve) -> None:
+        """Store an independent-basis forward curve for a projection-only `index`.
+
+        An index holds exactly one curve: if it already has a discount curve in
+        ``curves``, that curve is its projection (via get_projection) and a second
+        one would let the two drift apart."""
+        if index in self.curves:
+            raise ValueError(
+                f"Index '{index.name}' already has a discount curve; it projects off that "
+                "curve and cannot also hold an independent projection curve."
+            )
         self.projection_curves[index] = curve
 
     def add_index(self, history: IndexHistory):
@@ -199,17 +254,17 @@ class Market:
         t = start_date
         acrrued_interest = 0
         while t < end_date:
-            reset_date = calendar.add_business_day(t, -fixing_lag)
+            reset_date = calendar.add_business_days(t, -fixing_lag)
             rate = self.get_rate(
                 reset_date,
                 rate_name,
                 use_closest_past_rate=use_closest_past_rate_for_fixing,
             )
-            next_business_day = calendar.add_business_day(t, 1)
+            next_business_day = calendar.add_business_days(t, 1)
             acrrued_interest += rate.get_accrued_interest(
                 notional + acrrued_interest, t, min(next_business_day, end_date)
             )
-            t = calendar.add_business_day(t, 1)
+            t = calendar.add_business_days(t, 1)
 
         return acrrued_interest
 

@@ -5,7 +5,7 @@ from typing import Self
 
 import numpy as np
 
-from ..rates import ZeroCouponCurve
+from ..rates import Curve
 from .localities import Locality
 
 
@@ -150,8 +150,8 @@ class FX_Rate:
     def get_accrued_value_date(
         self,
         t: date,
-        base_currency_curve: ZeroCouponCurve,
-        quote_currency_curve: ZeroCouponCurve,
+        base_currency_curve: Curve,
+        quote_currency_curve: Curve,
     ) -> float:
         base_df = base_currency_curve.get_df(t)
         quote_df = quote_currency_curve.get_df(t)
@@ -160,8 +160,8 @@ class FX_Rate:
     def get_accrued_values_dates(
         self,
         ts: list[date],
-        base_currency_curve: ZeroCouponCurve,
-        quote_currency_curve: ZeroCouponCurve,
+        base_currency_curve: Curve,
+        quote_currency_curve: Curve,
     ) -> np.ndarray:
         base_df = base_currency_curve.get_dfs(ts)
         quote_df = quote_currency_curve.get_dfs(ts)
