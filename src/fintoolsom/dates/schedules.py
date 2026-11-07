@@ -3,10 +3,10 @@ from dataclasses import dataclass, field
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
-from .calendars import Calendar
+from .calendars import get_calendar
 from .adjustments import AdjustmentDateConventionBase, ModifiedFollowingConvention
 
-_def_cal = Calendar()
+_def_cal = get_calendar()
 _def_adj_conv = ModifiedFollowingConvention(_def_cal)
 
 

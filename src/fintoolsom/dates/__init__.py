@@ -6,7 +6,7 @@ from .date_counts import (
     Days30EISDADayCountConvention,
     Days30UDayCountConvention,
 )
-from .calendars import Calendar
+from .calendars import Calendar, get_calendar
 from .holidays import (
     FridayEasterRule,
     MonthDayRule,

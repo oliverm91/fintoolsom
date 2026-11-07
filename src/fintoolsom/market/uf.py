@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from ..dates import Calendar, PrecedingConvention
+from ..dates import Calendar, PrecedingConvention, get_calendar
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .localities import Locality
 
@@ -141,7 +141,7 @@ def last_published_date(today: date, calendar: Calendar | None = None) -> date:
     date
     """
     if calendar is None:
-        calendar = Calendar(country=Locality.CL.value)
+        calendar = get_calendar(Locality.CL.value)
     publication_date = PrecedingConvention(calendar).adjust(date(today.year, today.month, 8))
     if today < publication_date:
         year, month = today.year, today.month

@@ -11,7 +11,7 @@ from .conventions import FixedLegSpec, FloatingLegSpec
 from .currencies import Currency, CurrencyPair, FX_Rate
 from .localities import Locality
 from .index import InterestIndex
-from ..dates import AdjustmentDateConventionBase, Calendar, ModifiedFollowingConvention
+from ..dates import AdjustmentDateConventionBase, ModifiedFollowingConvention, get_calendar
 from ..dates.term import Term
 
 if TYPE_CHECKING:
@@ -111,7 +111,7 @@ class _ForwardQuote(InstrumentQuote):
             return self.payment_date
         fixing = self._effective_fixing_date()
         if fixing is not None:
-            cal = self.term.adj_convention.calendar if self.term else Calendar()
+            cal = self.term.adj_convention.calendar if self.term else get_calendar()
             return cal.add_business_days(fixing, self.payment_lag)
         raise ValueError("Cannot derive payment_date: provide payment_date, or term+quote_date.")
 
@@ -181,7 +181,7 @@ class _SwapQuote(InstrumentQuote):
     term: Term
     quote_date: date
     adj_convention: AdjustmentDateConventionBase = field(
-        default_factory=lambda: ModifiedFollowingConvention(Calendar())
+        default_factory=ModifiedFollowingConvention
     )
     locality: Locality | None = field(default=None)
     _: KW_ONLY

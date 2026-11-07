@@ -30,7 +30,7 @@ from itertools import combinations, product
 
 import pytest
 
-from fintoolsom.dates import ActualDayCountConvention, Calendar
+from fintoolsom.dates import ActualDayCountConvention
 from fintoolsom.dates.adjustments import ModifiedFollowingConvention
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.swaps import builders
@@ -101,7 +101,7 @@ def currency_of(ccy: Ccy) -> Currency:
 
 
 def adj_convention(ccy: Ccy) -> ModifiedFollowingConvention:
-    return ModifiedFollowingConvention(Calendar(country=currency_of(ccy).locality.value))
+    return ModifiedFollowingConvention(currency_of(ccy).locality.value)
 
 
 NOTIONALS: dict[Ccy, float] = {Ccy.CLP: 950_000_000.0, Ccy.USD: 1_000_000.0, Ccy.UF: 25_000.0}

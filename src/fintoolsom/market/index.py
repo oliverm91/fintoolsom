@@ -6,7 +6,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from .currencies import Currency
-from ..dates import Calendar
+from ..dates import Calendar, get_calendar
 
 if TYPE_CHECKING:
     from ..dates.term import Term
@@ -41,11 +41,7 @@ class Index(ABC):
     calendar: Calendar = field(init=False, default=None)
 
     def __post_init__(self):
-        self.calendar = (
-            Calendar(country=self.currency.locality.value)
-            if self.currency is not None
-            else Calendar()
-        )
+        self.calendar = get_calendar(self.currency.locality.value if self.currency is not None else None)
 
     def __hash__(self) -> int:
         return hash(self.name)

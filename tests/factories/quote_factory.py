@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from fintoolsom.curve_builder import build_curves
-from fintoolsom.dates import ActualDayCountConvention, Calendar, ModifiedFollowingConvention, TF_Actual360
+from fintoolsom.dates import ActualDayCountConvention, ModifiedFollowingConvention, TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.market import (
     CrossCurrencyFloatFloatQuote,
@@ -89,7 +89,7 @@ def load_quotes(quote_date: date = QUOTE_DATE, path: Path = QUOTES_FILE) -> list
     for group in groups:
         if group["term_adj_convention"] != "ModifiedFollowingConvention":
             raise ValueError(f"Unsupported adjustment {group['term_adj_convention']!r}.")
-        adj = ModifiedFollowingConvention(Calendar(group["term_calendar"]))
+        adj = ModifiedFollowingConvention(group["term_calendar"])
         tf_key = group.get("day_count_convention")
         common = dict(
             quote_date=quote_date,

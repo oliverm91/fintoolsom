@@ -58,3 +58,22 @@ class Calendar:
 
     def __add__(self, other: Self) -> Self:
         return self.combine(other)
+
+
+# One shared calendar per country (None: weekends only). Building a country calendar
+# and filling its holiday years is costly, so every consumer that names a country
+# gets the same instance; a holiday added to it is seen by all of them.
+_CALENDARS: dict[str | None, Calendar] = {}
+
+
+def get_calendar(country: str | None = None) -> Calendar:
+    """The shared calendar of `country` (ISO code), built on first use."""
+    calendar = _CALENDARS.get(country)
+    if calendar is None:
+        calendar = _CALENDARS[country] = Calendar(country=country)
+    return calendar
+
+
+def resolve_calendar(calendar: "Calendar | str | None") -> Calendar:
+    """`calendar` itself, or the shared calendar of the country code it names."""
+    return calendar if isinstance(calendar, Calendar) else get_calendar(calendar)

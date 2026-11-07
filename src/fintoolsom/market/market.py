@@ -17,7 +17,7 @@ from ..rates import (
     InterpolationMethod,
     ProjectionInterpolationMethod,
 )
-from ..dates import Calendar
+from ..dates import Calendar, get_calendar
 
 if TYPE_CHECKING:
     # Deferred: volatility_surface imports derivatives.calculator, which imports
@@ -319,7 +319,7 @@ class Market:
         use_closest_past_rate_for_fixing: bool = False,
     ) -> float:
         if calendar is None:
-            calendar = Calendar()
+            calendar = get_calendar()
         if fixing_lag < 0:
             raise ValueError(
                 f"fixing_lag must be greater than or equal to 0. Got {fixing_lag}."

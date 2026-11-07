@@ -1,12 +1,13 @@
 from abc import ABC, abstractmethod
 from datetime import date
 
-from .calendars import Calendar
+from .calendars import Calendar, resolve_calendar
 
 
 class AdjustmentDateConventionBase(ABC):
-    def __init__(self, calendar: Calendar):
-        self.calendar = calendar
+    def __init__(self, calendar: Calendar | str | None = None):
+        # A country code (or None, weekends only) resolves to the shared calendar.
+        self.calendar = resolve_calendar(calendar)
 
     @abstractmethod
     def adjust(self, date_to_adjust: date) -> date:
@@ -22,10 +23,10 @@ class FollowingConvention(AdjustmentDateConventionBase):
 
 
 class ModifiedFollowingConvention(AdjustmentDateConventionBase):
-    def __init__(self, calendar: Calendar):
+    def __init__(self, calendar: Calendar | str | None = None):
         super().__init__(calendar)
-        self._fc = FollowingConvention(calendar)
-        self._pc = PrecedingConvention(calendar)
+        self._fc = FollowingConvention(self.calendar)
+        self._pc = PrecedingConvention(self.calendar)
 
     def adjust(self, date_to_adjust: date) -> date:
         new_date = self._fc.adjust(date_to_adjust)
@@ -44,10 +45,10 @@ class PrecedingConvention(AdjustmentDateConventionBase):
 
 
 class ModifiedPrecedingConvention(AdjustmentDateConventionBase):
-    def __init__(self, calendar: Calendar):
+    def __init__(self, calendar: Calendar | str | None = None):
         super().__init__(calendar)
-        self._fc = FollowingConvention(calendar)
-        self._pc = PrecedingConvention(calendar)
+        self._fc = FollowingConvention(self.calendar)
+        self._pc = PrecedingConvention(self.calendar)
 
     def adjust(self, date_to_adjust: date) -> date:
         new_date = self._pc.adjust(date_to_adjust)

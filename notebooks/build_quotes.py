@@ -5,7 +5,7 @@ from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
-from fintoolsom.dates import Calendar, ModifiedFollowingConvention, TF_Actual360
+from fintoolsom.dates import ModifiedFollowingConvention, TF_Actual360
 from fintoolsom.dates.date_counts import ActualDayCountConvention
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.dates.time_fractions import TimeFractionBase
@@ -58,9 +58,8 @@ _INTEREST_CONVENTION = {
 # ── Private helpers ──────────────────────────────────────────────────────────
 
 def _build_adj_conv(conv_name: str, cal_name: str):
-    cal = Calendar(cal_name)
     if conv_name == "ModifiedFollowingConvention":
-        return ModifiedFollowingConvention(cal)
+        return ModifiedFollowingConvention(cal_name)
     raise ValueError(f"Unknown adj_convention: {conv_name!r}")
 
 
