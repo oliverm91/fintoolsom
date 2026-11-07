@@ -23,4 +23,5 @@ from .builders import (
     term_rate_leg,
     overnight_leg,
     xccy_floating_leg,
+    floating_leg,
 )

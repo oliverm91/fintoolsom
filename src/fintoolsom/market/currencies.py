@@ -32,6 +32,7 @@ class CurrencyName(Enum):
     SEK = "SEK"
     NOK = "NOK"
     PEN = "PEN"
+    CLF = "CLF"  # Unidad de Fomento (UF)
 
 
 _CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
@@ -57,17 +58,47 @@ _CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
     CurrencyName.SEK: Locality.SE,
     CurrencyName.NOK: Locality.NO,
     CurrencyName.PEN: Locality.PE,
+    CurrencyName.CLF: Locality.CL,
 }
 
 
 class Currency:
-    def __init__(self, name: CurrencyName):
+    """A currency, identified by its ISO name.
+
+    Parameters
+    ----------
+    name : CurrencyName
+        ISO name.
+    settles_in : Currency, optional
+        For a unit of account that cannot be delivered (the UF, ``CLF``), the
+        currency its flows are paid in, converted at the rate of their fixing
+        date. None for a deliverable currency.
+
+    Attributes
+    ----------
+    locality : Locality
+        Locality whose calendar the currency uses.
+    """
+
+    def __init__(self, name: CurrencyName, settles_in: "Currency | None" = None):
         self.name = name
         self.locality: Locality = _CURRENCY_LOCALITY_MAP[name]
+        self.settles_in = settles_in
 
     @property
     def value(self) -> str:
+        """ISO code."""
         return self.name.value
+
+    @property
+    def is_deliverable(self) -> bool:
+        """False for a unit of account settled in another currency (the UF)."""
+        return self.settles_in is None
+
+    @property
+    def settlement_currency(self) -> "Currency":
+        """Currency flows in this currency are paid in (itself when deliverable)."""
+        return self if self.settles_in is None else self.settles_in
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -104,6 +135,8 @@ Currency.BND = Currency(CurrencyName.BND)
 Currency.SEK = Currency(CurrencyName.SEK)
 Currency.NOK = Currency(CurrencyName.NOK)
 Currency.PEN = Currency(CurrencyName.PEN)
+# The UF is a CLP unit of account: UF flows are paid in CLP at the UF of their fixing.
+Currency.CLF = Currency(CurrencyName.CLF, settles_in=Currency.CLP)
 
 
 @dataclass(slots=True)

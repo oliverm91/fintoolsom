@@ -20,8 +20,21 @@ class PaymentFrequency(Enum):
 
 @dataclass
 class LegSpec:
-    """Structural specification for one swap leg: how it accrues and when it pays.
-    Carries enough information for get_instrument() to generate a full leg schedule."""
+    """Structural specification of one swap leg: how it accrues and when it pays.
+
+    Carries what a quote's ``get_instrument`` needs to generate the leg schedule.
+
+    Parameters
+    ----------
+    currency : Currency
+        Currency of the flows.
+    payment_frequency : PaymentFrequency
+        Coupon frequency.
+    adj_convention : AdjustmentDateConventionBase
+        Business-day adjustment of the schedule dates.
+    time_fraction : TimeFractionBase
+        Day-count basis of the accrual.
+    """
     currency: Currency
     payment_frequency: PaymentFrequency
     adj_convention: AdjustmentDateConventionBase
@@ -30,10 +43,28 @@ class LegSpec:
 
 @dataclass
 class FixedLegSpec(LegSpec):
+    """Fixed leg specification.
+
+    Parameters
+    ----------
+    rate : Rate
+        Fixed rate.
+    """
+
     rate: Rate
 
 
 @dataclass
 class FloatingLegSpec(LegSpec):
+    """Floating leg specification.
+
+    Parameters
+    ----------
+    index : InterestIndex
+        Floating index.
+    spread : Rate
+        Spread over the index.
+    """
+
     index: InterestIndex
     spread: Rate

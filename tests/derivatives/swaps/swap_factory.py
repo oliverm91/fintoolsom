@@ -10,13 +10,15 @@ enumerates swap cases over:
 * spread       — floating legs with the builder's default (no) spread or with a spread
 * collateral   — uncollateralised, or CSA-discounted on SOFR (USD), CAMARA (CLP),
                  ICP (CLP, price index) or ESTR (EUR: a third, non-leg currency)
+* settlement   — CCS only: deliverable (each leg in its own currency) or
+                 non-deliverable, settled in CLP at each flow's FX fixing
 
 Values are synthetic: the factory only guarantees every input the calculator may ask
 for exists, so tests can check that valuation runs end to end.
 
-UF note: the library has no UF (CLF) ``Currency`` yet, so a UF-denominated leg cannot
-be built. UF cases are generated anyway and marked xfail until ``Currency.CLF`` exists;
-once it does, the factory picks it up automatically (curves + CLF/CLP FX included).
+UF note: UF legs are in ``Currency.CLF``, a unit of account settled in CLP. CLF/CLP
+rates are loaded as FX like any currency, up to ``UF_KNOWN_UNTIL`` (the 9th of next
+month, CPI being out on VAL_DATE), so later UF fixings are projected from it.
 """
 from __future__ import annotations
 
@@ -81,7 +83,7 @@ SPREAD = _rate(0.005)
 # ── Currencies ─────────────────────────────────────────────────────────────
 
 REPORTING_CURRENCY = Currency.CLP
-UF_CURRENCY: Currency | None = getattr(Currency, "CLF", None)
+UF_CURRENCY: Currency = Currency.CLF
 
 
 class Ccy(Enum):
@@ -95,8 +97,6 @@ def currency_of(ccy: Ccy) -> Currency:
         return Currency.CLP
     if ccy is Ccy.USD:
         return Currency.USD
-    if UF_CURRENCY is None:
-        raise NotImplementedError("No UF (CLF) Currency in fintoolsom.market.currencies.")
     return UF_CURRENCY
 
 
@@ -107,6 +107,17 @@ def adj_convention(ccy: Ccy) -> ModifiedFollowingConvention:
 NOTIONALS: dict[Ccy, float] = {Ccy.CLP: 950_000_000.0, Ccy.USD: 1_000_000.0, Ccy.UF: 25_000.0}
 FIXED_RATES: dict[Ccy, float] = {Ccy.CLP: 0.055, Ccy.USD: 0.045, Ccy.UF: 0.025}
 FX_TO_CLP: dict[Ccy, float] = {Ccy.CLP: 1.0, Ccy.USD: 950.0, Ccy.UF: 37_500.0}
+# Realised FX fixings before VAL_DATE: off spot, so tests can tell them apart.
+PAST_FX_FACTOR = 0.99
+SETTLEMENT_CURRENCY = Currency.CLP  # non-deliverable CCS settle in CLP
+# UF published as of VAL_DATE (CPI released on the 8th): up to the 9th of next month.
+UF_KNOWN_UNTIL = date(2024, 8, 9)
+UF_MONTHLY_GROWTH = 0.003
+
+
+def uf_level(d: date) -> float:
+    """Synthetic UF level: FX_TO_CLP[UF] on VAL_DATE, growing 0.3% per 30 days."""
+    return FX_TO_CLP[Ccy.UF] * (1 + UF_MONTHLY_GROWTH) ** ((d - VAL_DATE).days / 30)
 
 # ── Indexes ────────────────────────────────────────────────────────────────
 
@@ -152,9 +163,7 @@ FLOAT_INDEXES = {
 
 # Flat continuously-compounded zero rates for curves; fixings use the same level.
 # Uncollateralised curves of the non-riskless currencies (cross-currency implied).
-CURRENCY_CURVE_RATES = {Currency.USD: 0.049, Currency.EUR: 0.034}
-if UF_CURRENCY is not None:
-    CURRENCY_CURVE_RATES[UF_CURRENCY] = 0.022
+CURRENCY_CURVE_RATES = {Currency.USD: 0.049, Currency.EUR: 0.034, UF_CURRENCY: 0.022}
 FLAT_RATES = {
     ESTR: 0.035,
     SOFR: 0.050,
@@ -193,6 +202,7 @@ class SwapCase:
     status: SwapStatus
     with_spread: bool
     collateral: str = "uncoll"  # key into COLLATERAL_INDEXES
+    deliverable: bool = False  # CCS only: False settles in SETTLEMENT_CURRENCY
 
     @property
     def uses_uf(self) -> bool:
@@ -207,9 +217,10 @@ class SwapCase:
         spread = "spread" if self.with_spread else "nospread"
         if not (self.receive.is_floating or self.pay.is_floating):
             spread = "nofloat"
+        settlement = "" if self.swap_type == "irs" else ("-deliv" if self.deliverable else "-nondeliv")
         return (
             f"{self.swap_type}-{self.receive}-vs-{self.pay}"
-            f"-{self.status.value}-{spread}-{self.collateral}"
+            f"-{self.status.value}-{spread}-{self.collateral}{settlement}"
         )
 
 
@@ -231,26 +242,17 @@ def swap_cases() -> list[SwapCase]:
     for swap_type, receive, pay in _leg_pairs():
         has_float = receive.is_floating or pay.is_floating
         spreads = (False, True) if has_float else (False,)
-        for status, with_spread, collateral in product(SwapStatus, spreads, COLLATERAL_INDEXES):
-            cases.append(SwapCase(swap_type, receive, pay, status, with_spread, collateral))
+        settlements = (False,) if swap_type == "irs" else (True, False)
+        for status, with_spread, collateral, deliverable in product(
+            SwapStatus, spreads, COLLATERAL_INDEXES, settlements
+        ):
+            cases.append(SwapCase(swap_type, receive, pay, status, with_spread, collateral, deliverable))
     return cases
 
 
 def swap_case_params() -> list:
-    """``swap_cases()`` as pytest params (ids set, UF cases xfail while unsupported)."""
-    params = []
-    for case in swap_cases():
-        marks = []
-        if case.uses_uf and UF_CURRENCY is None:
-            marks.append(
-                pytest.mark.xfail(
-                    raises=NotImplementedError,
-                    strict=True,
-                    reason="UF is not a Currency yet: UF-denominated legs cannot be built.",
-                )
-            )
-        params.append(pytest.param(case, id=case.id, marks=marks))
-    return params
+    """``swap_cases()`` as pytest params (ids set)."""
+    return [pytest.param(case, id=case.id) for case in swap_cases()]
 
 
 # ── Builders ───────────────────────────────────────────────────────────────
@@ -277,11 +279,17 @@ def build_leg(leg: LegCase, status: SwapStatus, with_spread: bool) -> SwapLeg:
 
 
 def build_swap(case: SwapCase) -> Swap:
+    if case.swap_type == "irs":
+        # A UF IRS settles in CLP: the UF cannot be delivered.
+        payment_currency = currency_of(case.receive.ccy).settlement_currency
+    else:
+        payment_currency = None if case.deliverable else SETTLEMENT_CURRENCY
     return Swap(
         receive_leg=build_leg(case.receive, case.status, case.with_spread),
         pay_leg=build_leg(case.pay, case.status, case.with_spread),
-        payment_currency=currency_of(case.receive.ccy) if case.swap_type == "irs" else None,
+        payment_currency=payment_currency,
         collateral_index=case.collateral_index,
+        is_deliverable=case.swap_type == "ccs" and case.deliverable,
     )
 
 
@@ -297,6 +305,11 @@ def _flat_curve(rate: float) -> ZeroCouponCurve:
 def _history_days() -> list[date]:
     n = (VAL_DATE - HISTORY_START).days
     return [HISTORY_START + timedelta(days=i) for i in range(n + 1)]
+
+
+def _days_between(start: date, end: date) -> list[date]:
+    """Calendar days in ``(start, end]``."""
+    return [start + timedelta(days=i) for i in range(1, (end - start).days + 1)]
 
 
 def build_market() -> Market:
@@ -340,7 +353,13 @@ def build_market() -> Market:
         indexes_history=histories,
     )
     for ccy, fx in FX_TO_CLP.items():
-        if ccy is Ccy.CLP or (ccy is Ccy.UF and UF_CURRENCY is None):
+        if ccy is Ccy.CLP:
             continue
-        market.add_fx_rate(VAL_DATE, FX_Rate(CurrencyPair(currency_of(ccy), REPORTING_CURRENCY), fx))
+        if ccy is Ccy.UF:  # realised and already-published UF levels
+            for d in days + _days_between(VAL_DATE, UF_KNOWN_UNTIL):
+                market.add_fx_rate(d, FX_Rate(CurrencyPair(UF_CURRENCY, REPORTING_CURRENCY), uf_level(d)))
+            continue
+        pair = CurrencyPair(currency_of(ccy), REPORTING_CURRENCY)
+        for d in days:
+            market.add_fx_rate(d, FX_Rate(pair, fx if d == VAL_DATE else fx * PAST_FX_FACTOR))
     return market

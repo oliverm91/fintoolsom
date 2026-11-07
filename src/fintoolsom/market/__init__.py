@@ -9,15 +9,12 @@ from .index import (
     PriceIndex,
     InterestPriceIndex,
     OvernightInterestPriceIndex,
-    UFIndex,
 )
 from .index_history import (
     IndexHistory,
     InterestHistory,
     OvernightHistory,
     PriceHistory,
-    UFIndexHistory,
-    UFConvention,
     RateHistory,
     OvernightRateHistory,
     TermRateHistory,
@@ -25,6 +22,7 @@ from .index_history import (
     OvernightInterestPriceHistory,
 )
 from .localities import Locality
+from .uf import UFConvention
 from .market import Market
 from .conventions import (
     PaymentFrequency,
@@ -37,8 +35,6 @@ from .quotes import (
     InstrumentQuote,
     ForwardPriceQuote,
     ForwardPointsQuote,
-    ForwardUFPriceQuote,
-    ForwardUFPointsQuote,
     QuotedSide,
     IRSQuote,
     IRBasisQuote,

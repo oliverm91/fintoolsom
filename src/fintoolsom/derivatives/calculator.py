@@ -25,11 +25,20 @@ _default_option_rate_convention = RateConvention(
 
 
 class Calculator:
-    """Valuation logic for derivatives instruments. Instruments only hold data;
-    every method here is a staticmethod that takes the instrument plus whatever
-    market data it needs and returns a value. Nothing is cached or stored."""
+    """Valuation of derivative instruments.
+
+    Instruments only hold data. Every method is a staticmethod taking the
+    instrument plus the market data it needs; nothing is cached or stored.
+    """
 
     # --- Forwards ---
+
+    @staticmethod
+    def _convert(value: float, from_currency: Currency, to_currency: Currency, market: Market) -> float:
+        """`value` in `from_currency` converted to `to_currency` at spot (``market.t``)."""
+        from ..market.currencies import CurrencyPair as _CurrencyPair
+
+        return value * market.get_fx_rate(market.t, _CurrencyPair(from_currency, to_currency)).value
 
     @staticmethod
     def get_forward_mtm(
@@ -37,10 +46,29 @@ class Calculator:
         market: Market,
         currency: Currency,
     ) -> float:
-        """Deliverable FX forward MTM. Curves and spot are derived from `market`
-        (mirrors get_mtm_option): domestic = quote-currency curve, foreign =
-        base-currency curve, both uncollateralised (market funding curves)."""
+        """Deliverable FX forward mark-to-market.
+
+        Domestic is the quote currency and foreign the base currency, both
+        discounted on their uncollateralised funding curves; spot is read from
+        `market` at ``market.t``. A forward paid on or before ``market.t`` is worth 0.
+
+        Parameters
+        ----------
+        forward : Forward
+            Deliverable forward.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency; the quote-currency MTM is converted at spot.
+
+        Returns
+        -------
+        float
+            MTM in `currency`.
+        """
         cp = forward.currency_pair
+        if forward.payment_date <= market.t:
+            return 0.0
         domestic_curve = market.get_funding_curve(cp.quote_currency)
         foreign_curve = market.get_funding_curve(cp.base_currency)
         spot = market.get_fx_rate(market.t, cp).value
@@ -51,7 +79,7 @@ class Calculator:
         strike_leg_vp = forward.strike * forward.notional * df_d
 
         mtm = forward.sign * (notional_leg_vp - strike_leg_vp)
-        return mtm
+        return Calculator._convert(mtm, cp.quote_currency, currency, market)
 
     @staticmethod
     def get_ndf_mtm(
@@ -59,53 +87,37 @@ class Calculator:
         market: Market,
         currency: Currency,
     ) -> float:
-        """Non-deliverable FX forward MTM: the fixing (settlement) FX is projected
-        as spot * df_f / df_d at the fixing_date, and the settlement amount is
-        discounted from payment_date on the quote-currency (domestic) curve."""
+        """Non-deliverable FX forward mark-to-market.
+
+        The settlement FX at `fixing_date` comes from :meth:`get_fx_fixings`
+        (realised or already published, else projected on the funding curves) and
+        the settlement amount is discounted from `payment_date` on the domestic
+        (quote-currency) funding curve. A UF forward is an NDF on ``CLF/CLP``. An
+        NDF paid on or before ``market.t`` is worth 0.
+
+        Parameters
+        ----------
+        ndf : NDF
+            Non-deliverable forward.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency; the quote-currency MTM is converted at spot.
+
+        Returns
+        -------
+        float
+            MTM in `currency`.
+        """
         cp = ndf.currency_pair
-        domestic_curve = market.get_funding_curve(cp.quote_currency)
-        foreign_curve = market.get_funding_curve(cp.base_currency)
-        spot = market.get_fx_rate(market.t, cp).value
-
-        df_d = domestic_curve.get_df(ndf.fixing_date)
-        df_f = foreign_curve.get_df(ndf.fixing_date)
-
-        s_t = spot * df_f / df_d
-
+        if ndf.payment_date <= market.t:
+            return 0.0
+        s_t = Calculator.get_fx_fixings(
+            cp.base_currency, cp.quote_currency, [ndf.fixing_date], market
+        )[0]
         fv = ndf.sign * ndf.notional * (s_t - ndf.strike)
-        mtm = fv * domestic_curve.get_df(ndf.payment_date)
-        return mtm
-
-    @staticmethod
-    def get_uf_forward_mtm(
-        ndf: NDF,
-        uf_history: dict[date, float],
-        clp_curve: Curve,
-        uf_curve: Curve,
-    ) -> float:
-        """Values an NDF settling against the Chilean UF (ndf.is_uf_indexed=True).
-        The UF value is known in advance until the 9th of the following month. If
-        the fixing_date falls beyond the last known UF print, the UF is projected
-        from that last known value using the forward factor implied by the nominal
-        CLP curve (clp_curve) and the UF-linked curve (uf_curve, i.e. CLF)."""
-        known_uf = uf_history.get(ndf.fixing_date)
-        if known_uf is not None:
-            s_t = known_uf
-        else:
-            known_dates = [d for d in uf_history if d <= ndf.fixing_date]
-            if len(known_dates) == 0:
-                raise ValueError(
-                    f"No UF value known on or before fixing_date {ndf.fixing_date} to project from."
-                )
-            last_known_date = max(known_dates)
-            last_known_uf = uf_history[last_known_date]
-            df_d_fwd = clp_curve.get_df_fwd(last_known_date, ndf.fixing_date)
-            df_f_fwd = uf_curve.get_df_fwd(last_known_date, ndf.fixing_date)
-            s_t = last_known_uf * df_f_fwd / df_d_fwd
-
-        fv = ndf.sign * ndf.notional * (s_t - ndf.strike)
-        mtm = fv * clp_curve.get_df(ndf.payment_date)
-        return mtm
+        mtm = fv * market.get_funding_curve(cp.quote_currency).get_df(ndf.payment_date)
+        return Calculator._convert(mtm, cp.quote_currency, currency, market)
 
     # --- Options (Garman-Kohlhagen / Black-Scholes for FX) ---
 
@@ -375,79 +387,92 @@ class Calculator:
     # --- Swaps ---
 
     @staticmethod
-    def _leg_pv(leg, collateral, market: Market) -> float:
-        """PV of one leg in its own currency, vectorised over future coupons.
+    def _leg_flows(leg, market: Market) -> tuple[np.ndarray, np.ndarray]:
+        """Flows, in the leg currency, of the coupons not yet paid.
 
-        TermRateLeg — split by fixing_date:
-          fixed      fixing_date ≤ t          → history rate for full [start, end]
-          to_project fixing_date > t          → project with get_dfs_fwds
+        A coupon paid on or before ``market.t`` is dropped.
 
-        OvernightLeg / XCCYFloatingLeg — split by start_date:
-          current    start ≤ t < payment      → history[start→t] + projection[t→end]
-                                                 (or pure history if end_date ≤ t)
-          pure_future start > t               → project with get_dfs_fwds
+        Realised fixings come from the index history (``market.get_index``).
+
+        TermRateLeg, split by fixing date:
+
+        * fixed (``fixing_date <= t``): the fixed rate over the whole coupon.
+        * to project (``fixing_date > t``): forward accrual from the projection curve.
+
+        OvernightLeg and XCCYFloatingLeg, split by start date:
+
+        * running (``start <= t < payment``): realised ``[start, t]`` (index business
+          days, or ICP level ratio) compounded with the projection ``[t, end]``, or
+          fully realised when ``end <= t``.
+        * future (``start > t``): forward accrual from the projection curve.
+
+        Parameters
+        ----------
+        leg : SwapLeg
+            Fixed, term-rate, overnight or cross-currency floating leg.
+        market : Market
+            Market at the valuation date.
+
+        Returns
+        -------
+        future_payment : numpy.ndarray of bool
+            Per-coupon mask of the coupons paid after ``market.t``.
+        flows : numpy.ndarray
+            Flows of those coupons (interest + spread + amortization).
+
+        Raises
+        ------
+        KeyError
+            If a realised fixing is needed and is missing from the index history.
         """
         from .swaps.legs import FixedLeg as _FixedLeg, TermRateLeg as _TermRateLeg
 
-        currency = leg.currency
-        future_payment = np.array([t > market.t for t in leg.payment_dates])
+        future_payment = np.array([t > market.t for t in leg.payment_dates], dtype=bool)
         if not future_payment.any():
-            return 0.0
-
-        # Collateral-adjusted DFs for all future payment dates
-        future_pay_dates = [t for t, f in zip(leg.payment_dates, future_payment) if f]
-        dfs = market.get_discount_dfs(currency, future_pay_dates, collateral)
+            return future_payment, np.zeros(0)
 
         if isinstance(leg, _FixedLeg):
-            return float(np.dot(leg.flows[future_payment], dfs))
+            return future_payment, leg.flows[future_payment]
 
         flows = np.zeros(int(future_payment.sum()))
-        # Projection (forwarding) comes from the index's projection curve. For an
-        # OIS index self-discounted in its own currency this is a forward view over
-        # the discount curve (get_projection falls back to it); an independent-basis
-        # index carries a real ProjectionCurve. Either way the seam is get_accrual,
-        # which returns the interest earned per unit notional (wealth factor − 1).
+        # Projection goes through get_accrual (interest per unit notional): the index
+        # discount curve viewed as forwards, or an independent ProjectionCurve.
         proj_curve = market.get_projection(leg.index)
 
         if isinstance(leg, _TermRateLeg):
-            # TermRate: split by fixing_date. Once fixing_date ≤ t the rate is locked
-            # regardless of where start_date falls (e.g. fix Wed, start Fri, value Thu).
-            fixed_mask   = future_payment & np.array([leg.fixing_dates[i] <= market.t for i in range(len(leg.coupons))])
+            # Once fixing_date <= t the rate is locked, wherever start_date falls.
+            fixed_mask = future_payment & np.array([d <= market.t for d in leg.fixing_dates], dtype=bool)
             to_proj_mask = future_payment & ~fixed_mask
 
             if fixed_mask.any():
-                rate_name = market.index_to_interest_rate_map.get(leg.index.name.upper())  # type: ignore[union-attr]
-                if rate_name is None:
-                    raise KeyError(f"No interest rate mapped to index '{leg.index.name}' in market.")  # type: ignore[union-attr]
-                fixed_flows = []
-                for i in np.where(fixed_mask)[0]:
-                    c = leg.coupons[i]
-                    rate = market.get_rate(leg.fixing_dates[i], rate_name, use_closest_past_rate=True)
-                    fixed_flows.append(rate.get_accrued_interest(c.residual, c.start_date, c.end_date) + leg.spreads_values[i])
+                history = Calculator._index_history(leg, market)
+                fixed_flows = [
+                    history.get_rate(leg.fixing_dates[i]).get_accrued_interest(
+                        leg.residuals[i], leg.start_dates[i], leg.end_dates[i]
+                    )
+                    + leg.spreads_values[i]
+                    + leg.amortizations[i]
+                    for i in np.where(fixed_mask)[0]
+                ]
                 flows[fixed_mask[future_payment]] = np.array(fixed_flows)
 
             if to_proj_mask.any():
-                starts  = [s for s, f in zip(leg.start_dates, to_proj_mask) if f]
-                ends    = [e for e, f in zip(leg.end_dates,   to_proj_mask) if f]
+                starts = [s for s, f in zip(leg.start_dates, to_proj_mask) if f]
+                ends = [e for e, f in zip(leg.end_dates, to_proj_mask) if f]
                 accruals = proj_curve.get_accrual(starts, ends)
                 flows[to_proj_mask[future_payment]] = leg.residuals[to_proj_mask] * accruals + leg.spreads_values[to_proj_mask] + leg.amortizations[to_proj_mask]
 
         else:
-            # OvernightLeg (and XCCYFloatingLeg): split by start_date
-            future_start = np.array([s > market.t for s in leg.start_dates])
-            pure_future  = future_payment & future_start
+            future_start = np.array([s > market.t for s in leg.start_dates], dtype=bool)
+            pure_future = future_payment & future_start
             current_mask = future_payment & ~future_start
 
             if pure_future.any():
-                starts  = [s for s, f in zip(leg.start_dates, pure_future) if f]
-                ends    = [e for e, f in zip(leg.end_dates,   pure_future) if f]
-                # Overnight/XCCY coupons accrue the daily-compounded rate over [start, end];
-                # get_accrual returns that interest per unit notional (wealth factor − 1, a
-                # positive number for positive forwards).
+                starts = [s for s, f in zip(leg.start_dates, pure_future) if f]
+                ends = [e for e, f in zip(leg.end_dates, pure_future) if f]
                 accruals = proj_curve.get_accrual(starts, ends)
-                # `amortizations` carries each coupon's notional repayment (non-zero only on
-                # the final coupon): the notional exchange at maturity. For same-currency
-                # swaps it cancels between legs; for XCCY it is the cross-currency exchange.
+                # amortizations: the notional repaid with the final coupon (final
+                # exchange). Same-currency legs cancel it; cross-currency legs exchange it.
                 flows[pure_future[future_payment]] = (
                     leg.residuals[pure_future] * accruals
                     + leg.spreads_values[pure_future]
@@ -456,44 +481,177 @@ class Calculator:
 
             if current_mask.any():
                 idx = int(np.where(current_mask)[0][0])
-                c   = leg.coupons[idx]
-                rate_name = market.index_to_interest_rate_map.get(leg.index.name.upper())  # type: ignore[union-attr]
-                if rate_name is None:
-                    raise KeyError(f"No interest rate mapped to index '{leg.index.name}' in market.")  # type: ignore[union-attr]
-                if market.t < c.end_date:
-                    # Still accruing: history [start→t] + projection [t→end]
-                    accrued = market.accrue_rates_reset_business_days(
-                        c.residual, rate_name, c.start_date, market.t
-                    )
-                    interest = accrued + (c.residual + accrued) * proj_curve.get_accrual(
-                        market.t, c.end_date
-                    )
-                else:
-                    # end_date ≤ t: fully accrued, awaiting payment only
-                    interest = market.accrue_rates_reset_business_days(
-                        c.residual, rate_name, c.start_date, c.end_date
-                    )
+                c = leg.coupons[idx]
+                # Realised part from the index history: compounded on the index's own
+                # business days (rate index) or the ratio of published levels (ICP).
+                realised_end = min(market.t, c.end_date)
+                accrued = Calculator._index_history(leg, market).get_accrued_interest(
+                    c.residual, c.start_date, realised_end
+                )
+                interest = accrued
+                if realised_end < c.end_date:
+                    interest += (c.residual + accrued) * proj_curve.get_accrual(market.t, c.end_date)
                 flows[current_mask[future_payment]] = interest + leg.spreads_values[idx] + leg.amortizations[idx]
 
+        return future_payment, flows
+
+    @staticmethod
+    def _index_history(leg, market: Market):
+        """History of the leg index, holding its realised fixings.
+
+        Raises
+        ------
+        KeyError
+            If `market` has no history for the index.
+        """
+        return market.get_index(leg.index.name)
+
+    @staticmethod
+    def _leg_pv(leg, collateral, market: Market) -> float:
+        """PV of a leg settled in its own currency.
+
+        Parameters
+        ----------
+        leg : SwapLeg
+            Leg to value.
+        collateral : InterestIndex or None
+            CSA collateral index; None means uncollateralised.
+        market : Market
+            Market at the valuation date.
+
+        Returns
+        -------
+        float
+            PV in the leg currency.
+        """
+        future_payment, flows = Calculator._leg_flows(leg, market)
+        if not future_payment.any():
+            return 0.0
+        pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
+        dfs = market.get_discount_dfs(leg.currency, pay_dates, collateral)
         return float(np.dot(flows, dfs))
 
     @staticmethod
-    def get_swap_mtm(swap: Swap, market: Market, currency: Currency) -> float:
-        """Generic swap valuation in the requested reporting currency.
+    def get_fx_fixings(
+        base_currency: Currency, quote_currency: Currency, fixing_dates: list[date], market: Market
+    ) -> np.ndarray:
+        """FX rates (quote per unit of base) fixed on `fixing_dates`.
 
-        Discounts receive_leg (positive) and pay_leg (negative) in their own currencies,
-        then converts each PV to ``currency`` via market FX at market.t when they differ.
+        Let ``L = market.get_fx_known_until(pair)``: ``market.t`` for a traded
+        pair, the last published date for a pair priced by an index known ahead
+        of time (the UF, up to the 9th of next month once CPI is out). A fixing on
+        or before ``L`` is read as is (FX history, or UF history including its
+        already-published future levels); a later one is projected from the rate
+        at ``L`` with forward discount factors on the funding curves::
 
-        Note: XCCYFloatingLeg notional exchanges (initial and final) are NOT included
-        until they are added as explicit coupons in the leg's coupon list."""
+            FX(d) = FX(L) * [df_base(d) / df_base(L)] / [df_quote(d) / df_quote(L)]
+
+        which is ``spot * df_base(d) / df_quote(d)`` when ``L = market.t``. Under
+        a common CSA the collateral adjustment of both currencies cancels in this
+        ratio, so funding curves are used regardless.
+
+        Parameters
+        ----------
+        base_currency, quote_currency : Currency
+            Currency pair.
+        fixing_dates : list of date
+            Fixing dates.
+        market : Market
+            Market at the valuation date.
+
+        Returns
+        -------
+        numpy.ndarray
+            One FX rate per fixing date.
+
+        Raises
+        ------
+        KeyError
+            If a known fixing, or the rate at ``L``, is not loaded.
+        """
         from ..market.currencies import CurrencyPair as _CurrencyPair
 
+        cp = _CurrencyPair(base_currency, quote_currency)
+        known_until = market.get_fx_known_until(cp)
+        known = np.array([d <= known_until for d in fixing_dates], dtype=bool)
+        fx = np.empty(len(fixing_dates))
+        for i in np.where(known)[0]:
+            fx[i] = market.get_fx_rate(fixing_dates[i], cp).value
+        if (~known).any():
+            anchor = market.get_fx_rate(known_until, cp).value
+            projected = [d for d, k in zip(fixing_dates, known) if not k]
+            dates = [known_until] + projected
+            df_base = market.get_funding_curve(base_currency).get_dfs(dates)
+            df_quote = market.get_funding_curve(quote_currency).get_dfs(dates)
+            fx[~known] = anchor * (df_base[1:] / df_base[0]) / (df_quote[1:] / df_quote[0])
+        return fx
+
+    @staticmethod
+    def _leg_pv_non_deliverable(
+        leg, collateral, market: Market, settlement_currency: Currency
+    ) -> float:
+        """PV of a leg settled non-deliverably in `settlement_currency`.
+
+        Each unpaid flow is converted at its FX fixing (realised if fixed on or
+        before ``market.t``, including a flow fixed but not yet paid; projected
+        otherwise) and discounted from its payment date in `settlement_currency`.
+
+        Parameters
+        ----------
+        leg : SwapLeg
+            Leg to value.
+        collateral : InterestIndex or None
+            CSA collateral index; None means uncollateralised.
+        market : Market
+            Market at the valuation date.
+        settlement_currency : Currency
+            Currency the flows are paid in.
+
+        Returns
+        -------
+        float
+            PV in `settlement_currency`.
+        """
+        if leg.currency == settlement_currency:
+            return Calculator._leg_pv(leg, collateral, market)
+        future_payment, flows = Calculator._leg_flows(leg, market)
+        if not future_payment.any():
+            return 0.0
+        pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
+        fixing_dates = [d for d, f in zip(leg.fx_fixing_dates, future_payment) if f]
+        fx = Calculator.get_fx_fixings(leg.currency, settlement_currency, fixing_dates, market)
+        dfs = market.get_discount_dfs(settlement_currency, pay_dates, collateral)
+        return float(np.sum(flows * fx * dfs))
+
+    @staticmethod
+    def get_swap_mtm(swap: Swap, market: Market, currency: Currency) -> float:
+        """Swap mark-to-market in the reporting `currency`.
+
+        Each leg settles in :meth:`Swap.leg_settlement_currency`. A leg settled in
+        its own currency is valued there; otherwise (non-deliverable swap, or a
+        UF leg, always paid in CLP) every flow is converted at its FX fixing and
+        discounted in the settlement currency. Each leg PV is then converted to
+        `currency` at spot. Only the final notional exchange (the last coupon's
+        amortization) is valued; there is no initial exchange.
+
+        Parameters
+        ----------
+        swap : Swap
+            Swap to value.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency.
+
+        Returns
+        -------
+        float
+            PV of the received leg minus PV of the paid leg, in `currency`.
+        """
         def _pv(leg) -> float:
-            pv = Calculator._leg_pv(leg, swap.collateral_index, market)
-            if leg.currency != currency:
-                cp = _CurrencyPair(leg.currency, currency)
-                pv *= market.get_fx_rate(market.t, cp).value
-            return pv
+            settlement = swap.leg_settlement_currency(leg)
+            pv = Calculator._leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
+            return Calculator._convert(pv, settlement, currency, market)
 
         return _pv(swap.receive_leg) - _pv(swap.pay_leg)
 
@@ -501,9 +659,23 @@ class Calculator:
 
     @staticmethod
     def get_mtm_option(instrument: Option, market: Market) -> float:
-        """MTM for an Option. Curves are the market funding curves of each side of
-        instrument.currency_pair (as in get_forward_mtm); volatility is read off the
-        VolatilitySurface market keeps for instrument.currency_pair."""
+        """FX option mark-to-market (Garman-Kohlhagen) from market data.
+
+        Curves are the funding curves of each currency of the pair; volatility is
+        read from the pair's volatility surface at the option's log-moneyness.
+
+        Parameters
+        ----------
+        instrument : Option
+            FX option.
+        market : Market
+            Market at the valuation date.
+
+        Returns
+        -------
+        float
+            MTM in the quote currency.
+        """
         domestic_curve = market.get_funding_curve(instrument.currency_pair.quote_currency)
         foreign_curve = market.get_funding_curve(instrument.currency_pair.base_currency)
         spot = market.get_fx_rate(market.t, instrument.currency_pair).value
@@ -521,14 +693,29 @@ class Calculator:
 
     @staticmethod
     def valuate(instrument: Forward | NDF | Option | Swap, market: Market, currency: Currency) -> float:
-        """Dispatches to the matching MTM calculation using only `instrument` and
-        `market`. NDF is checked before Forward since NDF is a subclass of Forward."""
+        """Mark-to-market of any supported instrument.
+
+        NDF is checked before Forward, since NDF subclasses Forward.
+
+        Parameters
+        ----------
+        instrument : Forward, NDF, Option or Swap
+            Instrument to value.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency.
+
+        Returns
+        -------
+        float
+
+        Raises
+        ------
+        NotImplementedError
+            For an unsupported instrument type.
+        """
         if isinstance(instrument, NDF):
-            if instrument.is_uf_indexed:
-                raise NotImplementedError(
-                    "UF-indexed NDF valuation is not routed through valuate(); it needs a "
-                    "UF (CLF) curve and UF history — use get_uf_forward_mtm directly."
-                )
             return Calculator.get_ndf_mtm(instrument, market, currency)
         if isinstance(instrument, Forward):
             return Calculator.get_forward_mtm(instrument, market, currency)

@@ -7,9 +7,7 @@ from fintoolsom.market import (
     InterestIndex,
     OvernightRateIndex,
     TermRateIndex,
-    PriceIndex,
     OvernightInterestPriceIndex,
-    UFIndex,
     Term,
     TermUnit,
     IndexHistory,
@@ -19,8 +17,6 @@ from fintoolsom.market import (
     TermRateHistory,
     PriceHistory,
     OvernightInterestPriceHistory,
-    UFIndexHistory,
-    UFConvention,
 )
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
 from fintoolsom.dates import ActualDayCountConvention, Calendar, ModifiedFollowingConvention
@@ -39,7 +35,6 @@ _ADJ = ModifiedFollowingConvention(Calendar())
 SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
 SOFR3M = TermRateIndex("SOFR3M", currency=Currency.USD, term=Term(3, TermUnit.M, _ADJ))
 ICP = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
-UF = UFIndex("UF", currency=Currency.CLP)
 
 
 # ---------------------------------------------------------------------------
@@ -61,12 +56,6 @@ def test_interest_bearing_definitions_are_interest_indexes():
     # RateIndex (SOFR) and InterestPriceIndex (ICP) accrue → InterestIndex.
     assert isinstance(SOFR, InterestIndex)
     assert isinstance(ICP, InterestIndex)
-
-
-def test_price_only_definition_is_not_interest_index():
-    # UF is price-only: it must NOT type as interest-bearing, so it cannot be
-    # used where a FloatingLegSpec / collateral index is required.
-    assert not isinstance(UF, InterestIndex)
 
 
 # ---------------------------------------------------------------------------
@@ -210,25 +199,24 @@ def test_term_rate_history_accrued_interest_uses_fixing_date():
 
 
 # ---------------------------------------------------------------------------
-# PriceHistory — price-only index (UF): lookup, but no interest accrual
+# PriceHistory — level lookup, no interest accrual
 # ---------------------------------------------------------------------------
 
 def test_price_history_get_value():
-    h = PriceHistory(index=UF, values={D0: 37000.0})
+    h = PriceHistory(index=ICP, values={D0: 37000.0})
     assert h.get_value(D0) == 37000.0
 
 
 def test_price_history_missing_date_raises():
-    h = PriceHistory(index=UF, values={D0: 37000.0})
+    h = PriceHistory(index=ICP, values={D0: 37000.0})
     with pytest.raises(KeyError):
         h.get_value(D1)
 
 
 def test_price_only_history_has_no_accrual_method():
-    # Point: UF and other price-only indexes never accrue interest, so their
-    # history must not even expose get_accrued_interest, and must not type as an
-    # InterestHistory.
-    h = PriceHistory(index=UF, values={D0: 37000.0})
+    # A plain level history must not expose get_accrued_interest nor type as an
+    # InterestHistory: accrual comes only from InterestPriceHistory.
+    h = PriceHistory(index=ICP, values={D0: 37000.0})
     assert not hasattr(h, "get_accrued_interest")
     assert not isinstance(h, InterestHistory)
 
@@ -238,233 +226,3 @@ def test_overnight_interest_price_history_is_interest_history():
     assert isinstance(h, InterestHistory)
     assert isinstance(h, PriceHistory)  # still supports level lookup
     assert h.get_value(D0) == 35000.0
-
-
-# ---------------------------------------------------------------------------
-# UFIndexHistory (UF): real values published by the Chilean SII for 2026
-#   UF daily series : https://www.sii.cl/valores_y_fechas/uf/uf2026.htm
-#   Monthly IPC/UTM : https://www.sii.cl/valores_y_fechas/utm/utm2026.htm
-# ---------------------------------------------------------------------------
-
-# UF on the 9th of each month, CLP per UF (the reajuste boundaries).
-UF_9 = {
-    date(2026, 1, 9): 39762.52,
-    date(2026, 2, 9): 39682.99,
-    date(2026, 3, 9): 39841.72,
-    date(2026, 4, 9): 39841.72,
-    date(2026, 5, 9): 40240.14,
-    date(2026, 6, 9): 40763.26,
-    date(2026, 7, 9): 40844.79,
-}
-
-# Official monthly CPI (IPC) variation, as a decimal.
-IPC_DEC_2025 = -0.002  # -0.2% (real deflation)
-IPC_MAR_2026 = 0.010   # +1.0%
-IPC_APR_2026 = 0.013   # +1.3%
-
-# Real published daily UF over the 9-Apr -> 9-May 2026 reajuste period (IPC Mar = +1.0%).
-UF_APR_MAY_2026 = {
-    date(2026, 4, 13): 39894.61,
-    date(2026, 4, 20): 39987.35,
-    date(2026, 4, 30): 40120.20,
-    date(2026, 5, 1): 40133.50,
-    date(2026, 5, 9): 40240.14,
-}
-
-
-def test_inflation_index_is_price_only_definition():
-    # UF is inflation-linked but price-only: a PriceIndex that is NOT interest-bearing.
-    assert isinstance(UF, PriceIndex)
-    assert not isinstance(UF, InterestIndex)
-
-
-def test_uf_index_maturity_is_next_reajuste_ninth():
-    # The UF period is the reajuste month (9th → 9th of next month), unadjusted.
-    assert UF.get_maturity(date(2026, 3, 5)) == date(2026, 3, 9)    # before the 9th → this month's 9th
-    assert UF.get_maturity(date(2026, 3, 9)) == date(2026, 4, 9)    # on the 9th → starts its own period
-    assert UF.get_maturity(date(2026, 3, 20)) == date(2026, 4, 9)   # after the 9th → next month's 9th
-    assert UF.get_maturity(date(2026, 12, 15)) == date(2027, 1, 9)  # year rollover
-
-
-def test_inflation_history_is_price_history_without_accrual():
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
-    assert isinstance(h, PriceHistory)
-    assert not isinstance(h, InterestHistory)
-    assert not hasattr(h, "get_accrued_interest")
-
-
-def test_inflation_from_real_uf_levels():
-    # get_inflation(year, m) = UF(9 of m+2) / UF(9 of m+1) - 1, which recovers the
-    # official monthly IPC from the real SII UF series.
-    h = UFIndexHistory(index=UF, values=dict(UF_9))
-    assert round(h.get_inflation(2026, 3), 3) == IPC_MAR_2026  # +1.0%
-    assert round(h.get_inflation(2026, 4), 3) == IPC_APR_2026  # +1.3%
-
-
-def test_inflation_reads_future_boundary_level():
-    # The later boundary (9-Jun) is a future date relative to an early-May "today";
-    # once published (held in values) get_inflation still resolves against it.
-    h = UFIndexHistory(index=UF, values=dict(UF_9))
-    assert h.get_value(date(2026, 6, 9)) == 40763.26  # future print is held
-    assert round(h.get_inflation(2026, 4), 3) == IPC_APR_2026
-
-
-def test_inflation_rolls_year_for_december():
-    # Real SII: Dec 2025 IPC = UF(9-Feb-2026) / UF(9-Jan-2026) - 1 = -0.2%, which
-    # exercises the year rollover (m = Dec 2025 -> m+1 = Jan, m+2 = Feb 2026).
-    h = UFIndexHistory(index=UF, values=dict(UF_9))
-    assert round(h.get_inflation(2025, 12), 3) == IPC_DEC_2025
-
-
-def test_inflation_missing_boundary_raises():
-    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
-    with pytest.raises(ValueError):
-        h.get_inflation(2026, 3)  # 9-May-2026 not loaded yet
-
-
-def test_last_known_date_before_cpi_release():
-    # 8-Jun-2026 is a business day (no Chilean holiday), so the release proxy is the
-    # 8th. On the 3rd (before release) only levels up to the 9th of the current
-    # month are known.
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
-    assert h.get_last_known_date(date(2026, 6, 3)) == date(2026, 6, 9)
-
-
-def test_last_known_date_after_cpi_release():
-    # On/after the release, levels are known up to the 9th of next month.
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
-    assert h.get_last_known_date(date(2026, 6, 25)) == date(2026, 7, 9)
-
-
-def test_last_known_date_rolls_year_in_december():
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
-    assert h.get_last_known_date(date(2026, 12, 20)) == date(2027, 1, 9)
-
-
-def test_last_known_date_uses_chilean_calendar():
-    # 8-Dec-2026 (Inmaculada Concepción) is a Chilean holiday, so the CPI-release
-    # proxy (preceding business day of the 8th) is 7-Dec-2026 (Monday). On the 7th
-    # we are already on/after release → horizon is next month. A weekends-only
-    # calendar would place release on the 8th and keep us in the current month, so
-    # this asserts the CL calendar (from CLP → Locality.CL) is in effect.
-    h = UFIndexHistory(index=UF, values={date(2026, 2, 9): UF_9[date(2026, 2, 9)]})
-    assert h.get_last_known_date(date(2026, 12, 7)) == date(2027, 1, 9)
-
-
-def test_extend_with_cpi_matches_real_published_uf():
-    # From base UF(9-Apr-2026) with the March 2026 IPC (+1.0%), the projected daily
-    # UF must reproduce SII's published levels to the cent across 10-Apr..9-May.
-    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
-    h.extend_with_cpi(IPC_MAR_2026)
-    for d, real_uf in UF_APR_MAY_2026.items():
-        assert h.get_value(d) == real_uf
-    # Worked-example form: UF(13-Apr) = round(UF(9-Apr) * (1.01)^(4/30), 2).
-    assert h.get_value(date(2026, 4, 13)) == round(
-        UF_9[date(2026, 4, 9)] * 1.01 ** (4 / 30), 2
-    )
-
-
-def test_extend_with_cpi_rounds_to_two_decimals():
-    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
-    h.extend_with_cpi(IPC_MAR_2026)
-    for level in h.values.values():
-        assert round(level, 2) == level  # every projected level is a 2-dp value
-
-
-def test_extend_with_cpi_roundtrips_through_get_inflation():
-    # Extending base 9-Apr with the March IPC fills through 9-May; March inflation
-    # then reads back (UF's 2-dp rounding keeps it within a cent of the input CPI).
-    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
-    h.extend_with_cpi(IPC_MAR_2026)
-    assert round(h.get_inflation(2026, 3), 3) == IPC_MAR_2026
-
-
-def test_extend_with_cpi_does_not_overwrite_known_levels():
-    sentinel = 99999.99
-    h = UFIndexHistory(
-        index=UF,
-        values={date(2026, 4, 9): UF_9[date(2026, 4, 9)], date(2026, 4, 13): sentinel},
-    )
-    h.extend_with_cpi(IPC_MAR_2026)
-    assert h.get_value(date(2026, 4, 13)) == sentinel
-
-
-def test_extend_with_cpi_requires_a_ninth_base():
-    h = UFIndexHistory(index=UF, values={date(2026, 4, 10): UF_9[date(2026, 4, 9)]})
-    with pytest.raises(ValueError):
-        h.extend_with_cpi(IPC_MAR_2026)
-
-
-def test_extend_with_cpi_rejects_non_ninth_base():
-    h = UFIndexHistory(index=UF, values={date(2026, 4, 9): UF_9[date(2026, 4, 9)]})
-    with pytest.raises(ValueError):
-        h.extend_with_cpi(IPC_MAR_2026, base_date=date(2026, 4, 10))
-
-
-# ---------------------------------------------------------------------------
-# UFConvention: pure UF / CPI formulas (real SII April 2026 levels)
-# ---------------------------------------------------------------------------
-
-# Extra real published UF levels inside the 9-Apr -> 9-May 2026 reajuste period.
-UF_21_APR_2026 = 40000.61
-UF_8_MAY_2026 = 40226.79
-UF_20_MAY_2026 = 40424.99
-
-
-def test_uf_convention_reajuste_matches_published_level():
-    # round(UF(9-Apr) * 1.01^(4/30), 2) == real UF(13-Apr-2026).
-    assert UFConvention.reajuste(UF_9[date(2026, 4, 9)], IPC_MAR_2026, 4, 30) == 39894.61
-
-
-def test_uf_convention_implied_monthly_cpi_full_period():
-    cpi = UFConvention.implied_monthly_cpi(UF_9[date(2026, 4, 9)], UF_9[date(2026, 5, 9)])
-    assert round(cpi, 3) == IPC_MAR_2026
-
-
-def test_implied_cpi_between_ninth_to_mid_month():
-    # 9-Apr (base) to 21-Apr — partial period within March reajuste -> March IPC.
-    cpi = UFConvention.implied_monthly_cpi_between(
-        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 4, 21), UF_21_APR_2026
-    )
-    assert round(cpi, 3) == IPC_MAR_2026
-
-
-def test_implied_cpi_between_ninth_and_eighth_of_next_month():
-    # 9-Apr and 8-May — still one reajuste period (boundary is the 9th) -> March IPC.
-    cpi = UFConvention.implied_monthly_cpi_between(
-        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 8), UF_8_MAY_2026
-    )
-    assert round(cpi, 3) == IPC_MAR_2026
-
-
-def test_implied_cpi_between_full_period_equals_simple_ratio():
-    # 9-Apr to 9-May is exactly one period: scaling exponent is 1, so it reduces
-    # to end/start - 1.
-    cpi = UFConvention.implied_monthly_cpi_between(
-        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 9), UF_9[date(2026, 5, 9)]
-    )
-    assert math.isclose(
-        cpi, UF_9[date(2026, 5, 9)] / UF_9[date(2026, 4, 9)] - 1.0, rel_tol=1e-12
-    )
-
-
-def test_implied_cpi_between_raises_across_reajuste_boundary():
-    # 9-Apr (base) and 20-May cross the 9-May boundary: compounds two months' CPI.
-    with pytest.raises(ValueError):
-        UFConvention.implied_monthly_cpi_between(
-            date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 20), UF_20_MAY_2026
-        )
-
-
-def test_implied_cpi_between_requires_distinct_dates():
-    with pytest.raises(ValueError):
-        UFConvention.implied_monthly_cpi_between(
-            date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 4, 9), UF_9[date(2026, 4, 9)]
-        )
-
-
-def test_implied_cpi_between_requires_base_on_ninth():
-    with pytest.raises(ValueError, match="base_9 must be the 9th"):
-        UFConvention.implied_monthly_cpi_between(
-            date(2026, 4, 13), 39894.61, date(2026, 4, 21), UF_21_APR_2026
-        )
