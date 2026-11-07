@@ -1,0 +1,65 @@
+import math
+from datetime import date, timedelta
+import pytest
+from fintoolsom.derivatives.forwards.forwards import NDF
+from fintoolsom.market import Currency, Market, OvernightRateIndex, uf
+from fintoolsom.market.currencies import CurrencyPair
+from fintoolsom.market.quotes import ForwardPointsQuote, ForwardPriceQuote
+from fintoolsom.rates import ZeroCouponCurve
+
+
+
+CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
+
+
+CLFCLP = CurrencyPair(CLF, CLP)
+
+
+RISKLESS = OvernightRateIndex("OIS", currency=CLP)
+
+
+# Before the 8th (CPI release): the UF is published up to the 9th of this month.
+T = date(2024, 8, 4)
+
+
+KNOWN_UNTIL = date(2024, 8, 9)  # T + 5
+
+
+R_CLP, R_CLF = 0.06, 0.02
+
+
+UF_T = 37_500.0
+
+
+def uf_level(d: date) -> float:
+    return UF_T * 1.0001 ** (d - T).days
+
+
+def _flat_curve(rate: float) -> ZeroCouponCurve:
+    pillars = [T + timedelta(days=d) for d in (1, 7, 30, 91, 365, 730, 1825)]
+    return ZeroCouponCurve(T, date_dfs=[(d, math.exp(-rate * (d - T).days / 365)) for d in pillars])
+
+
+def _market() -> Market:
+    # Load only what is published as of T: up to KNOWN_UNTIL.
+    assert uf.last_published_date(T) == KNOWN_UNTIL
+    levels = {T + timedelta(days=i): uf_level(T + timedelta(days=i)) for i in range(-60, 6)}
+    return Market(
+        t=T,
+        riskless_index=RISKLESS,
+        curves={RISKLESS: _flat_curve(R_CLP), CLF: _flat_curve(R_CLF)},
+        fx_history={CLFCLP: uf.uf_rate_data(levels)},
+    )
+
+
+def test_uf_forward_quotes_build_ndfs_fixing_on_payment_by_default():
+    pmt = date(2025, 1, 10)
+    price = ForwardPriceQuote(CLFCLP, 38_150.25, True, payment_date=pmt).get_instrument()
+    assert isinstance(price, NDF) and price.fixing_date == pmt and price.strike == 38_150.25
+
+    points = ForwardPointsQuote(
+        currency_pair=CLFCLP, value=15_025.0, is_buy=False, payment_date=pmt,
+        quote_date=T, points_divisor=100,
+    ).get_instrument(_market())
+    assert isinstance(points, NDF) and points.currency_pair == CLFCLP
+    assert points.strike == pytest.approx(UF_T + 150.25, rel=1e-12)

@@ -376,7 +376,7 @@ class CLBond:
             irr (Rate): The internal rate of return of the bond.
         """
         irr_initial_guess = (
-            self.accrue_rate.rate_value if initial_guess is None else initial_guess
+            self.accrue_rate.rate if initial_guess is None else initial_guess
         )
 
         def objective_function(irr_value: float) -> float:
@@ -431,7 +431,7 @@ class CLBond:
         tera = self.get_irr_from_present_value(
             self.start_date, 100.0, tera_rate_convention
         )
-        tera.rate_value = round(tera.rate_value, 6)
+        tera.rate = round(tera.rate, 6)
         self.tera = tera
         return tera
 
@@ -593,7 +593,7 @@ class CLBond:
             self.get_present_value(date, self.tera) * (self.notional / 100) * fx
         )
         dv01 = self.get_dv01(date, self.tera) * fx
-        initial_guess = self.tera.rate_value + ((amount - tera_value) / dv01) / 10_000
+        initial_guess = self.tera.rate + ((amount - tera_value) / dv01) / 10_000
         div_value = min(self.notional / 1000, 10)
 
         def objective_function(irr_value: float) -> float:

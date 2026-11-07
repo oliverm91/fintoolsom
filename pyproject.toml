@@ -41,6 +41,7 @@ Homepage = "https://github.com/oliverm91/fintoolsom"
 dev = [
     "commitizen>=4.16.4",
     "pytest",
+    "pytest-cov>=7.1.0",
     "ruff",
 ]
 
@@ -58,6 +59,21 @@ packages = ["src/fintoolsom"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["fintoolsom"]
+branch = false
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 85
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

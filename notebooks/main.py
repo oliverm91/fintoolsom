@@ -29,9 +29,9 @@ for type_name, qs in by_type.items():
     print(f"--- {type_name} ({len(qs)}) ---")
     for q in qs:
         if isinstance(q, IRSQuote):
-            print(f"  {q.term}  rate={q.fixed_leg.rate.value:.4%}  collateral={q.collateral_index}")
+            print(f"  {q.term}  rate={q.fixed_leg.rate.rate:.4%}  collateral={q.collateral_index}")
         elif isinstance(q, CrossCurrencyFloatFloatQuote):
-            spread = q.pay_leg.spread.value if q.pay_leg.spread else 0.0
+            spread = q.pay_leg.spread.rate if q.pay_leg.spread else 0.0
             print(f"  {q.term}  spread={spread:.1f}bps  collateral={q.collateral_index}")
         elif isinstance(q, ForwardPointsQuote):
             print(f"  {q.term}  points={q.value}")

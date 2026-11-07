@@ -357,7 +357,7 @@ class Market:
         reset_dates.sort()
         if reset_dates[0] > start_date:
             raise ValueError(
-                f"First reset date must be after start date. Got Start date: {start_date} and min reset date: {reset_dates[0]}."
+                f"First reset date must be on or before the start date. Got Start date: {start_date} and min reset date: {reset_dates[0]}."
             )
         if start_date > end_date:
             raise ValueError(
@@ -383,7 +383,7 @@ class Market:
             # If we have not reach the end of reset dates AND next_t is after end_date, we need to accrue till the end date. Case when custom dates are after accrual period
             if next_t > end_date:
                 next_t = end_date  # As t becomes next_t, loop will end.
-            acrrued_interest = rate.get_accrued_interest(
+            acrrued_interest += rate.get_accrued_interest(
                 notional + acrrued_interest, t, next_t
             )
             reset_counter += 1

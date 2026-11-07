@@ -169,8 +169,8 @@ class NSSCurve(Curve):
     ) -> float | np.ndarray:
         rates_obj = self.get_forward_rates(start_dates, end_dates, rate_convention or NSS_RATE_CONVENTION)
         if isinstance(rates_obj, list):
-            return np.array([r.rate_value for r in rates_obj])
-        return rates_obj.rate_value
+            return np.array([r.rate for r in rates_obj])
+        return rates_obj.rate
 
     # ── Interest ─────────────────────────────────────────────────────────────
 

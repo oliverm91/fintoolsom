@@ -86,11 +86,11 @@ class NelsonSiegelSvensson:
             return sum((ns_pvs - mkt_pvs) ** 2)
 
         if initial_guess is None:
-            self.b0 = sum([irr.rate_value for _, irr in bonds_irr_list]) / len(
+            self.b0 = sum([irr.rate for _, irr in bonds_irr_list]) / len(
                 bonds_irr_list
             )
             short_term_yields = [
-                irr.rate_value
+                irr.rate
                 for _, irr in bonds_irr_list[: min(3, len(bonds_irr_list))]
             ]
             self.b1 = sum(short_term_yields) / len(short_term_yields) - self.b0

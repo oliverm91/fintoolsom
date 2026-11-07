@@ -4,6 +4,10 @@ from typing import Self
 
 from holidays import country_holidays, HolidayBase
 
+# Holiday categories added on top of public holidays, per country (ISO code).
+# Bank holidays close the financial markets: CL (31 Dec) and JP (2-3 Jan, 31 Dec).
+_EXTRA_CATEGORIES: dict[str, tuple[str, ...]] = {"CL": ("bank",), "JP": ("bank",)}
+
 
 @dataclass(slots=True)
 class Calendar:
@@ -24,18 +28,14 @@ class Calendar:
             if self.country is None:
                 self._calendar = HolidayBase()
             else:
-                self._extra_categories = ("bank",)
+                self._extra_categories = _EXTRA_CATEGORIES.get(self.country, ())
                 self._calendar = country_holidays(self.country, subdiv=self.subdiv)
                 if self._extra_categories:
-                    original_categories = set(self._calendar.categories)
-                    extra_categories = set(self._extra_categories)
-                    categories = original_categories | extra_categories
-                    try:
-                        self._calendar = country_holidays(
-                            self.country, categories=categories
-                        )
-                    except ValueError:
-                        pass  # country does not support some extra categories; keep base calendar
+                    # Rebuild once with the extra categories, keeping the subdivision.
+                    categories = set(self._calendar.categories) | set(self._extra_categories)
+                    self._calendar = country_holidays(
+                        self.country, subdiv=self.subdiv, categories=categories
+                    )
 
             self._calendar.update(self.custom_holidays)
 

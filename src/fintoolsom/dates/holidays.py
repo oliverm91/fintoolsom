@@ -54,17 +54,21 @@ class MonthDayRule(HolidayRule):
         self.monday_adjustable = monday_adjustable
 
     def get_date(self, year: int) -> date:
+        """Holiday date in `year`.
+
+        With `monday_adjustable` (Chile, Law 19.668): a Tuesday, Wednesday or
+        Thursday holiday moves to the Monday of that week, a Friday one to the
+        following Monday; Saturday, Sunday and Monday stay.
+        """
         t = date(year, self.month, self.day)
         if not self.monday_adjustable:
             return t
-        if self.monday_adjustable:
-            wd = t.weekday()
-            if 1 <= wd <= 3:
-                return t + timedelta(days=4 - wd)
-            elif wd == 4:
-                return t + timedelta(days=3)
-            else:
-                return t
+        wd = t.weekday()
+        if 1 <= wd <= 3:
+            return t - timedelta(days=wd)
+        if wd == 4:
+            return t + timedelta(days=3)
+        return t
 
     def copy(self) -> Self:
         return MonthDayRule(

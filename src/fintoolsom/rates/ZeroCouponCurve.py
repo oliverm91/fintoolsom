@@ -29,7 +29,7 @@ class ZeroCouponCurvePoint:
         return self.copy()
 
     def simple_str(self) -> str:
-        return f"({self.date}|{self.rate.rate_value})"
+        return f"({self.date}|{self.rate.rate})"
 
 
 @dataclass(slots=True)
@@ -129,7 +129,7 @@ class ZeroCouponCurve(Curve):
         if isinstance(bps, np.ndarray):
             bps = float(bps[0])
         for zccp in self.curve_points:
-            zccp.rate.rate_value += bps / 10_000
+            zccp.rate.rate += bps / 10_000
 
         # Copy of a part of self.sort() method. Other lines are not necessary here.
         self.set_df_curve()
@@ -244,9 +244,9 @@ class ZeroCouponCurve(Curve):
         if isinstance(rates_obj, np.ndarray):
             return rates_obj
         elif isinstance(rates_obj, list):
-            return np.array([r.rate_value for r in rates_obj])
+            return np.array([r.rate for r in rates_obj])
         else:
-            return rates_obj.rate_value
+            return rates_obj.rate
 
     def get_zero_rates(self, rate_convention: RateConvention = None) -> list[Rate]:
         if rate_convention is None:
@@ -277,7 +277,7 @@ class ZeroCouponCurve(Curve):
         self, rate_convention: RateConvention = None
     ) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
-        return np.array([r.rate_value for r in rates_obj])
+        return np.array([r.rate for r in rates_obj])
 
     def get_accrued_interest(
         self, notional: float, start_date: date, end_date: date

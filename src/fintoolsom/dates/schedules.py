@@ -118,7 +118,12 @@ class ScheduleGenerator:
 
         # This should make a list so that if stub_first is True then starting_date should end being <= stop_date (final to start). Else it stops being >= stop_date (start to final)
         # Check for EOM adj. If start_date== march/31 and maturity tenor is 3M, maturity will be june/30. If freq is 3M or 1M, last added date back to front will be march/30. It should be adjusted.
-        while (starting_date > stop_date) == (relativedelta_sign == -1):
+        # Backward (stub first) until reaching start_date; forward (stub last) until
+        # reaching umat. An exact hit leaves no stub.
+        def before_stop(d: date) -> bool:
+            return d > stop_date if relativedelta_sign == -1 else d < stop_date
+
+        while before_stop(starting_date):
             starting_date = freq_tenor.get_unadjusted_maturity(
                 starting_date, forward=(1 == relativedelta_sign)
             )
@@ -142,7 +147,7 @@ class ScheduleGenerator:
                             1
                         )  # Removes second date so tenor between u_schedule[0] and u_schedule[1] is long (long_stub)
             else:
-                u_schedule = u_schedule[:-1]  # removes date past umat
+                u_schedule[-1] = umat  # replaces the date past umat by umat itself
                 if (
                     len(u_schedule) > 2
                 ):  # If it is 2. It should be starting_date and umat.
