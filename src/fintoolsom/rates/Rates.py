@@ -119,14 +119,15 @@ class RateConvention:
         )
 
     def __str__(self) -> str:
+        # The conventions are classes: str() of a class ignores its __str__ classmethod.
         return (
-            str(self.interest_convention)
-            + str(self.day_count_convention)
+            self.interest_convention.__str__()
+            + self.day_count_convention.__str__()
             + str(self.time_fraction_base)
         )
 
 
-_RATE_VALUE_DEPRECATION = "Rate.rate is deprecated; use Rate.rate instead."
+_RATE_VALUE_DEPRECATION = "Rate.rate_value is deprecated; use Rate.rate instead."
 
 
 def _warn_rate_value() -> None:

@@ -1,7 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
-from fintoolsom.rates.Rates import RateConvention
 
 from ..dates import AdjustmentDateConventionBase
 from ..dates.time_fractions import TimeFractionBase

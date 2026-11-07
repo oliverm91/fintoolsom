@@ -648,12 +648,131 @@ class Calculator:
         float
             PV of the received leg minus PV of the paid leg, in `currency`.
         """
-        def _pv(leg) -> float:
-            settlement = swap.leg_settlement_currency(leg)
-            pv = Calculator._leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
-            return Calculator._convert(pv, settlement, currency, market)
+        return Calculator.get_leg_pv(swap, swap.receive_leg, market, currency) - Calculator.get_leg_pv(
+            swap, swap.pay_leg, market, currency
+        )
 
-        return _pv(swap.receive_leg) - _pv(swap.pay_leg)
+    @staticmethod
+    def get_leg_pv(swap: Swap, leg, market: Market, currency: Currency) -> float:
+        """PV of one leg of `swap`, in the reporting `currency`.
+
+        The leg settles in :meth:`Swap.leg_settlement_currency` and is discounted
+        under the swap's collateral, as in :meth:`get_swap_mtm`.
+
+        Parameters
+        ----------
+        swap : Swap
+            Swap holding `leg` (settlement and collateral).
+        leg : SwapLeg
+            ``swap.receive_leg`` or ``swap.pay_leg``.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency.
+
+        Returns
+        -------
+        float
+            PV of the unpaid flows, positive for a leg that pays to its holder.
+        """
+        settlement = swap.leg_settlement_currency(leg)
+        pv = Calculator._leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
+        return Calculator._convert(pv, settlement, currency, market)
+
+    @staticmethod
+    def _rate_sensitive_flows(leg, market: Market) -> tuple[list[date], np.ndarray]:
+        """Flows of `leg` that stay fixed under a parallel rate shift, with their dates.
+
+        A fixed leg: all unpaid flows. A floating leg is replaced by its
+        floating-rate-note equivalent: coupons whose rate is already set (fixed
+        term coupons, the running overnight coupon) are kept; from the first
+        unset coupon on, the projected interest and the amortizations are
+        replaced by the residual notional at that coupon's start (the next reset),
+        and only the spread flows remain.
+        """
+        from .swaps.legs import FixedLeg as _FixedLeg, TermRateLeg as _TermRateLeg
+
+        future_payment, flows = Calculator._leg_flows(leg, market)
+        idx = np.where(future_payment)[0]
+        if isinstance(leg, _FixedLeg) or len(idx) == 0:
+            return [leg.payment_dates[i] for i in idx], flows
+
+        if isinstance(leg, _TermRateLeg):
+            is_set = [leg.fixing_dates[i] <= market.t for i in idx]
+        else:
+            is_set = [leg.start_dates[i] <= market.t for i in idx]
+        unset = [k for k, s in enumerate(is_set) if not s]
+        if not unset:
+            return [leg.payment_dates[i] for i in idx], flows
+
+        first = unset[0]
+        dates_out = [leg.payment_dates[i] for i in idx[:first]]
+        flows_out = list(flows[:first])
+        reset = idx[first]
+        dates_out.append(leg.start_dates[reset])
+        flows_out.append(leg.residuals[reset])
+        for i in idx[first:]:
+            dates_out.append(leg.payment_dates[i])
+            flows_out.append(leg.spreads_values[i])
+        return dates_out, np.array(flows_out, dtype=float)
+
+    @staticmethod
+    def get_leg_duration(swap: Swap, leg, market: Market) -> float:
+        """Macaulay duration of one leg of `swap`, in act/365 years.
+
+        ``sum(tau_i * PV_i) / sum(PV_i)`` over the leg's rate-sensitive flows
+        (:meth:`_rate_sensitive_flows`), discounted in the leg currency under the
+        swap collateral. A fixed leg gets its bond-like duration; a floating leg,
+        about the time to its next reset (plus its spread annuity), since its
+        projected coupons move with the curve.
+
+        Parameters
+        ----------
+        swap : Swap
+            Swap holding `leg` (collateral).
+        leg : SwapLeg
+            ``swap.receive_leg`` or ``swap.pay_leg``.
+        market : Market
+            Market at the valuation date.
+
+        Returns
+        -------
+        float
+            Duration in years; 0 for a leg with no unpaid flow.
+        """
+        pay_dates, flows = Calculator._rate_sensitive_flows(leg, market)
+        if not pay_dates:
+            return 0.0
+        dfs = market.get_discount_dfs(leg.currency, pay_dates, swap.collateral_index)
+        pvs = flows * dfs
+        taus = np.array([(d - market.t).days / 365 for d in pay_dates])
+        total = float(np.sum(pvs))
+        return float(np.sum(taus * pvs) / total) if total != 0 else 0.0
+
+    @staticmethod
+    def get_leg_dv01(swap: Swap, leg, market: Market, currency: Currency) -> float:
+        """DV01 estimate of one leg: ``-PV * duration / 10_000``, in `currency`.
+
+        The change of the leg PV for a 1bp parallel rise of its rates. For a leg
+        near par, ``PV ~ notional``, so this is ``-notional * duration / 10_000``.
+
+        Parameters
+        ----------
+        swap : Swap
+            Swap holding `leg`.
+        leg : SwapLeg
+            ``swap.receive_leg`` or ``swap.pay_leg``.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency.
+
+        Returns
+        -------
+        float
+        """
+        pv = Calculator.get_leg_pv(swap, leg, market, currency)
+        return -pv * Calculator.get_leg_duration(swap, leg, market) / 10_000
 
     # --- Dispatcher ---
 

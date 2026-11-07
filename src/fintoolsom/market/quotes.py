@@ -6,7 +6,6 @@ from datetime import date
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from fintoolsom.rates.Rates import Rate, RateConvention
 
 from .conventions import FixedLegSpec, FloatingLegSpec
 from .currencies import Currency, CurrencyPair, FX_Rate

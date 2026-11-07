@@ -142,8 +142,9 @@ class Coupons:
             calculated_residual = sum(
                 [self.coupons[j].amortization for j in range(i, len(self.coupons))]
             )
+            # Remaining amortizations must repay the residual (within 1%), both ways.
             if (
-                round(calculated_residual, 1) / round(self.coupons[i].residual, 1) - 1
+                abs(round(calculated_residual, 1) / round(self.coupons[i].residual, 1) - 1)
                 > 1 / 100
             ):
                 raise ValueError(
@@ -195,7 +196,7 @@ class Coupons:
             n += coupon.amortization
             coupon.residual *= ratio
         if self.check_residuals:
-            if round(float(n), 1) / round(float(notional), 1) - 1 >= 1 / 100:
+            if abs(round(float(n), 1) / round(float(notional), 1) - 1) >= 1 / 100:
                 raise ValueError(
                     f"Could not adjust to notional {notional}. Sum of amortization is {n}."
                 )

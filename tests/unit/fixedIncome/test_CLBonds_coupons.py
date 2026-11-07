@@ -1,23 +1,13 @@
 from datetime import date
 import pytest
-from fintoolsom.fixedIncome import Coupon, Coupons
-from fintoolsom.rates import RateConvention, LinearInterestConvention
-from fintoolsom.dates import Days30EDayCountConvention
+from fintoolsom.fixedIncome import Coupons
+from tests.factories import clbond_factory
 
 
 
 @pytest.fixture
 def sample_coupons() -> Coupons:
-    rate_convention = RateConvention(
-        LinearInterestConvention, Days30EDayCountConvention, 360
-    )
-    return Coupons(
-        [
-            Coupon(0, 2, 100, date(2024, 1, 1), date(2024, 7, 1), rate_convention),
-            Coupon(100, 2, 100, date(2024, 7, 1), date(2025, 1, 1), rate_convention),
-        ],
-        check_residuals=True,
-    )
+    return clbond_factory.two_coupon_coupons()
 
 
 def test_get_remaining_flows_excludes_coupons_ended_on_date(sample_coupons):
