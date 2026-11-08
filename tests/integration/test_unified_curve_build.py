@@ -10,8 +10,9 @@ from datetime import timedelta
 import numpy as np
 import pytest
 
-from fintoolsom.curve_builder import build_curves, builder
-from fintoolsom.curve_builder.builder import InsufficientQuotesError, _CurveBuilder
+from fintoolsom.curve_builder import _solver, build_curves
+from fintoolsom.curve_builder import InsufficientQuotesError
+from fintoolsom.curve_builder.builder import _CurveBuilder
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import CrossCurrencyFloatFloatQuote, Currency, ForwardPointsQuote
 from fintoolsom.rates import InterpolationMethod, ProjectionCurve
@@ -89,13 +90,13 @@ def _assert_same_curves(a, b, rel):
 def _spy_block_sizes(monkeypatch) -> list[int]:
     """Number of unknowns of every root solve the builder runs."""
     sizes: list[int] = []
-    solve = builder._solve_or_rollback
+    solve = _solver._solve_or_rollback
 
     def spy(residual, y0, restore, what):
         sizes.append(len(y0))
         return solve(residual, y0, restore, what)
 
-    monkeypatch.setattr(builder, "_solve_or_rollback", spy)
+    monkeypatch.setattr(_solver, "_solve_or_rollback", spy)
     return sizes
 
 

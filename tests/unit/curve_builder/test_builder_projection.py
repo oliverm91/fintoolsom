@@ -28,7 +28,8 @@ from fintoolsom.rates import (
 from fintoolsom.derivatives.swaps.builders import fixed_leg, term_rate_leg
 from fintoolsom.derivatives.swaps.swaps import Swap
 from fintoolsom.derivatives.calculator import Calculator
-from fintoolsom.curve_builder.builder import _CurveBuilder, InsufficientQuotesError
+from fintoolsom.curve_builder import InsufficientQuotesError
+from fintoolsom.curve_builder.builder import _CurveBuilder
 
 
 
@@ -128,25 +129,6 @@ def test_non_square_projection_raises():
     ]
     with pytest.raises(InsufficientQuotesError):
         _bootstrap_projection(term3m, swaps, market)
-
-
-def test_group_solve_applies_and_rolls_back_a_projection_curve():
-    from fintoolsom.curve_builder.builder import _GroupSolve, _Proj
-
-    market, sofr, term3m, adj = _market_with_sofr_discount()
-    key = _Proj(term3m)
-    knots = [T + _days(2), T + _days(94)]
-    solve = _GroupSolve.from_free_pillars(
-        market, T, InterpolationMethod.LogLinear,
-        fixed_pillars={key: (knots, [0.05])}, free_dates={key: [T + _days(400)]}, free_seed_dfs={key: [0.05]},
-    )
-    assert solve.y0 == [0.05]  # projection unknowns are forward rates, not log(df)
-    solve.apply([0.06])
-    curve = market.projection_curves[term3m]
-    assert list(curve.knot_dates) == [*knots, T + _days(400)]
-    assert list(curve.forward_rates) == pytest.approx([0.05, 0.06])
-    solve.restore()
-    assert term3m not in market.projection_curves
 
 
 def test_projection_index_without_rate_history_cannot_be_anchored():

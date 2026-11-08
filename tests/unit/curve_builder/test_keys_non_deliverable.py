@@ -1,5 +1,5 @@
 import pytest
-from fintoolsom.curve_builder.builder import _curves_needed, _get_maturity, _Proj
+from fintoolsom.curve_builder._keys import _curves_needed, _get_maturity, _Proj
 from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.calculator import Calculator

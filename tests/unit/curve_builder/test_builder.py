@@ -1,10 +1,10 @@
+"""End-to-end behaviour of build_curves and the _CurveBuilder orchestrator."""
 from datetime import date
 import pytest
-from fintoolsom.curve_builder.builder import (
-    InsufficientQuotesError,
-    build_curves,
-    _curves_needed,
-)
+from fintoolsom.curve_builder import InsufficientQuotesError, RepricingError, build_curves
+from fintoolsom.curve_builder._keys import _curves_needed
+from fintoolsom.curve_builder.builder import _CurveBuilder
+from fintoolsom.rates import InterpolationMethod, ProjectionInterpolationMethod
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.market.quotes import ForwardPriceQuote
@@ -87,101 +87,43 @@ def test_curves_needed_forward_quote_does_not_crash_on_missing_collateral_index(
     assert keys == frozenset({Currency.USD, RISKLESS})
 
 
-def _builder(market: Market, quotes=()):
-    from fintoolsom.curve_builder.builder import _CurveBuilder
-    from fintoolsom.rates import InterpolationMethod, ProjectionInterpolationMethod
-
+def _builder(market: Market, quotes=()) -> _CurveBuilder:
     return _CurveBuilder(
         list(quotes), market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
     )
 
 
-def test_forward_seed_is_covered_interest_parity_on_the_strike():
-    # Same setup as the one-forward solve: the CLP seed must already be the solution.
+def _forward_case():
     t, payment_date, spot, usd_df, target_clp_df = date(2024, 1, 2), date(2024, 7, 2), 900.0, 0.98, 0.95
     market = _market(t, spot, usd_df, payment_date)
     quote = ForwardPriceQuote(
         currency_pair=USDCLP, value=spot * usd_df / target_clp_df, is_buy=True,
         payment_date=payment_date, quote_date=t,
     )
+    return market, quote
+
+
+def test_quote_falls_back_to_the_curve_it_can_still_pin():
+    # USD funding (the forward's preferred curve) already covers the maturity: the
+    # forward's pillar goes to the unbuilt CLP curve instead.
+    market, quote = _forward_case()
     builder = _builder(market, [quote])
-    (group,) = builder.groups
-    _, free_dates, seeds = builder._partition_pillars(group, [quote.get_instrument()])
-    assert free_dates == {RISKLESS: [payment_date]}
-    assert seeds[RISKLESS][0] == pytest.approx(target_clp_df, rel=1e-12)
+    assert builder.plan.candidates[quote] == (Currency.USD, RISKLESS)
+    assert builder.plan.assign_pillars([quote.get_instrument()], [builder.plan.candidates[quote]]) == [RISKLESS]
 
 
-def test_fixed_leg_seed_compounds_the_coupons_to_the_leg_end():
-    from types import SimpleNamespace
-    from fintoolsom.rates import Rate, RateConvention
-
-    t = date(2024, 1, 2)
-    starts = [date(2024, 1, 4), date(2024, 7, 4)]
-    ends = [date(2024, 7, 4), date(2025, 1, 6)]
-    rate = Rate(RateConvention(), 0.05)  # annual compounding, act/365
-    leg = SimpleNamespace(coupons=[
-        SimpleNamespace(start_date=s, end_date=e, rate=rate) for s, e in zip(starts, ends)
-    ])
-    z = _builder(Market(t=t, riskless_index=RISKLESS))._fixed_leg_zero(leg)
-    # Spot gap and both coupons at 5% annual over [t, last end]: continuous rate log(1.05).
-    import math
-    assert z == pytest.approx(math.log(1.05), rel=1e-12)
+def test_every_pinning_quote_is_checked_after_the_build():
+    market, quote = _forward_case()
+    builder = _builder(market, [quote])
+    builder.build()
+    assert [i for i, _ in builder._pinning] == [quote.get_instrument()]
 
 
-def test_basis_seed_shifts_the_index_curve_by_the_spread():
-    # CLP leg ICP + s on the CLP funding curve (cancels) vs USD leg SOFR flat on the
-    # unknown USD funding curve: z_USD = z_SOFR - s.
-    import math
-    from types import SimpleNamespace
-    from collections import defaultdict
-    from fintoolsom.rates import Rate, RateConvention
-
-    t, maturity = date(2024, 1, 2), date(2026, 1, 2)
-    sofr = OvernightRateIndex("SOFR", currency=Currency.USD)
-    z_sofr, spread = 0.045, 0.003
-    tau = (maturity - t).days / 365
-    market = Market(
-        t=t, riskless_index=RISKLESS,
-        curves={
-            RISKLESS: ZeroCouponCurve(t, date_dfs=[(maturity, math.exp(-0.06 * tau))]),
-            sofr: ZeroCouponCurve(t, date_dfs=[(maturity, math.exp(-z_sofr * tau))]),
-        },
-    )
-    clp_leg = SimpleNamespace(index=RISKLESS, currency=Currency.CLP, spread=Rate(RateConvention(), spread))
-    usd_leg = SimpleNamespace(index=sofr, currency=Currency.USD, spread=None)
-    swap = SimpleNamespace(receive_leg=clp_leg, pay_leg=usd_leg, leg_settlement_currency=lambda leg: leg.currency)
-    implied = defaultdict(dict)
-    free_dates = {Currency.USD: [maturity]}
-
-    _builder(market)._basis_zero(
-        swap, implied, {Currency.USD: []}, free_dates,
-        lambda curve, _: maturity if curve == Currency.USD else None,
-    )
-    assert implied[Currency.USD][maturity] == pytest.approx(z_sofr - spread, rel=1e-9)
-
-
-def test_short_end_anchor_supports_price_based_overnight_index():
-    # A price-based overnight index (ICP levels) must still anchor the short end, via
-    # OvernightInterestPriceHistory.spot_overnight_rate — not fall back to the flat guess.
-    from fintoolsom.curve_builder.builder import _CurveBuilder
-    from fintoolsom.market import OvernightInterestPriceIndex
-    from fintoolsom.market.index_history import OvernightInterestPriceHistory
-    from fintoolsom.rates import InterpolationMethod, ProjectionInterpolationMethod
-
-    t = date(2024, 1, 4)
-    icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
-    history = OvernightInterestPriceHistory(
-        index=icp,
-        values={date(2024, 1, 2): 100.00, date(2024, 1, 3): 100.01, date(2024, 1, 4): 100.02},
-    )
-    market = Market(t=t, indexes_history={"ICP": history}, riskless_index=icp)
-    builder = _CurveBuilder(
-        [], market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
-    )
-
-    anchor, guess = builder._short_end_anchor(icp)
-    assert anchor is not None  # not the flat-guess fallback
-    anchor_date, df = anchor
-    assert anchor_date == icp.get_maturity(t)  # next business day
-    assert 0.0 < df < 1.0
-    assert guess > 0.0
+def test_a_quote_moved_off_par_after_its_solve_raises():
+    market, quote = _forward_case()
+    builder = _builder(market, [quote])
+    builder.build()
+    # A later solve moving the curve the forward was fitted on: simulate it.
+    market.curves[RISKLESS] = ZeroCouponCurve(market.t, date_dfs=[(date(2024, 7, 2), 0.90)])
+    with pytest.raises(RepricingError, match="no longer reprice"):
+        builder._check_repricing()

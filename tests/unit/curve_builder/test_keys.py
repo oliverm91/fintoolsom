@@ -7,7 +7,7 @@ a discount-curve key; any other floating index is projection-only: it is pinned 
 
 from types import SimpleNamespace
 import pytest
-from fintoolsom.curve_builder.builder import _curves_needed, _Proj
+from fintoolsom.curve_builder._keys import _curves_needed, _Proj
 from tests.factories.swap_factory import CAMARA, ICP, RISKLESS, TAB_3M, Ccy, LegCase, LegKind, SwapCase, SwapStatus, build_swap
 
 

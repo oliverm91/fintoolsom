@@ -7,6 +7,7 @@ cross-currency basis swaps. Unlike the notebook loader, it reads the quoted
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from copy import deepcopy
 from datetime import date
@@ -212,3 +213,94 @@ def term_market(t: date = QUOTE_DATE) -> Market:
     for index, fixing in TERM_FIXINGS.items():
         market.add_index(TermRateHistory(index, {t: Rate(_LIN360, fixing)}))
     return market
+
+
+# ── Par quotes off a known truth market ─────────────────────────────────────
+# Synthetic quotes on any tenor grid, collateral and product mix, each at par on one
+# fixed "truth" market (the real quotes plus the term-index quotes): every set built
+# from them is consistent, so a correct build reprices all of them.
+
+_TRUTH: list[Market] = []
+
+
+def truth_market() -> Market:
+    """Market built from the real quotes plus the TERM3M IRS and TERM6M basis quotes (cached)."""
+    if not _TRUTH:
+        real = load_quotes()
+        irs = term_irs_quotes(real)
+        market = term_market()
+        build_curves(real + irs + term_basis_quotes(irs), market)
+        _TRUTH.append(market)
+    return _TRUTH[0]
+
+
+def quote_mtm(quote: InstrumentQuote, market: Market) -> float:
+    """MTM of `quote`'s instrument in CLP."""
+    from fintoolsom.derivatives.calculator import Calculator
+
+    fx = isinstance(quote, (CrossCurrencyFloatFloatQuote, ForwardPointsQuote))
+    return Calculator.valuate(quote.get_instrument(market) if fx else quote.get_instrument(), market, Currency.CLP)
+
+
+def _term(label: str, adj) -> Term:
+    return Term(int(label[:-1]), TermUnit[label[-1]], adj)
+
+
+def _at_par(make, x0: float):
+    """``make(x)`` at the x where its MTM on the truth market is 0 (MTM is linear in x)."""
+    truth, x = truth_market(), x0
+    for _ in range(2):
+        v0, v1 = quote_mtm(make(x), truth), quote_mtm(make(x + 1e-4), truth)
+        x -= v0 * 1e-4 / (v1 - v0)
+    return make(x)
+
+
+def _with_rate(spec, x):
+    return dataclasses.replace(spec, rate=Rate(spec.rate.rate_convention, x))
+
+
+def _with_spread(spec, x):
+    return dataclasses.replace(spec, spread=Rate(spec.spread.rate_convention, x))
+
+
+def _template(kind: str):
+    real = load_quotes()
+    if kind in ("clp_irs", "usd_ois"):
+        ccy = Currency.CLP if kind == "clp_irs" else Currency.USD
+        return next(q for q in real if isinstance(q, IRSQuote) and q.fixed_leg.currency == ccy and str(q.term) == "2Y")
+    if kind == "xccy":
+        q = next(q for q in real if isinstance(q, CrossCurrencyFloatFloatQuote) and str(q.term) == "2Y")
+        return dataclasses.replace(q, pay_leg=_with_spread(q.pay_leg, 0.0))  # spread on the ICP leg instead
+    if kind == "term_irs":
+        return term_irs_quotes(real, tenors=["2Y"])[0]
+    return term_basis_quotes(term_irs_quotes(real, tenors=["2Y"]))[0]
+
+
+def par_quotes(kind: str, terms: list[str], collateral=SOFR) -> list[InstrumentQuote]:
+    """Par quotes of one product on `terms`, priced off :func:`truth_market`.
+
+    Parameters
+    ----------
+    kind : str
+        'clp_irs' (CLP fixed vs ICP), 'usd_ois' (USD fixed vs SOFR), 'xccy' (receive
+        ICP + spread / pay SOFR), 'term_irs' (fixed vs TERM3M) or 'term_basis'
+        (TERM6M vs TERM3M + spread).
+    terms : list of str
+        Tenors such as '18M' or '5Y'.
+    collateral : Index or None, optional
+        CSA collateral of the IRS, OIS and XCCY quotes (SOFR by default; None: no CSA).
+    """
+    tmpl = _template(kind)
+    out = []
+    for label in terms:
+        if kind in ("term_irs", "term_basis"):
+            base = dataclasses.replace(tmpl, term=_term(label, US_ADJ))
+        else:
+            base = dataclasses.replace(tmpl, term=_term(label, tmpl.adj_convention), collateral_index=collateral)
+        if kind == "xccy":
+            out.append(_at_par(lambda x, b=base: dataclasses.replace(b, receive_leg=_with_spread(b.receive_leg, x)), 0.0))
+        elif kind == "term_basis":
+            out.append(_at_par(lambda x, b=base: dataclasses.replace(b, pay_leg=_with_spread(b.pay_leg, x)), 8e-4))
+        else:
+            out.append(_at_par(lambda x, b=base: dataclasses.replace(b, fixed_leg=_with_rate(b.fixed_leg, x)), 0.05))
+    return out

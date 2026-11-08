@@ -191,10 +191,13 @@ class Market:
         -------
         numpy.ndarray
         """
+        collateral_ccy = getattr(collateral, "currency", None)
+        if collateral is not None and collateral_ccy == currency:
+            # funding(ccy) / funding(ccy) cancels: the collateral curve discounts directly.
+            return self.get_curve(collateral).get_dfs(dates)
         dfs = self.get_funding_curve(currency).get_dfs(dates)
         if collateral is None:
             return dfs
-        collateral_ccy = collateral.currency  # type: ignore[attr-defined]
         return (
             dfs
             * self.get_curve(collateral).get_dfs(dates)
