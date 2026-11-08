@@ -20,7 +20,6 @@ from ..market.quotes import InstrumentQuote, CrossCurrencyFloatFloatQuote, Forwa
 from ..derivatives.swaps import Swap, FixedLeg, FloatingLeg
 from ..derivatives.forwards import Forward, NDF
 from ..rates import (
-    Curve,
     ZeroCouponCurve,
     InterpolationMethod,
     ProjectionCurve,
@@ -32,6 +31,9 @@ from ..rates import (
 # is zero in any currency, so the choice is arbitrary — CLP by convention.
 _REPORT_CURRENCY = Currency(CurrencyName.CLP)
 _DAY_BASE = 365
+# A date-by-date bootstrap is accepted when every instrument reprices to this
+# (report currency); otherwise the group falls back to one joint solve.
+_SWEEP_TOL = 1e-6
 # Quote types whose instrument needs the market FX to fully materialise: XCCY (to size
 # matched leg notionals) and forward-points (to build the outright strike off the spot).
 _FX_DEPENDENT = (CrossCurrencyFloatFloatQuote, ForwardPointsQuote)
@@ -39,6 +41,23 @@ _FX_DEPENDENT = (CrossCurrencyFloatFloatQuote, ForwardPointsQuote)
 
 class InsufficientQuotesError(Exception):
     """A curve group is under-determined: more free pillars than instruments."""
+
+
+@dataclass(frozen=True)
+class _Proj:
+    """Solve key of the independent forward curve of a projection-only index.
+
+    Discount curves are keyed by Index or Currency (``market.curves``); a
+    projection-only index (e.g. a term index such as TAB 3M) is solved under this
+    key and stored in ``market.projection_curves``. Both kinds go through the same
+    scheduler, so a projection curve can depend on, and be needed by, other curves.
+    """
+
+    index: Index
+
+    @property
+    def currency(self) -> Currency:
+        return self.index.currency
 
 
 def _instrument_of(quote: InstrumentQuote, market: Market):
@@ -92,37 +111,6 @@ def _discount_indexes(quote: InstrumentQuote, riskless_index: Index, extra: froz
     return {riskless_index, *extra, *([collateral] if collateral is not None else [])}
 
 
-def _projection_indexes(
-    quote: InstrumentQuote, riskless_index: Index, discount_indexes: frozenset[Index] = frozenset()
-) -> set[Index]:
-    """Floating-leg indexes of `quote` that are projection-only.
-
-    They get an independent ProjectionCurve, never an entry in ``market.curves``.
-
-    Parameters
-    ----------
-    quote : InstrumentQuote
-        Quote considered.
-    riskless_index : Index
-        Market funding index.
-    discount_indexes : frozenset of Index, optional
-        Other discount indexes, see :func:`_discount_indexes`.
-
-    Returns
-    -------
-    set of Index
-    """
-    instrument = quote.get_instrument()
-    if not isinstance(instrument, Swap):
-        return set()
-    discounting = _discount_indexes(quote, riskless_index, discount_indexes)
-    return {
-        leg.index
-        for leg in (instrument.receive_leg, instrument.pay_leg)
-        if isinstance(leg, FloatingLeg) and leg.index not in discounting
-    }
-
-
 def _curve_keys(
     quote: InstrumentQuote,
     riskless_index: Index,
@@ -130,15 +118,15 @@ def _curve_keys(
     cancel_collateral: bool,
     discount_indexes: frozenset[Index] = frozenset(),
 ) -> frozenset[CurveKey]:
-    """Discount-curve keys `quote` relates to.
+    """Curve keys `quote` relates to.
 
     Each leg discounts in its settlement currency (the swap payment currency for a
     non-deliverable leg in another currency, else its own). Under collateral C the
     discount factor is ``funding(ccy) * curve(C) / funding(C.ccy)``; when
     ``ccy == C.ccy`` the funding factors cancel. A non-deliverable leg also reads
     the funding curves of both currencies to project its FX fixings. A floating
-    index is a key only when its curve discounts (projection-only indexes are
-    solved by :meth:`_CurveBuilder._bootstrap_projection_curve`).
+    index is its own key when its curve discounts, else ``_Proj(index)``: a
+    projection-only forward curve.
 
     Parameters
     ----------
@@ -175,8 +163,8 @@ def _curve_keys(
             if pay_ccy != leg.currency:  # FX fixings projected on both funding curves
                 keys.add(funding_key(riskless_index, leg.currency))
                 keys.add(funding_key(riskless_index, pay_ccy))
-            if isinstance(leg, FloatingLeg) and leg.index in discounting:
-                keys.add(leg.index)
+            if isinstance(leg, FloatingLeg):
+                keys.add(leg.index if leg.index in discounting else _Proj(leg.index))
     else:  # Forward / NDF (a UF forward is an NDF on CLF/CLP: CLP and CLF funding)
         pair = instrument.currency_pair
         for currency in (pair.base_currency, pair.quote_currency):
@@ -253,7 +241,7 @@ def _get_maturity(curve_key: CurveKey, instrument, riskless_index: Index) -> dat
                 candidates.add(max(leg.payment_dates))
             if pay_ccy != leg.currency and funding_key(riskless_index, leg.currency) == curve_key:
                 candidates.add(max(leg.fx_fixing_dates))
-            if isinstance(leg, FloatingLeg) and leg.index == curve_key:
+            if isinstance(leg, FloatingLeg) and curve_key in (leg.index, _Proj(leg.index)):
                 candidates.add(max(leg.end_dates))
     elif isinstance(instrument, Forward):
         pair = instrument.currency_pair
@@ -318,12 +306,13 @@ def _solve_or_rollback(
 
 @dataclass
 class _GroupSolve:
-    """Free-pillar layout of one discount-curve group solve.
+    """Free-pillar layout of one curve-group solve.
 
-    Holds the free dates of each curve, their slice of the ``log(df)`` unknown
-    vector, the fixed pillars, and an atomic apply / rollback over
-    ``market.curves``. Solving in ``log(df)`` removes the collinearity between
-    near-1 short dfs and small long dfs.
+    Holds the free dates of each curve, their slice of the unknown vector, the
+    fixed pillars, and an atomic apply / rollback over ``market.curves`` and
+    ``market.projection_curves``. Discount curves are solved in ``log(df)``, which
+    removes the collinearity between near-1 short dfs and small long dfs;
+    projection curves (``_Proj`` keys) in the forward rate of each new segment.
 
     Parameters
     ----------
@@ -334,23 +323,27 @@ class _GroupSolve:
     method : InterpolationMethod
         Interpolation of the rebuilt curves.
     fixed_pillars : dict
-        Curve key to fixed ``(date, df)`` pillars.
+        Curve key to fixed ``(date, df)`` pillars; for a ``_Proj`` key, its fixed
+        ``(knot_dates, forward_rates)`` (spot anchor and already solved segments).
     free_dates : dict
         Curve key to free pillar dates.
     curve_slice : dict
         Curve key to its ``(start, end)`` slice of the unknown vector.
     y0 : list of float
-        Initial ``log(df)`` guesses.
+        Initial guesses: ``log(df)``, or forward rates for ``_Proj`` keys.
+    projection_method : ProjectionInterpolationMethod
+        Interpolation of the rebuilt projection curves.
     """
 
     market: Market
     t: date
     method: InterpolationMethod
-    fixed_pillars: dict[CurveKey, list[tuple[date, float]]]
-    free_dates: dict[CurveKey, list[date]]
-    curve_slice: dict[CurveKey, tuple[int, int]]
+    fixed_pillars: dict
+    free_dates: dict
+    curve_slice: dict
     y0: list[float]
-    _snapshot: dict[CurveKey, Curve | None] = field(init=False, default=None)
+    projection_method: ProjectionInterpolationMethod = ProjectionInterpolationMethod.PiecewiseConstant
+    _snapshot: dict = field(init=False, default=None)
 
     @classmethod
     def from_free_pillars(
@@ -358,9 +351,10 @@ class _GroupSolve:
         market: Market,
         t: date,
         method: InterpolationMethod,
-        fixed_pillars: dict[CurveKey, list[tuple[date, float]]],
-        free_dates: dict[CurveKey, list[date]],
-        free_seed_dfs: dict[CurveKey, list[float]],
+        fixed_pillars: dict,
+        free_dates: dict,
+        free_seed_dfs: dict,
+        projection_method: ProjectionInterpolationMethod = ProjectionInterpolationMethod.PiecewiseConstant,
     ) -> _GroupSolve:
         """Lay out the unknown vector from the free dates and their seed dfs.
 
@@ -369,7 +363,9 @@ class _GroupSolve:
         market, t, method, fixed_pillars, free_dates
             As in the class.
         free_seed_dfs : dict
-            Curve key to initial dfs of its free dates.
+            Curve key to initial dfs of its free dates (forward rates for ``_Proj``).
+        projection_method : ProjectionInterpolationMethod
+            As in the class.
 
         Returns
         -------
@@ -380,12 +376,23 @@ class _GroupSolve:
         start = 0
         for curve, dates in free_dates.items():
             curve_slice[curve] = (start, start + len(dates))
-            y0 += [math.log(df) for df in free_seed_dfs[curve]]
+            # Discount curves: log(df) unknowns; projection curves: segment forwards.
+            seeds = free_seed_dfs[curve]
+            y0 += list(seeds) if isinstance(curve, _Proj) else [math.log(df) for df in seeds]
             start += len(dates)
-        return cls(market, t, method, fixed_pillars, free_dates, curve_slice, y0)
+        return cls(market, t, method, fixed_pillars, free_dates, curve_slice, y0, projection_method)
+
+    def _store(self, curve) -> dict:
+        """Market dict holding `curve`."""
+        return self.market.projection_curves if isinstance(curve, _Proj) else self.market.curves
+
+    @staticmethod
+    def _key(curve):
+        """Key of `curve` in its market dict."""
+        return curve.index if isinstance(curve, _Proj) else curve
 
     def __post_init__(self):
-        self._snapshot = {c: self.market.curves.get(c) for c in self.curve_slice}
+        self._snapshot = {c: self._store(c).get(self._key(c)) for c in self.curve_slice}
 
     @property
     def n_unknowns(self) -> int:
@@ -393,8 +400,15 @@ class _GroupSolve:
         return len(self.y0)
 
     def apply(self, y) -> None:
-        """Rebuild every group curve from fixed pillars plus ``exp(y)`` free dfs."""
+        """Rebuild every group curve from its fixed pillars plus the unknowns `y`."""
         for curve, (s, e) in self.curve_slice.items():
+            if isinstance(curve, _Proj):
+                knots, forwards = self.fixed_pillars[curve]
+                self.market.projection_curves[curve.index] = ProjectionCurve(
+                    self.t, [*knots, *self.free_dates[curve]], [*forwards, *(float(v) for v in y[s:e])],
+                    self.projection_method, _DAY_BASE,
+                )
+                continue
             free = zip(self.free_dates[curve], (math.exp(v) for v in y[s:e]))
             date_dfs = sorted([*self.fixed_pillars[curve], *free], key=lambda p: p[0])
             self.market.curves[curve] = ZeroCouponCurve(
@@ -404,17 +418,19 @@ class _GroupSolve:
     def restore(self) -> None:
         """Put back the curves as they were before the solve."""
         for curve, previous in self._snapshot.items():
-            _set_or_pop(self.market.curves, curve, previous)
+            _set_or_pop(self._store(curve), self._key(curve), previous)
 
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
 
 class _CurveBuilder:
-    """One curve build: discount curves first, then projection curves.
+    """One curve build: every discount and projection curve, by one scheduler.
 
-    Discount curves are solved into ``market.curves`` by a fixpoint scheduler, then
-    a ProjectionCurve is bootstrapped for each projection-only index. Every index
-    ends with exactly one curve. Mutates `market` in place.
+    Quotes are grouped by the curves they pin; a fixpoint scheduler solves each
+    group once the curves it only reads exist. Discount curves go to
+    ``market.curves``, the forward curves of projection-only indexes to
+    ``market.projection_curves``. Every index ends with exactly one curve. Mutates
+    `market` in place.
 
     Parameters
     ----------
@@ -432,6 +448,10 @@ class _CurveBuilder:
     ValueError
         If the market has no `riskless_index`.
     """
+
+    # Bootstrap each group date by date when its interpolation allows it; False always
+    # runs one joint solve per group (the reference the date-by-date sweep must match).
+    date_by_date: bool = True
 
     def __init__(
         self,
@@ -455,30 +475,16 @@ class _CurveBuilder:
         self.discount_indexes: frozenset[Index] = frozenset(
             {riskless_index, *collaterals, *(k for k in market.curves if isinstance(k, Index))}
         )
-        # Quotes on a projection-only index are solved in the projection phase, after
-        # every discount curve exists; all others form the discount-curve groups.
-        self.projection_quotes = {
-            q: _projection_indexes(q, riskless_index, self.discount_indexes) for q in quotes
-        }
-        discount_quotes = [q for q in quotes if not self.projection_quotes[q]]
-
         # pinned  (_curves_needed): the curves each quote determines — groups instruments.
         # touched (_curves_touched): every curve that must exist to value it — orders the build.
-        self.pinned = {q: _curves_needed(q, riskless_index, self.discount_indexes) for q in discount_quotes}
-        self.touched = {q: _curves_touched(q, riskless_index, self.discount_indexes) for q in discount_quotes}
-        self.groups: dict[frozenset[CurveKey], list[InstrumentQuote]] = defaultdict(list)
-        for q in discount_quotes:
+        self.pinned = {q: _curves_needed(q, riskless_index, self.discount_indexes) for q in quotes}
+        self.touched = {q: _curves_touched(q, riskless_index, self.discount_indexes) for q in quotes}
+        self.groups: dict[frozenset, list[InstrumentQuote]] = defaultdict(list)
+        for q in quotes:
             self.groups[self.pinned[q]].append(q)
 
     def build(self) -> None:
-        """Solve the discount curves, then the projection curves."""
-        self._solve_discount_curves()
-        self._register_projection_curves()
-
-    # -- discount curves ------------------------------------------------------
-
-    def _solve_discount_curves(self) -> None:
-        """Solve every discount-curve group with a fixpoint scheduler.
+        """Solve every curve group with a fixpoint scheduler.
 
         Each pass solves the groups that are valuable and square (smaller first),
         building the curves other groups depend on.
@@ -501,12 +507,12 @@ class _CurveBuilder:
                     f"the available quotes: {[set(g) for g in pending]}."
                 )
 
-    def _attempt(self, group: frozenset[CurveKey]) -> str:
+    def _attempt(self, group: frozenset) -> str:
         """Try to solve `group` against the current market curves.
 
         Parameters
         ----------
-        group : frozenset of Index or Currency
+        group : frozenset of Index, Currency or _Proj
             Curves the group pins.
 
         Returns
@@ -520,34 +526,110 @@ class _CurveBuilder:
         # Valuable? Every curve these instruments touch but do NOT pin must already
         # exist, else valuation would hit a missing curve.
         group_touched = set().union(*(self.touched[q] for q in self.groups[group]))
-        if not (group_touched - group) <= set(self.market.curves):
+        if not (group_touched - group) <= self._existing_keys():
             return "defer"
+        return self._solve_group(group, instruments)
 
+    def _existing_keys(self) -> set:
+        """Keys of every curve already in the market (projection curves as _Proj)."""
+        return {*self.market.curves, *(_Proj(i) for i in self.market.projection_curves)}
+
+    def _solve_group(self, group, instruments, report_currency: Currency = _REPORT_CURRENCY) -> str:
+        """Solve the free pillars of `group` so `instruments` reprice.
+
+        Parameters
+        ----------
+        group : frozenset of Index, Currency or _Proj
+            Curves the group pins.
+        instruments : list
+            Instruments of the group.
+        report_currency : Currency, optional
+            Currency the residuals are valued in.
+
+        Returns
+        -------
+        str
+            As :meth:`_attempt`.
+        """
         fixed_pillars, free_dates, free_seed_dfs = self._partition_pillars(group, instruments)
         if not free_dates:
             return "nothing"  # every pillar this group needs already exists.
+        if not set(group) <= self._existing_keys() | set(free_dates):
+            return "defer"  # a curve it reads but gives no pillar to is not built yet.
 
         residual_instruments = self._residual_instruments(instruments, free_dates)
         solve = _GroupSolve.from_free_pillars(
-            self.market, self.t, self.discount_method, fixed_pillars, free_dates, free_seed_dfs
+            self.market, self.t, self.discount_method, fixed_pillars, free_dates, free_seed_dfs,
+            self.projection_method,
         )
         if solve.n_unknowns != len(residual_instruments):
             # Not square yet (a curve it reads as fixed may still be unbuilt) — defer;
             # if nothing ever makes it square the scheduler raises InsufficientQuotesError.
             return "defer"
 
-        def residual(y) -> list[float]:
-            solve.apply(y)
-            return [
-                Calculator.valuate(instr, self.market, _REPORT_CURRENCY)
-                for instr in residual_instruments
-            ]
-
-        result = _solve_or_rollback(
-            residual, solve.y0, solve.restore, f"Curve solve for group {set(free_dates)}"
+        y = self._solve_unknowns(
+            solve, residual_instruments, free_dates, report_currency, f"Curve solve for group {set(free_dates)}"
         )
-        solve.apply(result.x)  # root's last f-eval is not guaranteed to be at result.x.
+        solve.apply(y)  # root's last f-eval is not guaranteed to be at the solution.
         return "solved"
+
+    def _solve_unknowns(self, solve, instruments, free_dates, report_currency, what) -> np.ndarray:
+        """Bootstrap the free pillars date by date, falling back to one joint solve.
+
+        With local interpolation (log-linear dfs, piecewise-constant forwards) an
+        instrument depends only on pillars up to its own last free pillar, so
+        ascending dates give small square blocks, one per pillar date. The joint
+        solve runs, warm-started from the sweep, when the interpolation is not local,
+        a block is not square, or the sweep leaves a residual above ``_SWEEP_TOL``.
+
+        Parameters
+        ----------
+        solve : _GroupSolve
+            Layout of the unknowns.
+        instruments : list
+            Residual instruments, one per unknown.
+        free_dates : dict
+            Curve key to free pillar dates.
+        report_currency : Currency
+            Currency the residuals are valued in.
+        what : str
+            Description used in error messages.
+
+        Returns
+        -------
+        numpy.ndarray
+            Solved unknowns.
+        """
+        def values(instrs, y) -> list[float]:
+            solve.apply(y)
+            return [Calculator.valuate(i, self.market, report_currency) for i in instrs]
+
+        unknowns_at: dict[date, list[int]] = defaultdict(list)
+        for curve, (start, _) in solve.curve_slice.items():
+            for k, d in enumerate(free_dates[curve]):
+                unknowns_at[d].append(start + k)
+        instruments_at: dict[date, list] = defaultdict(list)
+        for instr in instruments:
+            last = max(
+                m for c, dates in free_dates.items()
+                if (m := _get_maturity(c, instr, self.riskless_index)) is not None and m in dates
+            )
+            instruments_at[last].append(instr)
+
+        y = np.array(solve.y0, dtype=float)
+        local = self.discount_method is InterpolationMethod.LogLinear  # forwards: piecewise-constant
+        if self.date_by_date and local and all(len(instruments_at[d]) == len(pos) for d, pos in unknowns_at.items()):
+            for d in sorted(unknowns_at):
+                pos, block = unknowns_at[d], instruments_at[d]
+
+                def block_residual(x, pos=pos, block=block):
+                    y[pos] = x
+                    return values(block, y)
+
+                y[pos] = _solve_or_rollback(block_residual, list(y[pos]), solve.restore, what).x
+            if max(abs(v) for v in values(instruments, y)) <= _SWEEP_TOL:
+                return y
+        return _solve_or_rollback(lambda v: values(instruments, v), list(y), solve.restore, what).x
 
     def _partition_pillars(self, group, instruments):
         """Split each pinned curve's maturities into fixed and free pillars.
@@ -580,6 +662,17 @@ class _CurveBuilder:
             if not maturities:
                 continue
 
+            if isinstance(curve, _Proj):
+                built = self.market.projection_curves.get(curve.index)
+                if built is None:
+                    knots, forwards = self._projection_anchor(curve.index)
+                else:
+                    knots, forwards = list(built.knot_dates), [float(f) for f in built.forward_rates]
+                fixed_pillars[curve] = (knots, forwards)
+                if new_dates := sorted(m for m in maturities if m > knots[-1]):
+                    free_dates[curve] = new_dates
+                continue
+
             if curve not in self.market.curves:
                 # New curve: every maturity is free, after the overnight anchor if any.
                 anchor, flat_guess[curve] = self._short_end_anchor(curve)
@@ -596,7 +689,11 @@ class _CurveBuilder:
                     free_dates[curve] = new_dates
             # else: a non-pillar curve (e.g. NSSCurve) is defined at every date and has
             # no pillars to extend — it is read as fixed, never solved.
-        free_seed_dfs = self._seed_free_pillars(instruments, fixed_pillars, free_dates, flat_guess)
+        discount_free = {c: d for c, d in free_dates.items() if not isinstance(c, _Proj)}
+        free_seed_dfs = self._seed_free_pillars(instruments, fixed_pillars, discount_free, flat_guess)
+        for curve, dates in free_dates.items():
+            if isinstance(curve, _Proj):  # seed new segments flat at the last known forward
+                free_seed_dfs[curve] = [fixed_pillars[curve][1][-1]] * len(dates)
         return fixed_pillars, free_dates, free_seed_dfs
 
     # -- seeds ----------------------------------------------------------------
@@ -858,92 +955,43 @@ class _CurveBuilder:
 
     # -- projection curves ----------------------------------------------------
 
-    def _register_projection_curves(self) -> None:
-        """Bootstrap a ProjectionCurve for each projection-only index.
+    def _projection_anchor(self, index: Index) -> tuple[list[date], list[float]]:
+        """Fixed spot segment ``[t + spot_lag, maturity]`` of a new projection curve.
 
-        A discount index needs none: ``Market.get_projection`` views its discount
-        curve as forwards.
-        """
-        swaps_by_index: dict[Index, list[Swap]] = defaultdict(list)
-        for q, indexes in self.projection_quotes.items():
-            instrument = _instrument_of(q, self.market)
-            for index in indexes:
-                swaps_by_index[index].append(instrument)
-
-        for index, swaps in swaps_by_index.items():
-            self._bootstrap_projection_curve(index, swaps)
-
-    def _bootstrap_projection_curve(self, index: Index, swaps: list[Swap]) -> None:
-        """Bootstrap the independent forward curve of `index` so each swap reprices.
-
-        Discount curves already exist, so the unknowns are the forward rates of
-        `index`: one knot per swap maturity after a fixed spot anchor taken from the
-        index history.
-
-        Parameters
-        ----------
-        index : Index
-            Projection-only index.
-        swaps : list of Swap
-            Swaps on `index`, one per distinct maturity.
+        Its forward comes from the index fixing of the curve date.
 
         Raises
         ------
         InsufficientQuotesError
-            If the index has no rate history, or the maturities are not distinct and
-            beyond the spot anchor.
+            If the index has no rate history.
         """
-        market, t = self.market, self.t
-        anchor_start = index.calendar.add_business_days(t, getattr(index, "spot_lag", 0))
+        anchor_start = index.calendar.add_business_days(self.t, getattr(index, "spot_lag", 0))
         anchor_end = index.get_maturity(anchor_start)
-
-        history = market.get_index(index.name)
+        try:
+            history = self.market.get_index(index.name)
+        except KeyError:
+            history = None
         if not hasattr(history, "get_rate"):
             raise InsufficientQuotesError(
                 f"Projection index '{index.name}' has no rate history to anchor its short end."
             )
-        wf_anchor = history.get_rate(t).get_wealth_factor(anchor_start, anchor_end)  # type: ignore[attr-defined]
-        f_anchor = math.log(wf_anchor) / ((anchor_end - anchor_start).days / _DAY_BASE)
+        wf = history.get_rate(self.t).get_wealth_factor(anchor_start, anchor_end)  # type: ignore[union-attr]
+        return [anchor_start, anchor_end], [math.log(wf) / ((anchor_end - anchor_start).days / _DAY_BASE)]
 
-        def leg_maturity(swap: Swap) -> date:
-            return max(
-                max(leg.end_dates)
-                for leg in (swap.receive_leg, swap.pay_leg)
-                if isinstance(leg, FloatingLeg) and leg.index == index
-            )
+    def _bootstrap_projection_curve(self, index: Index, swaps: list[Swap]) -> None:
+        """Solve the projection curve of `index` alone from `swaps`.
 
-        dated = sorted(((leg_maturity(s), s) for s in swaps), key=lambda ms: ms[0])
-        maturities = [m for m, _ in dated]
-        ordered_swaps = [s for _, s in dated]
-        # One distinct maturity beyond the spot anchor per instrument → square.
-        if len(set(maturities)) != len(maturities) or any(m <= anchor_end for m in maturities):
+        The discount curves the swaps read must already be in the market.
+
+        Raises
+        ------
+        InsufficientQuotesError
+            If the swaps do not pin one distinct new segment each.
+        """
+        if self._solve_group(frozenset({_Proj(index)}), swaps, index.currency) != "solved":
             raise InsufficientQuotesError(
-                f"Projection curve for '{index.name}' is under-determined: it needs one "
-                f"distinct maturity beyond the spot end {anchor_end} per instrument; got "
-                f"maturities {maturities}."
+                f"Projection curve for '{index.name}' is under-determined by its swaps."
             )
-
-        knots = [anchor_start, anchor_end, *maturities]
-        previous = market.projection_curves.get(index)
-
-        def apply(free_forwards) -> None:
-            forwards = [f_anchor, *(float(v) for v in free_forwards)]
-            market.set_projection(index, ProjectionCurve(t, knots, forwards, self.projection_method, _DAY_BASE))
-
-        def residual(free_forwards) -> list[float]:
-            apply(free_forwards)
-            return [
-                Calculator.get_swap_mtm(s, market, index.currency)
-                for s in ordered_swaps
-            ]
-
-        result = _solve_or_rollback(
-            residual,
-            [f_anchor] * len(ordered_swaps),
-            lambda: _set_or_pop(market.projection_curves, index, previous),
-            f"Projection solve for '{index.name}'",
-        )
-        apply(result.x)
 
 
 def build_curves(

@@ -19,7 +19,7 @@ class ProjectionInterpolationMethod(Enum):
 
     Only ``PiecewiseConstant`` is implemented. Later, forward-space methods
     (piecewise-linear, cubic, monotone-convex) plug in behind the same
-    ``get_accrual`` seam and only change the integrator (§4 of the design)."""
+    ``get_accrual`` seam and only change the integrator."""
 
     PiecewiseConstant = 1
 
@@ -161,7 +161,7 @@ class ProjectionCurve:
 class DiscountProjectionView:
     """Thin forward *view* over a discount :class:`Curve`, used when an
     overnight index is self-discounted (OIS) so its projection and discount curves
-    are the **same** unknown (§7 of the design). It exposes the exact same seam as
+    are the **same** unknown. It exposes the exact same seam as
     :class:`ProjectionCurve` (``get_accrual`` / ``get_wealth_factor`` / ``pseudo_df``)
     but reads the wealth/discount factors straight off the underlying curve — no
     separate pillars — so callers never branch on aliased vs independent."""

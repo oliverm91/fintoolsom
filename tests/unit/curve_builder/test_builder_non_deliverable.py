@@ -1,5 +1,5 @@
 import pytest
-from fintoolsom.curve_builder.builder import _curves_needed, _get_maturity
+from fintoolsom.curve_builder.builder import _curves_needed, _get_maturity, _Proj
 from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.calculator import Calculator
@@ -64,7 +64,8 @@ def _fixed_float_quote(index: object = SOFR, **kw) -> CrossCurrencyFixedFloatQuo
 def test_non_deliverable_quote_pins_usd_funding_up_to_its_last_fx_fixing():
     nd = _fixed_float_quote(is_deliverable=False, payment_currency=CLP, fx_fixing_lag=2)
     dl = _fixed_float_quote()
-    assert _curves_needed(nd, RISKLESS) == _curves_needed(dl, RISKLESS) == frozenset({RISKLESS, USD})
+    # SOFR is not a collateral here: projection-only, pinned as its own forward curve.
+    assert _curves_needed(nd, RISKLESS) == _curves_needed(dl, RISKLESS) == frozenset({RISKLESS, USD, _Proj(SOFR)})
 
     nd_swap, dl_swap = nd.get_instrument(), dl.get_instrument()
     usd_leg = nd_swap.pay_leg

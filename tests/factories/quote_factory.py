@@ -23,6 +23,7 @@ from fintoolsom.market import (
     FloatingLegSpec,
     ForwardPointsQuote,
     InstrumentQuote,
+    IRBasisQuote,
     IRSQuote,
     Market,
     OvernightInterestPriceIndex,
@@ -31,7 +32,8 @@ from fintoolsom.market import (
     QuotedSide,
 )
 from fintoolsom.market.currencies import FX_Rate, FX_RateData
-from fintoolsom.market.index_history import OvernightInterestPriceHistory, OvernightRateHistory
+from fintoolsom.market.index import TermRateIndex
+from fintoolsom.market.index_history import OvernightInterestPriceHistory, OvernightRateHistory, TermRateHistory
 from fintoolsom.market.localities import Locality
 from fintoolsom.rates import CompoundedInterestConvention, LinearInterestConvention, Rate, RateConvention
 
@@ -152,3 +154,61 @@ def built_market(quotes: list[InstrumentQuote] | None = None) -> tuple[Market, l
     market = quote_market(quotes[0].quote_date)
     build_curves(quotes, market)
     return market, quotes
+
+
+# ── Synthetic USD term-index quotes on top of the real set ──────────────────
+# Projection-only indexes (no quote is collateralised in them): fixed vs TERM3M IRS
+# and TERM6M vs TERM3M basis swaps, all SOFR-collateralised. The basis swaps need
+# the TERM3M curve first, then pin TERM6M.
+
+US_ADJ = ModifiedFollowingConvention("US")
+TERM3M = TermRateIndex("TERM3M", currency=Currency.USD, term=Term(3, TermUnit.M, US_ADJ))
+TERM6M = TermRateIndex("TERM6M", currency=Currency.USD, term=Term(6, TermUnit.M, US_ADJ))
+TERM_FIXINGS = {TERM3M: 0.0540, TERM6M: 0.0545}
+TERM_TENORS = ["12M", "18M", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
+_LIN360 = RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
+
+
+def _term_float(index: TermRateIndex, frequency: PaymentFrequency, spread: float = 0.0) -> FloatingLegSpec:
+    return FloatingLegSpec(
+        currency=Currency.USD, payment_frequency=frequency, adj_convention=US_ADJ,
+        time_fraction=TF_Actual360(), index=index, spread=Rate(_LIN360, spread),
+    )
+
+
+def term_irs_quotes(base: list[InstrumentQuote], spread_bps: float = 15.0, tenors=TERM_TENORS) -> list[IRSQuote]:
+    """Receive-fixed vs TERM3M IRS; fixed = the SOFR OIS rate of the tenor + `spread_bps`."""
+    ois = {str(q.term): q for q in base if isinstance(q, IRSQuote) and q.fixed_leg.currency == Currency.USD}
+    return [
+        IRSQuote(
+            quoted_side=QuotedSide.RECEIVE, term=ois[tenor].term, quote_date=QUOTE_DATE,
+            adj_convention=US_ADJ, collateral_index=SOFR,
+            fixed_leg=FixedLegSpec(
+                currency=Currency.USD, payment_frequency=PaymentFrequency.QUARTERLY, adj_convention=US_ADJ,
+                time_fraction=TF_Actual360(), rate=Rate(_LIN360, ois[tenor].fixed_leg.rate.rate + spread_bps / 1e4),
+            ),
+            floating_leg=_term_float(TERM3M, PaymentFrequency.QUARTERLY),
+        )
+        for tenor in tenors
+    ]
+
+
+def term_basis_quotes(irs: list[IRSQuote], spread_bps: float = 8.0) -> list[IRBasisQuote]:
+    """Receive TERM6M / pay TERM3M + `spread_bps`, one per tenor of `irs`."""
+    return [
+        IRBasisQuote(
+            quoted_side=QuotedSide.RECEIVE, term=q.term, quote_date=QUOTE_DATE,
+            adj_convention=US_ADJ, collateral_index=SOFR,
+            receive_leg=_term_float(TERM6M, PaymentFrequency.SEMIANNUAL),
+            pay_leg=_term_float(TERM3M, PaymentFrequency.QUARTERLY, spread_bps / 1e4),
+        )
+        for q in irs
+    ]
+
+
+def term_market(t: date = QUOTE_DATE) -> Market:
+    """:func:`quote_market` plus today's TERM3M and TERM6M fixings."""
+    market = quote_market(t)
+    for index, fixing in TERM_FIXINGS.items():
+        market.add_index(TermRateHistory(index, {t: Rate(_LIN360, fixing)}))
+    return market
