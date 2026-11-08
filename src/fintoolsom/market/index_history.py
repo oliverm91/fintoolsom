@@ -3,8 +3,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
 
-from ..rates import Rate, RateConvention, LinearInterestConvention
-from ..dates import Calendar, ActualDayCountConvention
+from ..rates import Rate
+from ..dates import Calendar
 from .currencies import Currency
 from .index import (
     Index,
@@ -343,7 +343,7 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
 
     def spot_overnight_rate(self, t: date) -> Rate:
         # No forward level is published, so estimate the overnight rate from the most
-        # recent realised one-business-day level ratio (act/360 linear, as elsewhere).
+        # recent realised one-business-day level ratio, in the index's rate convention.
         known = sorted(d for d in self.values if d <= t)
         if len(known) < 2:
             raise KeyError(
@@ -351,6 +351,7 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
             )
         prev, last = known[-2], known[-1]
         wf = self.values[last] / self.values[prev]
-        year_fraction = (last - prev).days / 360
-        rate_value = float(LinearInterestConvention.get_rate_from_wf(wf, year_fraction))
-        return Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 360), rate_value)
+        rc = self.index.rate_convention
+        year_fraction = rc.day_count_convention.get_time_fraction(prev, last, rc.time_fraction_base)
+        rate_value = float(rc.interest_convention.get_rate_from_wf(wf, year_fraction))
+        return Rate(rc.copy(), rate_value)

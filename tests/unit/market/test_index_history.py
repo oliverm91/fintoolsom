@@ -16,7 +16,7 @@ from fintoolsom.market import (
     PriceHistory,
     OvernightInterestPriceHistory,
 )
-from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
+from fintoolsom.rates import CompoundedInterestConvention, Rate, RateConvention, LinearInterestConvention
 from fintoolsom.dates import ActualDayCountConvention, Calendar, ModifiedFollowingConvention
 
 
@@ -133,13 +133,34 @@ def test_overnight_price_history_accrued_interest():
 
 def test_overnight_price_history_spot_overnight_rate_uses_last_realized_step():
     # A price index has no forward level, so it anchors from the most recent realised
-    # one-business-day level ratio (D1→D2 here; D1 was gap-filled), act/360 linear.
+    # one-business-day level ratio (D1→D2 here; D1 was gap-filled), in the index's
+    # convention: ICP's default, linear act/360.
     h = OvernightInterestPriceHistory(index=ICP, values={D0: 35000.0, D2: 35014.0})
     r = h.spot_overnight_rate(D2)
     wf = h.values[D2] / h.values[D1]
     expected = (wf - 1) / ((D2 - D1).days / 360)
     assert r.rate == pytest.approx(expected)
     assert r.rate_convention.time_fraction_base == 360
+
+
+def test_overnight_price_history_spot_overnight_rate_uses_the_index_convention():
+    act365 = RateConvention(CompoundedInterestConvention, ActualDayCountConvention, 365)
+    index = OvernightInterestPriceIndex("IDX", currency=Currency.CLP, rate_convention=act365)
+    h = OvernightInterestPriceHistory(index=index, values={D0: 35000.0, D1: 35004.0})
+    r = h.spot_overnight_rate(D1)
+    assert r.rate == pytest.approx((35004.0 / 35000.0) ** (365 / (D1 - D0).days) - 1)
+    assert r.rate_convention.interest_convention is CompoundedInterestConvention
+    assert r.rate_convention is not index.rate_convention  # a copy: the index is not exposed
+    # The implied rate reprices the realised growth.
+    assert float(r.get_wealth_factor(D0, D1)) == pytest.approx(35004.0 / 35000.0, rel=1e-14)
+
+
+def test_price_index_defaults_to_linear_act_360():
+    rc = ICP.rate_convention
+    assert (rc.interest_convention, rc.day_count_convention, rc.time_fraction_base) == (
+        LinearInterestConvention, ActualDayCountConvention, 360
+    )
+    assert OvernightInterestPriceIndex("X").rate_convention is not rc  # no shared default
 
 
 def test_overnight_price_history_spot_overnight_rate_needs_two_levels():

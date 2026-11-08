@@ -6,7 +6,8 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from .currencies import Currency
-from ..dates import Calendar, get_calendar
+from ..dates import ActualDayCountConvention, Calendar, get_calendar
+from ..rates import LinearInterestConvention, RateConvention
 
 if TYPE_CHECKING:
     from ..dates.term import Term
@@ -143,13 +144,25 @@ class PriceIndex(Index):
     """
 
 
+def _linear_act_360() -> RateConvention:
+    return RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
+
+
 @dataclass(eq=False)
 class InterestPriceIndex(PriceIndex, InterestIndex):
     """Price index whose level ratio accrues interest (e.g. the Chilean ICP).
 
     Both a price index and interest-bearing. Abstract by convention: use
     :class:`OvernightInterestPriceIndex`.
+
+    Parameters
+    ----------
+    rate_convention : RateConvention, default linear Act/360
+        Convention in which a rate implied from two levels is quoted
+        (keyword-only). ICP's own convention is the default.
     """
+
+    rate_convention: RateConvention = field(default_factory=_linear_act_360, kw_only=True)
 
 
 @dataclass(eq=False)
