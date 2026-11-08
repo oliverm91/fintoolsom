@@ -43,5 +43,5 @@ get_irr(flows, dates, valuation_date=date(2024, 1, 2), pv=100.0)  # about 0.05
   read curves from a `Market` directly.
 - **Strings, not `Currency`.** Currencies are plain strings here (stored
   lowercased), not `fintoolsom.market.Currency` objects.
-- **Calibration input.** `models.NelsonSiegelSvensson.calibrate` takes a list of
+- **Calibration input.** `models.NelsonSiegelSvensson.calibrate_from_bonds` takes a list of
   `(CLBond, Rate)` pairs.

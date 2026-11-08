@@ -25,26 +25,41 @@ def _zero_coupon_bond(
     return CLBond(coupons=Coupons([coupon]), currency="clp", notional=notional)
 
 
-def test_nss_calibrate_fits_market_irrs():
-    calibration_date = date(2024, 7, 8)
+def _bonds_irr_list(calibration_date: date) -> list[tuple[CLBond, Rate]]:
     convention = RateConvention(
         CompoundedInterestConvention, ActualDayCountConvention, 365
     )
-    bonds_irr_list = [
+    return [
         (_zero_coupon_bond(calibration_date, 1), Rate(convention, 0.05)),
         (_zero_coupon_bond(calibration_date, 3), Rate(convention, 0.052)),
         (_zero_coupon_bond(calibration_date, 5), Rate(convention, 0.054)),
         (_zero_coupon_bond(calibration_date, 10), Rate(convention, 0.056)),
     ]
 
+
+def test_nss_calibrate_from_bonds_fits_market_irrs():
+    calibration_date = date(2024, 7, 8)
+    bonds_irr_list = _bonds_irr_list(calibration_date)
+
     nss = NelsonSiegelSvensson()
-    nss.calibrate(calibration_date, bonds_irr_list)
+    nss.calibrate_from_bonds(calibration_date, bonds_irr_list)
 
     for bond, irr in bonds_irr_list:
         market_pv = bond.get_present_value(calibration_date, irr)
         t = (bond.get_maturity_date() - calibration_date).days / 365
         ns_pv = bond.coupons.get_flows()[0] * nss.get_df(t)
         assert ns_pv == pytest.approx(market_pv, rel=0.02)
+
+
+def test_calibrate_is_a_deprecated_alias_of_calibrate_from_bonds():
+    calibration_date = date(2024, 7, 8)
+    expected = NelsonSiegelSvensson()
+    expected.calibrate_from_bonds(calibration_date, _bonds_irr_list(calibration_date))
+
+    nss = NelsonSiegelSvensson()
+    with pytest.warns(DeprecationWarning, match="use calibrate_from_bonds instead"):
+        nss.calibrate(calibration_date, _bonds_irr_list(calibration_date))
+    assert nss.get_params() == pytest.approx(expected.get_params())
 
 
 def test_nss_calibrate_from_curve_fits_zero_rates():

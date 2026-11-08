@@ -1,3 +1,4 @@
+import warnings
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -92,6 +93,21 @@ class NelsonSiegelSvensson:
         return nss_df(t, *self.get_params())
 
     def calibrate(
+        self,
+        calibration_date: date,
+        bonds_irr_list: list[tuple[CLBond, Rate]],
+        initial_guess: Optional[list[float]] = None,
+        method: Optional[str] = "powell",
+    ):
+        """Deprecated alias of :meth:`calibrate_from_bonds`."""
+        warnings.warn(
+            "NelsonSiegelSvensson.calibrate is deprecated; use calibrate_from_bonds instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.calibrate_from_bonds(calibration_date, bonds_irr_list, initial_guess, method)
+
+    def calibrate_from_bonds(
         self,
         calibration_date: date,
         bonds_irr_list: list[tuple[CLBond, Rate]],

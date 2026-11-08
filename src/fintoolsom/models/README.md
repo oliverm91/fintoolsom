@@ -21,7 +21,7 @@ two decays enter differently: `λ` is a time scale (`t/λ`), while `μ` is a rat
 | `nss_rate(t, b0..b3, λ, μ)` | Zero rate at `t` |
 | `nss_df(t, b0..b3, λ, μ)` | Discount factor `exp(−r(t)·t)`, 1 at `t = 0` |
 | `NelsonSiegelSvensson` | Holds the parameters: `get_rate(t)`, `get_df(t)`, `get_params()` |
-| `.calibrate(date, [(CLBond, Rate), ...])` | Fits the parameters to bond IRRs |
+| `.calibrate_from_bonds(date, [(CLBond, Rate), ...])` | Fits the parameters to bond IRRs (`calibrate` is a deprecated alias) |
 | `.calibrate_from_curve(zcc)` | Fits the parameters to a `ZeroCouponCurve` |
 
 The functions take year fractions (floats or numpy arrays), not dates, so they can
@@ -47,5 +47,5 @@ nss_df(t, *params)
 - **No market curve.** To use a fitted curve in a `Market`, sample `nss_df` on
   pillar dates and build a `rates.DiscountCurve` or `rates.IndexCurve` from them.
   `NelsonSiegelSvensson.get_curve` was removed together with `NSSCurve`.
-- **Optimiser.** `calibrate` uses `scipy.optimize.minimize` (`powell` by default);
+- **Optimiser.** `calibrate_from_bonds` uses `scipy.optimize.minimize` (`powell` by default);
   pass `initial_guess` to start from a previous fit.
