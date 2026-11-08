@@ -59,6 +59,8 @@ packages = ["src/fintoolsom"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# CLBonds / NelsonSiegelSvensson tests still use the legacy ZeroCouponCurve on purpose.
+filterwarnings = ["ignore:ZeroCouponCurve is legacy:DeprecationWarning"]
 
 [tool.coverage.run]
 source = ["fintoolsom"]

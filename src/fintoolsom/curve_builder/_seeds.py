@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
@@ -15,13 +16,51 @@ from fintoolsom.rates.Rates import RateConvention  # type: ignore[import-untyped
 
 from ..derivatives.forwards import Forward
 from ..derivatives.swaps import FixedLeg, FloatingLeg, Swap
-from ..market.index import Index
+from ..market.index import Index, OvernightIndex
 from ..market.index_history import OvernightHistory
-from ..market.market import CurveKey, Market, funding_key
+from ..market.market import Market
+from ..rates import DAY_BASE, IndexCurve, Rate
 from ._errors import InsufficientQuotesError
-from ._keys import _curve_currency, _get_maturity
+from ._keys import CurveKey, _built, _curve_currency, _funding_key, _get_maturity
 
-_DAY_BASE = 365
+_DAY_BASE = DAY_BASE
+# Flat seed rate (annual compounding) of a new curve with no anchor.
+_FLAT_GUESS = 0.04
+
+
+@dataclass
+class _IndexFixed:
+    """Fixed part of an index curve being solved: its knots, forwards and spot rate.
+
+    ``knots[0]`` is the effective date; ``forwards`` has one entry per segment
+    (none for a new overnight curve, whose first segment is the first unknown).
+    """
+
+    knots: list[date]
+    forwards: list[float]
+    spot_rate: Rate | None = None
+
+    def knot_dfs(self, t: date, index: Index) -> list[tuple[date, float]]:
+        """``(knot, df)`` of the fixed knots after `t`."""
+        if len(self.knots) >= 2:
+            dfs = IndexCurve(t, index, self.knots, self.forwards, self.spot_rate).get_dfs(self.knots)
+            return [(k, float(df)) for k, df in zip(self.knots, dfs) if k > t]
+        eff = self.knots[0]
+        if eff <= t:
+            return []
+        df = 1.0 if self.spot_rate is None else float(self.spot_rate.get_discount_factor(t, eff))
+        return [(eff, df)]
+
+    def forwards_to(self, t: date, index: Index, dates: list[date], dfs: list[float]) -> list[float]:
+        """Segment forwards, from the last fixed knot through `dates`, matching `dfs`."""
+        points = self.knot_dfs(t, index)
+        prev_d, prev_log = self.knots[-1], math.log(points[-1][1]) if points else 0.0
+        out = []
+        for d, df in zip(dates, dfs):
+            log_df = math.log(df)
+            out.append((prev_log - log_df) / ((d - prev_d).days / _DAY_BASE))
+            prev_d, prev_log = d, log_df
+        return out
 
 
 class _Seeder:
@@ -31,14 +70,14 @@ class _Seeder:
     ----------
     market : Market
         Market being built.
-    riskless_index : Index
+    risk_free_index : Index
         Market funding index.
     """
 
-    def __init__(self, market: Market, riskless_index: Index):
+    def __init__(self, market: Market, risk_free_index: Index):
         self.market = market
         self.t = market.t
-        self.riskless_index = riskless_index
+        self.risk_free_index = risk_free_index
 
     def tau(self, d: date) -> float:
         """Act/365 year fraction from the curve date to `d`."""
@@ -60,7 +99,7 @@ class _Seeder:
         4. Other pillars: zero rate interpolated linearly in time between the
            known points of the same curve (short-end anchor, existing pillars,
            steps 1-3), flat beyond them; the flat guess of
-           :meth:`short_end_anchor` when the curve has no point at all; an existing
+           :meth:`index_anchor` (or 4%) when the curve has no point at all; an existing
            curve's own extrapolation when it is being extended.
 
         The seed only needs to be close: the solve then reprices exactly.
@@ -70,7 +109,7 @@ class _Seeder:
         instruments : list
             The group's instruments.
         fixed_pillars : dict
-            Curve key to fixed ``(date, df)`` pillars.
+            Curve key to fixed ``(date, df)`` points (an index curve: at its knots).
         free_dates : dict
             Curve key to free pillar dates.
         flat_guess : dict
@@ -84,7 +123,7 @@ class _Seeder:
         implied: dict[CurveKey, dict[date, float]] = defaultdict(dict)
 
         def pinned_free_date(curve, instr) -> date | None:
-            m = _get_maturity(curve, instr, self.riskless_index)
+            m = _get_maturity(curve, instr, self.risk_free_index)
             return m if m is not None and m in free_dates[curve] and m not in implied[curve] else None
 
         # 1. Fixed legs.
@@ -113,7 +152,7 @@ class _Seeder:
         # 4. Fill the rest.
         seeds: dict[CurveKey, list[float]] = {}
         for curve, dates in free_dates.items():
-            built = self.market.curves.get(curve)
+            built = _built(self.market, curve)
             points = self.zero_points(curve, implied, fixed_pillars)
             dfs = []
             for d in dates:
@@ -157,8 +196,8 @@ class _Seeder:
         """
         pair = fwd.currency_pair
         keys = (
-            funding_key(self.riskless_index, pair.base_currency),
-            funding_key(self.riskless_index, pair.quote_currency),
+            _funding_key(self.risk_free_index, pair.base_currency),
+            _funding_key(self.risk_free_index, pair.quote_currency),
         )
         known_until = self.market.get_fx_known_until(pair)
         try:
@@ -189,7 +228,7 @@ class _Seeder:
         spreads = 0.0
         for leg, side in ((swap.receive_leg, 1.0), (swap.pay_leg, -1.0)):
             coef[leg.index] += side
-            coef[funding_key(self.riskless_index, swap.leg_settlement_currency(leg))] -= side
+            coef[_funding_key(self.risk_free_index, swap.leg_settlement_currency(leg))] -= side
             spreads += side * getattr(leg.spread, "rate", 0.0)
         unknowns = [
             (curve, m)
@@ -212,16 +251,15 @@ class _Seeder:
 
     def log_df_change(self, curve, start, end, implied, fixed_pillars, free_dates) -> float | None:
         """``log(df(end) / df(start))`` on a curve already known, else None."""
-        if curve in self.market.curves and curve not in free_dates:
-            built = self.market.curves[curve]
+        built = _built(self.market, curve)
+        if built is not None and curve not in free_dates:
             return math.log(built.get_df(end)) - math.log(built.get_df(start))
         if curve in free_dates and implied[curve]:  # being solved: use its step-1 seeds.
             taus, zs = zip(*self.zero_points(curve, implied, fixed_pillars))
             def log_df(d: date) -> float:
                 return -float(np.interp(self.tau(d), taus, zs)) * self.tau(d)
             return log_df(end) - log_df(start)
-        if curve in self.market.curves:  # extended curve with nothing implied: extrapolate.
-            built = self.market.curves[curve]
+        if built is not None:  # extended curve with nothing implied: extrapolate.
             return math.log(built.get_df(end)) - math.log(built.get_df(start))
         return None
 
@@ -235,61 +273,45 @@ class _Seeder:
         points.update({self.tau(d): z for d, z in implied[curve].items()})
         return sorted(points.items())
 
-    def short_end_anchor(self, curve: CurveKey) -> tuple[tuple[date, float] | None, float]:
-        """Fixed short-end pillar and rate guess for a new curve.
+    def index_anchor(self, index: Index) -> tuple[_IndexFixed, float]:
+        """Fixed short end of a new index curve, and a flat rate to seed it with.
 
-        An overnight index curve is anchored at its next business day with the
-        rate from :meth:`OvernightHistory.spot_overnight_rate` (today's fixing, or
-        the latest realised one-day rate of a price index such as ICP).
-
-        Parameters
-        ----------
-        curve : Index or Currency
-            New curve.
-
-        Returns
-        -------
-        anchor : tuple of (date, float) or None
-            Fixed pillar; None when the curve has no overnight history.
-        guess : float
-            Flat rate used to seed the free pillars (4% without an anchor).
-        """
-        if isinstance(curve, Index):
-            curve_index = curve
-            try:
-                history = self.market.get_index(curve_index.name)
-                if isinstance(history, OvernightHistory):
-                    rate = history.spot_overnight_rate(self.t).copy()
-                    anchor_date = curve_index.get_maturity(self.t)  # overnight: next business day.
-                    rate.convert_rate_convention(RateConvention(), self.t, anchor_date)
-                    return (anchor_date, self.seed_df(rate.rate, anchor_date)), rate.rate
-            except KeyError:
-                pass
-        return None, 0.04
-
-    def seed_df(self, rate: float, maturity: date) -> float:
-        """Annually compounded act/365 discount factor at `rate` to `maturity`."""
-        return (1 + rate) ** (-(maturity - self.t).days / _DAY_BASE)
-
-    def projection_anchor(self, index: Index) -> tuple[list[date], list[float]]:
-        """Fixed spot segment ``[t + spot_lag, maturity]`` of a new projection curve.
-
-        Its forward comes from the index fixing of the curve date.
+        * Overnight history: effective date the next business day, today's overnight
+          rate (:meth:`OvernightHistory.spot_overnight_rate`) as the spot rate.
+        * Term-rate history: effective date ``t + spot_lag`` and a first segment
+          ``[effective, effective + term]`` fixed at today's fixing; no spot rate.
+        * No usable history, overnight index: effective date the curve date.
 
         Raises
         ------
         InsufficientQuotesError
-            If the index has no rate history.
+            For a non-overnight index with no rate history.
         """
-        anchor_start = index.calendar.add_business_days(self.t, getattr(index, "spot_lag", 0))
-        anchor_end = index.get_maturity(anchor_start)
         try:
             history = self.market.get_index(index.name)
         except KeyError:
             history = None
-        if not hasattr(history, "get_rate"):
-            raise InsufficientQuotesError(
-                f"Projection index '{index.name}' has no rate history to anchor its short end."
-            )
-        wf = history.get_rate(self.t).get_wealth_factor(anchor_start, anchor_end)  # type: ignore[union-attr]
-        return [anchor_start, anchor_end], [math.log(wf) / ((anchor_end - anchor_start).days / _DAY_BASE)]
+        if isinstance(history, OvernightHistory):
+            try:
+                spot = history.spot_overnight_rate(self.t).copy()
+            except KeyError:  # not enough fixings to imply today's rate
+                return _IndexFixed([self.t], []), _FLAT_GUESS
+            effective = index.get_maturity(self.t)  # overnight: next business day.
+            annual = spot.copy()
+            annual.convert_rate_convention(RateConvention(), self.t, effective)
+            return _IndexFixed([effective], [], spot), annual.rate
+        if hasattr(history, "get_rate"):
+            effective = index.calendar.add_business_days(self.t, getattr(index, "spot_lag", 0))
+            end = index.get_maturity(effective)
+            wf = history.get_rate(self.t).get_wealth_factor(effective, end)  # type: ignore[union-attr]
+            forward = math.log(wf) / ((end - effective).days / _DAY_BASE)
+            return _IndexFixed([effective, end], [forward]), forward
+        if isinstance(index, OvernightIndex):
+            return _IndexFixed([self.t], []), _FLAT_GUESS
+        raise InsufficientQuotesError(
+            f"Index '{index.name}' has no rate history to anchor its short end."
+        )
+
+    def seed_df(self, rate: float, maturity: date) -> float:
+        """Annually compounded act/365 discount factor at `rate` to `maturity`."""
+        return (1 + rate) ** (-(maturity - self.t).days / _DAY_BASE)

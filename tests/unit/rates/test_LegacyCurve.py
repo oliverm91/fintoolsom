@@ -7,11 +7,10 @@ import pytest
 from fintoolsom.dates import ActualDayCountConvention
 from fintoolsom.rates import (
     CompoundedInterestConvention,
-    Curve,
     ExponentialInterestConvention,
     InterpolationMethod,
     LinearInterestConvention,
-    NSSCurve,
+    LegacyCurve,
     Rate,
     RateConvention,
     ZeroCouponCurve,
@@ -21,8 +20,6 @@ from fintoolsom.rates import (
 
 T0 = date(2024, 7, 8)
 
-
-NSS_PARAMS = (0.05, -0.01, 0.01, 0.005, 1.5, 0.3)
 
 
 COMPOUNDED = RateConvention(CompoundedInterestConvention, ActualDayCountConvention, 365)
@@ -52,12 +49,11 @@ def _zcc(method: InterpolationMethod) -> ZeroCouponCurve:
 BACKENDS = {
     "zcc_loglinear": lambda: _zcc(InterpolationMethod.LogLinear),
     "zcc_hermite": lambda: _zcc(InterpolationMethod.HermiteCubicSpline),
-    "nss": lambda: NSSCurve(T0, *NSS_PARAMS),
 }
 
 
 @pytest.fixture(params=list(BACKENDS), ids=list(BACKENDS))
-def curve(request) -> Curve:
+def curve(request) -> LegacyCurve:
     return BACKENDS[request.param]()
 
 
@@ -71,19 +67,18 @@ EXPECTED_INTERFACE = {
 
 
 def test_every_curve_query_is_abstract():
-    assert Curve.__abstractmethods__ == EXPECTED_INTERFACE
+    assert LegacyCurve.__abstractmethods__ == EXPECTED_INTERFACE
 
 
 def test_backend_missing_a_method_cannot_be_instantiated():
     namespace = {name: (lambda self, *a, **k: None) for name in EXPECTED_INTERFACE - {"get_aged_curve"}}
-    Incomplete = type("Incomplete", (Curve,), namespace)
+    Incomplete = type("Incomplete", (LegacyCurve,), namespace)
     with pytest.raises(TypeError, match="get_aged_curve"):
         Incomplete()
 
 
-@pytest.mark.parametrize("backend", [ZeroCouponCurve, NSSCurve])
-def test_backends_implement_the_whole_interface(backend):
-    assert issubclass(backend, Curve) and not inspect.isabstract(backend)
+def test_zero_coupon_curve_implements_the_whole_interface():
+    assert issubclass(ZeroCouponCurve, LegacyCurve) and not inspect.isabstract(ZeroCouponCurve)
 
 
 def test_scalar_and_vector_queries_agree(curve):

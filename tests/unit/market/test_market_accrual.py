@@ -98,9 +98,9 @@ def test_unknown_rate_series_raises():
 
 # ── Construction and lookups ────────────────────────────────────────────────
 
-def test_riskless_index_needs_a_currency():
+def test_risk_free_index_needs_a_currency():
     with pytest.raises(ValueError):
-        Market(t=date(2024, 1, 1), riskless_index=OvernightRateIndex("X"))
+        Market(t=date(2024, 1, 1), risk_free_index=OvernightRateIndex("X"))
 
 
 def test_fx_history_keys_must_match_their_data():
@@ -114,18 +114,16 @@ def test_fx_history_keys_must_match_their_data():
 def test_missing_lookups_raise_key_errors():
     market = Market(t=date(2024, 1, 1))
     index = OvernightRateIndex("SOFR", currency=Currency.USD)
-    with pytest.raises(KeyError, match="No discount curve for index"):
-        market.get_curve(index)
-    with pytest.raises(KeyError, match="currency"):
-        market.get_curve(Currency.USD)
-    with pytest.raises(KeyError):
-        market.get_projection(index)
+    with pytest.raises(KeyError, match="No index curve for 'SOFR'"):
+        market.get_index_curve(index)
+    with pytest.raises(ValueError, match="no risk_free_index"):
+        market.get_discount_curve(Currency.USD)
+    with pytest.raises(KeyError, match="No discount curve 'CLP_SOFR'"):
+        market.get_discount_curve(Currency.CLP, risk_free_index=index)
     with pytest.raises(KeyError):
         market.get_volatility_surface(CurrencyPair(Currency.USD, Currency.CLP))
     with pytest.raises(KeyError):
         market.get_fx_rate(date(2024, 1, 1), CurrencyPair(Currency.USD, Currency.CLP))
-    with pytest.raises(ValueError):
-        market.funding_key(Currency.USD)
 
 
 def test_fx_rate_of_a_currency_against_itself_is_one():

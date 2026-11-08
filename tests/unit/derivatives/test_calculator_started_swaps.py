@@ -23,7 +23,6 @@ from tests.factories.swap_factory import (
     FLOAT_INDEXES,
     ICP,
     NOTIONALS,
-    RISKLESS,
     SPREAD,
     VAL_DATE,
     Ccy,
@@ -76,8 +75,7 @@ def _pv(leg: SwapLeg, market) -> float:
 
 def _discount_df(market, currency: Currency, d: date) -> float:
     """Uncollateralised DF: the riskless (ICP) curve for CLP, the currency curve otherwise."""
-    key = RISKLESS if currency == RISKLESS.currency else currency
-    return market.curves[key].get_df(d)
+    return market.get_discount_curve(currency).get_df(d)
 
 
 def _spread_flow(notional: float, start: date, end: date) -> float:
@@ -142,7 +140,7 @@ def test_running_floating_coupon_combines_realised_and_projected(case, market):
         interest = notional * r.rate * (c.end_date - c.start_date).days / 360
     else:
         realised_wf = _realised_wf(market, index, c.start_date, VAL_DATE)
-        curve = market.curves[index]
+        curve = market.get_index_curve(index)
         projected_wf = curve.get_df(VAL_DATE) / curve.get_df(c.end_date)
         interest = notional * (realised_wf * projected_wf - 1)
 

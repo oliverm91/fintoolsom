@@ -94,25 +94,17 @@ def test_get_rate_and_get_df_scalar_vs_array_shapes():
     assert df_scalar == pytest.approx(np.exp(-rate_scalar * 1.0))
 
 
-def test_get_curve_is_consistent_with_calibrated_model_df():
-    calibration_date = date(2024, 7, 8)
-    convention = RateConvention(
-        CompoundedInterestConvention, ActualDayCountConvention, 365
-    )
-    bonds_irr_list = [
-        (_zero_coupon_bond(calibration_date, 1), Rate(convention, 0.05)),
-        (_zero_coupon_bond(calibration_date, 3), Rate(convention, 0.052)),
-        (_zero_coupon_bond(calibration_date, 5), Rate(convention, 0.054)),
-        (_zero_coupon_bond(calibration_date, 10), Rate(convention, 0.056)),
-    ]
-
-    nss = NelsonSiegelSvensson()
-    curve = nss.get_curve(calibration_date, bonds_irr_list)
-
-    maturity = bonds_irr_list[0][0].get_maturity_date()
-    t = (maturity - calibration_date).days / 365
-    assert curve.get_df(maturity) == pytest.approx(nss.get_df(t), abs=1e-15)  # closed form: exact
-
+def test_zero_rate_is_linear_in_the_betas_with_finite_limits_at_zero():
+    params = (0.05, -0.01, 0.01, 0.005, 1.5, 0.3)
+    model = NelsonSiegelSvensson()
+    model.b0, model.b1, model.b2, model.b3, model.lambda_, model.mu_ = params
+    t = np.array([0.0, 0.1, 1.0, 5.0, 20.0])
+    design = NelsonSiegelSvensson._get_design_matrix(t, *params[4:])
+    assert model.get_rate(t) == pytest.approx(design @ np.array(params[:4]), abs=1e-15)
+    # t=0 limits: short rate b0 + b1 and df = 1, no 0/0.
+    assert model.get_rate(0.0) == pytest.approx(params[0] + params[1], abs=1e-15)
+    assert model.get_df(0.0) == 1.0
+    assert model.get_df(t[1:]) == pytest.approx(np.exp(-model.get_rate(t[1:]) * t[1:]), rel=1e-15)
 
 def test_design_matrix_is_finite_at_calibration_bounds():
     t = np.array([0.25, 1, 5, 10, 20])

@@ -8,8 +8,62 @@ import numpy as np
 from ..fixedIncome.CLBonds import CLBond
 from ..rates.Rates import Rate, RateConvention, ExponentialInterestConvention
 from ..rates.ZeroCouponCurve import ZeroCouponCurve
-from ..rates.NSSCurve import NSSCurve, nss_df, nss_factors, nss_rate
 from ..dates import ActualDayCountConvention
+
+
+# ── NSS formulas ──
+
+def nss_factors(t: float | np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
+    """Factor loadings [level, slope, curvature, 2nd curvature] at year fraction `t`.
+
+    Shape (4,) for scalar `t`, (n, 4) for an array: the zero rate is linear in the
+    betas, r(t) = nss_factors(t) @ [b0, b1, b2, b3]. At t=0 the formulas are 0/0; the
+    limits [1, 1, 0, 0] are used (r(0) = b0 + b1, the instantaneous short rate)."""
+    t = np.asarray(t, dtype=float)
+    at_zero = t == 0.0
+    safe_t = np.where(at_zero, 1.0, t)
+    lambda_t = safe_t / lambda_
+    mu_t = mu_ * safe_t
+    e_minus_lambda_t = np.exp(-lambda_t)
+    e_minus_mu_t = np.exp(-mu_t)
+    slope = (1 - e_minus_lambda_t) / lambda_t
+    curvature = slope - e_minus_lambda_t
+    curvature_2 = (1 - e_minus_mu_t) / mu_t - e_minus_mu_t
+    return np.stack(
+        (
+            np.ones_like(t),
+            np.where(at_zero, 1.0, slope),
+            np.where(at_zero, 0.0, curvature),
+            np.where(at_zero, 0.0, curvature_2),
+        ),
+        axis=-1,
+    )
+
+
+def nss_rate(
+    t: float | np.ndarray,
+    beta0: float,
+    beta1: float,
+    beta2: float,
+    beta3: float,
+    lambda_: float,
+    mu_: float,
+) -> float | np.ndarray:
+    """Nelson-Siegel-Svensson continuously-compounded act/365 zero rate at year fraction `t`."""
+    return nss_factors(t, lambda_, mu_) @ np.array([beta0, beta1, beta2, beta3])
+
+
+def nss_df(
+    t: float | np.ndarray,
+    beta0: float,
+    beta1: float,
+    beta2: float,
+    beta3: float,
+    lambda_: float,
+    mu_: float,
+) -> float | np.ndarray:
+    """Discount factor exp(-r(t)·t) at year fraction `t` (1 at t=0)."""
+    return np.exp(-nss_rate(t, beta0, beta1, beta2, beta3, lambda_, mu_) * np.asarray(t, dtype=float))
 
 
 @dataclass
@@ -186,31 +240,10 @@ class NelsonSiegelSvensson:
         betas, *_ = np.linalg.lstsq(design_matrix, target_rates, rcond=None)
         self.b0, self.b1, self.b2, self.b3 = betas
 
-    # The formulas live in rates.NSSCurve (shared with NSSCurve); these are aliases.
+    # The module-level formulas, as static methods.
     _get_design_matrix = staticmethod(nss_factors)
     _get_rate = staticmethod(nss_rate)
     _get_df = staticmethod(nss_df)
-
-    def get_curve(
-        self,
-        calibration_date: date,
-        bonds_irr_list: list[tuple[CLBond, Rate]],
-        initial_guess: list[float] | None = None,
-        method: str = "powell",
-    ) -> NSSCurve:
-        """Calibrate to `bonds_irr_list`, then return the fitted curve, evaluated in
-        closed form at any date (no sampling or interpolation)."""
-        bonds_irr_list = [
-            (bond, irr)
-            for bond, irr in bonds_irr_list
-            if bond.get_maturity_date() > calibration_date
-        ]
-        self.calibrate(
-            calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method
-        )
-        return NSSCurve(
-            calibration_date, self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_
-        )
 
     def get_params(self) -> list[float]:
         return [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]

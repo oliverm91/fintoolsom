@@ -7,36 +7,42 @@ may take its one pillar on (:func:`_primary_candidates`).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
 
 from ..derivatives.forwards import NDF, Forward
 from ..derivatives.swaps import FloatingLeg, Swap
 from ..market.currencies import Currency
 from ..market.index import Index
-from ..market.market import CurveKey, Market, funding_key
+from ..market.market import Market
 from ..market.quotes import CrossCurrencyFloatFloatQuote, ForwardPointsQuote, InstrumentQuote
+
+# A curve the builder solves: an Index is that index's IndexCurve (it projects the
+# index and may discount); a Currency is its DiscountCurve under the market's
+# risk-free index (a currency other than the risk-free index's).
+CurveKey = Index | Currency
 
 # Quote types whose instrument needs the market FX to fully materialise: XCCY (to size
 # matched leg notionals) and forward-points (to build the outright strike off the spot).
 _FX_DEPENDENT = (CrossCurrencyFloatFloatQuote, ForwardPointsQuote)
 
 
-@dataclass(frozen=True)
-class _Proj:
-    """Solve key of the independent forward curve of a projection-only index.
+def _funding_key(risk_free_index: Index, currency: Currency) -> CurveKey:
+    """Key of the uncollateralised discount curve of `currency`.
 
-    Discount curves are keyed by Index or Currency (``market.curves``); a
-    projection-only index (e.g. a term index such as TAB 3M) is solved under this
-    key and stored in ``market.projection_curves``. Both kinds go through the same
-    scheduler, so a projection curve can depend on, and be needed by, other curves.
+    The risk-free index for its own currency; otherwise `currency`, whose curve is
+    implied from cross-currency products.
     """
+    return risk_free_index if currency == risk_free_index.currency else currency
 
-    index: Index
 
-    @property
-    def currency(self) -> Currency:
-        return self.index.currency
+def _curve_id(key: CurveKey, risk_free_index: Index) -> str:
+    """Id of the curve under `key` in ``Market.curves``."""
+    return key.name if isinstance(key, Index) else f"{key.value}_{risk_free_index.name}"
+
+
+def _built(market: Market, key: CurveKey):
+    """Curve of `key` in `market`, or None."""
+    return market.curves.get(_curve_id(key, market.risk_free_index))
 
 
 def _instrument_of(quote: InstrumentQuote, market: Market):
@@ -59,30 +65,7 @@ def _instrument_of(quote: InstrumentQuote, market: Market):
     return quote.get_instrument(market) if isinstance(quote, _FX_DEPENDENT) else quote.get_instrument()
 
 
-def _discount_indexes(quote: InstrumentQuote, riskless_index: Index, extra: frozenset[Index]) -> set[Index]:
-    """Indexes whose own curve discounts for `quote`.
-
-    Parameters
-    ----------
-    quote : InstrumentQuote
-        Quote considered.
-    riskless_index : Index
-        Market funding index.
-    extra : frozenset of Index
-        Other discount indexes (other quotes' collateral, index curves in market).
-
-    Returns
-    -------
-    set of Index
-        The riskless index, the quote's collateral and `extra`.
-    """
-    collateral: Index | None = getattr(quote, "collateral_index", None)
-    return {riskless_index, *extra, *([collateral] if collateral is not None else [])}
-
-
-def _curves_needed(
-    quote: InstrumentQuote, riskless_index: Index, discount_indexes: frozenset[Index] = frozenset()
-) -> frozenset[CurveKey]:
+def _curves_needed(quote: InstrumentQuote, risk_free_index: Index) -> frozenset[CurveKey]:
     """Every curve `quote` reads to be valued; quotes are grouped by this set.
 
     Each leg discounts in its settlement currency (the swap payment currency for a
@@ -90,17 +73,14 @@ def _curves_needed(
     discount factor is ``funding(ccy) * curve(C) / funding(C.ccy)``; when
     ``ccy == C.ccy`` the funding factors cancel and only C is read. A non-deliverable leg also reads
     the funding curves of both currencies to project its FX fixings. A floating
-    index is its own key when its curve discounts, else ``_Proj(index)``: a
-    projection-only forward curve.
+    leg reads its index's curve.
 
     Parameters
     ----------
     quote : InstrumentQuote
         Quote considered.
-    riskless_index : Index
+    risk_free_index : Index
         Market funding index.
-    discount_indexes : frozenset of Index, optional
-        Other discount indexes, see :func:`_discount_indexes`.
 
     Returns
     -------
@@ -108,36 +88,35 @@ def _curves_needed(
     """
     instrument = quote.get_instrument()
     collateral: Index | None = getattr(quote, "collateral_index", None)
-    discounting = _discount_indexes(quote, riskless_index, discount_indexes)
     keys: set[CurveKey] = set()
 
     if isinstance(instrument, Swap):
         for leg in (instrument.receive_leg, instrument.pay_leg):
             pay_ccy = _settlement_currency(instrument, leg)
             if collateral is None:
-                keys.add(funding_key(riskless_index, pay_ccy))
+                keys.add(_funding_key(risk_free_index, pay_ccy))
             else:
                 if pay_ccy != collateral.currency:
-                    keys.add(funding_key(riskless_index, pay_ccy))
-                    keys.add(funding_key(riskless_index, collateral.currency))
+                    keys.add(_funding_key(risk_free_index, pay_ccy))
+                    keys.add(_funding_key(risk_free_index, collateral.currency))
                 keys.add(collateral)
             if pay_ccy != leg.currency:  # FX fixings projected on both funding curves
-                keys.add(funding_key(riskless_index, leg.currency))
-                keys.add(funding_key(riskless_index, pay_ccy))
+                keys.add(_funding_key(risk_free_index, leg.currency))
+                keys.add(_funding_key(risk_free_index, pay_ccy))
             if isinstance(leg, FloatingLeg):
-                keys.add(leg.index if leg.index in discounting else _Proj(leg.index))
+                keys.add(leg.index)
     else:  # Forward / NDF (a UF forward is an NDF on CLF/CLP: CLP and CLF funding)
         pair = instrument.currency_pair
         for currency in (pair.base_currency, pair.quote_currency):
-            keys.add(funding_key(riskless_index, currency))
+            keys.add(_funding_key(risk_free_index, currency))
 
     return frozenset(keys)
 
 
-def _primary_candidates(quote: InstrumentQuote, pinned: frozenset, discount_indexes: frozenset) -> tuple:
+def _primary_candidates(quote: InstrumentQuote, pinned: frozenset) -> tuple:
     """Curves `quote` may take its one pillar on, preferred first.
 
-    FX forwards and cross-currency swaps: the non-riskless funding curve they pin
+    FX forwards and cross-currency swaps: the non-risk-free funding curve they pin
     (the cross-currency basis). Single-currency swaps: their floating index curve;
     a float-float basis swap lists both indexes (the builder keeps the one no IRS
     already pins).
@@ -151,10 +130,7 @@ def _primary_candidates(quote: InstrumentQuote, pinned: frozenset, discount_inde
     if len(currencies) > 1 and funding:
         collateral = getattr(quote, "collateral_index", None)
         return tuple(sorted(funding, key=lambda k: k == getattr(collateral, "currency", None)))
-    floats = [
-        leg.index if leg.index in discount_indexes else _Proj(leg.index)
-        for leg in legs if isinstance(leg, FloatingLeg)
-    ]
+    floats = [leg.index for leg in legs if isinstance(leg, FloatingLeg)]
     return tuple(floats) or tuple(sorted(pinned, key=str))
 
 
@@ -171,12 +147,12 @@ def _curve_currency(curve_key: CurveKey) -> Currency:
     return curve_key if isinstance(curve_key, Currency) else curve_key.currency
 
 
-def _get_maturity(curve_key: CurveKey, instrument, riskless_index: Index) -> date | None:
+def _get_maturity(curve_key: CurveKey, instrument, risk_free_index: Index) -> date | None:
     """Pillar `instrument` pins on `curve_key`: its latest relevant date.
 
     Payment dates for the settlement-currency funding curve, FX fixing dates for
     the leg-currency funding curve of a non-deliverable leg, end dates for a
-    discounting floating index; the fixing date (NDF) or payment date (forward)
+    floating index; the fixing date (NDF) or payment date (forward)
     for an FX forward.
 
     Parameters
@@ -185,7 +161,7 @@ def _get_maturity(curve_key: CurveKey, instrument, riskless_index: Index) -> dat
         Curve considered.
     instrument : Swap or Forward
         Instrument considered.
-    riskless_index : Index
+    risk_free_index : Index
         Market funding index.
 
     Returns
@@ -202,16 +178,16 @@ def _get_maturity(curve_key: CurveKey, instrument, riskless_index: Index) -> dat
     if isinstance(instrument, Swap):
         for leg in (instrument.receive_leg, instrument.pay_leg):
             pay_ccy = _settlement_currency(instrument, leg)
-            if funding_key(riskless_index, pay_ccy) == curve_key:
+            if _funding_key(risk_free_index, pay_ccy) == curve_key:
                 candidates.add(max(leg.payment_dates))
-            if pay_ccy != leg.currency and funding_key(riskless_index, leg.currency) == curve_key:
+            if pay_ccy != leg.currency and _funding_key(risk_free_index, leg.currency) == curve_key:
                 candidates.add(max(leg.fx_fixing_dates))
-            if isinstance(leg, FloatingLeg) and curve_key in (leg.index, _Proj(leg.index)):
+            if isinstance(leg, FloatingLeg) and curve_key == leg.index:
                 candidates.add(max(leg.end_dates))
     elif isinstance(instrument, Forward):
         pair = instrument.currency_pair
         for currency in (pair.base_currency, pair.quote_currency):
-            if funding_key(riskless_index, currency) == curve_key:
+            if _funding_key(risk_free_index, currency) == curve_key:
                 candidates.add(instrument.fixing_date if isinstance(instrument, NDF) else instrument.payment_date)
     else:
         raise TypeError(

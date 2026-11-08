@@ -49,7 +49,7 @@ class Calculator:
         """Deliverable FX forward mark-to-market.
 
         Domestic is the quote currency and foreign the base currency, both
-        discounted on their uncollateralised funding curves; spot is read from
+        discounted on their uncollateralised discount curves; spot is read from
         `market` at ``market.t``. A forward paid on or before ``market.t`` is worth 0.
 
         Parameters
@@ -69,8 +69,8 @@ class Calculator:
         cp = forward.currency_pair
         if forward.payment_date <= market.t:
             return 0.0
-        domestic_curve = market.get_funding_curve(cp.quote_currency)
-        foreign_curve = market.get_funding_curve(cp.base_currency)
+        domestic_curve = market.get_discount_curve(cp.quote_currency)
+        foreign_curve = market.get_discount_curve(cp.base_currency)
         spot = market.get_fx_rate(market.t, cp).value
 
         df_d = domestic_curve.get_df(forward.payment_date)
@@ -116,7 +116,7 @@ class Calculator:
             cp.base_currency, cp.quote_currency, [ndf.fixing_date], market
         )[0]
         fv = ndf.sign * ndf.notional * (s_t - ndf.strike)
-        mtm = fv * market.get_funding_curve(cp.quote_currency).get_df(ndf.payment_date)
+        mtm = fv * market.get_discount_curve(cp.quote_currency).get_df(ndf.payment_date)
         return Calculator._convert(mtm, cp.quote_currency, currency, market)
 
     # --- Options (Garman-Kohlhagen / Black-Scholes for FX) ---
@@ -435,9 +435,9 @@ class Calculator:
             return future_payment, leg.flows[future_payment]
 
         flows = np.zeros(int(future_payment.sum()))
-        # Projection goes through get_accrual (interest per unit notional): the index
-        # discount curve viewed as forwards, or an independent ProjectionCurve.
-        proj_curve = market.get_projection(leg.index)
+        # Projection goes through get_accrual (interest per unit notional) on the
+        # index's own curve.
+        proj_curve = market.get_index_curve(leg.index)
 
         if isinstance(leg, _TermRateLeg):
             # Once fixing_date <= t the rate is locked, wherever start_date falls.
@@ -528,7 +528,7 @@ class Calculator:
         if not future_payment.any():
             return 0.0
         pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
-        dfs = market.get_discount_dfs(leg.currency, pay_dates, collateral)
+        dfs = market.get_dfs(leg.currency, pay_dates, collateral=collateral)
         return float(np.dot(flows, dfs))
 
     @staticmethod
@@ -581,8 +581,8 @@ class Calculator:
             anchor = market.get_fx_rate(known_until, cp).value
             projected = [d for d, k in zip(fixing_dates, known) if not k]
             dates = [known_until] + projected
-            df_base = market.get_funding_curve(base_currency).get_dfs(dates)
-            df_quote = market.get_funding_curve(quote_currency).get_dfs(dates)
+            df_base = market.get_discount_curve(base_currency).get_dfs(dates)
+            df_quote = market.get_discount_curve(quote_currency).get_dfs(dates)
             fx[~known] = anchor * (df_base[1:] / df_base[0]) / (df_quote[1:] / df_quote[0])
         return fx
 
@@ -620,7 +620,7 @@ class Calculator:
         pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
         fixing_dates = [d for d, f in zip(leg.fx_fixing_dates, future_payment) if f]
         fx = Calculator.get_fx_fixings(leg.currency, settlement_currency, fixing_dates, market)
-        dfs = market.get_discount_dfs(settlement_currency, pay_dates, collateral)
+        dfs = market.get_dfs(settlement_currency, pay_dates, collateral=collateral)
         return float(np.sum(flows * fx * dfs))
 
     @staticmethod
@@ -743,7 +743,7 @@ class Calculator:
         pay_dates, flows = Calculator._rate_sensitive_flows(leg, market)
         if not pay_dates:
             return 0.0
-        dfs = market.get_discount_dfs(leg.currency, pay_dates, swap.collateral_index)
+        dfs = market.get_dfs(leg.currency, pay_dates, collateral=swap.collateral_index)
         pvs = flows * dfs
         taus = np.array([(d - market.t).days / 365 for d in pay_dates])
         total = float(np.sum(pvs))
@@ -795,8 +795,8 @@ class Calculator:
         float
             MTM in the quote currency.
         """
-        domestic_curve = market.get_funding_curve(instrument.currency_pair.quote_currency)
-        foreign_curve = market.get_funding_curve(instrument.currency_pair.base_currency)
+        domestic_curve = market.get_discount_curve(instrument.currency_pair.quote_currency)
+        foreign_curve = market.get_discount_curve(instrument.currency_pair.base_currency)
         spot = market.get_fx_rate(market.t, instrument.currency_pair).value
 
         log_moneyness = Calculator.get_option_log_moneyness(

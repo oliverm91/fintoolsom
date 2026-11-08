@@ -15,7 +15,7 @@ from fintoolsom.curve_builder import InsufficientQuotesError
 from fintoolsom.curve_builder.builder import _CurveBuilder
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import CrossCurrencyFloatFloatQuote, Currency, ForwardPointsQuote
-from fintoolsom.rates import InterpolationMethod, ProjectionCurve
+from fintoolsom.rates import IndexCurve, InterpolationMethod
 from tests.factories.quote_factory import (
     QUOTE_DATE,
     TERM3M,
@@ -76,11 +76,12 @@ def _dfs(market) -> dict:
 
 
 def _accruals(market) -> dict:
-    return {index: market.projection_curves[index].get_accrual(GRID[:-1], GRID[1:]) for index in market.projection_curves}
+    index_curves = {k: c for k, c in market.curves.items() if isinstance(c, IndexCurve)}
+    return {k: c.get_accrual(GRID[:-1], GRID[1:]) for k, c in index_curves.items()}
 
 
 def _assert_same_curves(a, b, rel):
-    assert set(a.curves) == set(b.curves) and set(a.projection_curves) == set(b.projection_curves)
+    assert set(a.curves) == set(b.curves)
     for key, dfs in _dfs(a).items():
         np.testing.assert_allclose(dfs, _dfs(b)[key], rtol=rel)
     for index, accruals in _accruals(a).items():
@@ -104,26 +105,26 @@ def _spy_block_sizes(monkeypatch) -> list[int]:
 
 def test_term_index_gets_a_projection_curve_that_reprices_its_swaps(real, term_irs):
     market = _build(real + term_irs)
-    curve = market.projection_curves[TERM3M]
-    assert isinstance(curve, ProjectionCurve) and TERM3M not in market.curves
-    assert len(curve) == 1 + len(term_irs)  # the spot anchor + one segment per swap
+    curve = market.get_index_curve(TERM3M)
+    assert isinstance(curve, IndexCurve) and curve.spot_rate is None
+    assert len(curve.forward_rates) == 1 + len(term_irs)  # the spot anchor + one segment per swap
     assert max(abs(_mtm(q, market)) for q in term_irs) < REPRICE_TOL
 
 
 def test_basis_swaps_pin_a_second_projection_curve_on_top_of_the_first(full, term_irs, basis):
-    assert {TERM3M, TERM6M} <= set(full.projection_curves)
+    assert {TERM3M.name, TERM6M.name} <= set(full.curves)
     assert max(abs(_mtm(q, full)) for q in term_irs + basis) < REPRICE_TOL
     # Receiving 6M against 3M + 8bp at par: 6M forwards sit ~8bp above the 3M ones.
     for a, b in ((365, 730), (730, 1826), (1826, 3652), (3652, 7305)):
         start, end = QUOTE_DATE + timedelta(days=a), QUOTE_DATE + timedelta(days=b)
-        f3 = full.get_projection(TERM3M).get_equivalent_forward_rate(start, end).rate
-        f6 = full.get_projection(TERM6M).get_equivalent_forward_rate(start, end).rate
+        f3 = full.get_index_curve(TERM3M).get_forward_rate(start, end).rate
+        f6 = full.get_index_curve(TERM6M).get_forward_rate(start, end).rate
         assert (f6 - f3) * 1e4 == pytest.approx(8.0, abs=0.5)
 
 
 def test_basis_swaps_do_not_move_the_curves_their_irs_pin(real, term_irs, full):
     alone = _build(real + term_irs)
-    np.testing.assert_allclose(_accruals(full)[TERM3M], _accruals(alone)[TERM3M], rtol=1e-9)
+    np.testing.assert_allclose(_accruals(full)[TERM3M.name], _accruals(alone)[TERM3M.name], rtol=1e-9)
     for key, dfs in _dfs(alone).items():
         np.testing.assert_allclose(_dfs(full)[key], dfs, rtol=1e-12)
 
@@ -167,6 +168,9 @@ def test_joint_solve_runs_one_root_per_group(real, monkeypatch):
 
 def test_non_local_interpolation_skips_the_sweep_and_still_reprices(real, monkeypatch):
     sizes = _spy_block_sizes(monkeypatch)
-    market = _build(real, interpolation_method=InterpolationMethod.HermiteCubicSpline)
-    assert len(sizes) == 4  # a spline pillar moves the whole curve: joint solves only
+    market = _build(real, discount_interp_method=InterpolationMethod.HermiteCubicSpline)
+    # A spline pillar moves the whole discount curve: the two USD groups solve jointly,
+    # while the index curves (piecewise-constant forwards) still sweep date by date.
+    big = [n for n in sizes if n > 2]
+    assert len(big) == 2 and len(sizes) > len(big)
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL

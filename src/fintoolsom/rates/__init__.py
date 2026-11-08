@@ -6,11 +6,8 @@ from .Rates import (
     CompoundedInterestConvention,
     ExponentialInterestConvention,
 )
-from .Curve import Curve
-from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint, InterpolationMethod
-from .NSSCurve import NSSCurve
-from .ProjectionCurve import (
-    ProjectionCurve,
-    DiscountProjectionView,
-    ProjectionInterpolationMethod,
-)
+from .Curve import Curve, InterpolationMethod, DAY_BASE
+from .IndexCurve import IndexCurve
+from .DiscountCurve import DiscountCurve
+from .LegacyCurve import LegacyCurve
+from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint

@@ -1,5 +1,4 @@
 """Leg duration and DV01 estimates (Calculator.get_leg_duration / get_leg_dv01)."""
-import math
 
 import numpy as np
 import pytest
@@ -92,14 +91,14 @@ def test_fixed_leg_dv01_is_negative_and_matches_a_curve_bump(market):
     dv01 = Calculator.get_leg_dv01(swap, leg, market, CLP)
     assert dv01 < 0
     base = Calculator.get_leg_pv(swap, leg, market, CLP)
-    curve = market.curves[ICP]
-    curve.parallel_bump_rates_bps(1.0)
+    curve = market.get_index_curve(ICP)
+    market.set_curve(curve.parallel_bump_bps(1.0))
     try:
         bumped = Calculator.get_leg_pv(swap, leg, market, CLP)
     finally:
-        curve.parallel_bump_rates_bps(-1.0)
-    # The curve is bumped in annually compounded rates: ~1bp / (1 + r) continuous.
-    assert bumped - base == pytest.approx(dv01 / math.exp(FLAT_RATES[ICP]), rel=0.03)
+        market.set_curve(curve)
+    # The bump shifts continuous zero rates by 1bp: first order, the DV01 itself.
+    assert bumped - base == pytest.approx(dv01, rel=0.01)
 
 
 def test_matured_leg_has_no_duration_nor_dv01(market):

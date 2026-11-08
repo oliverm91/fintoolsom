@@ -47,7 +47,7 @@ from fintoolsom.market import (
     TermRateIndex,
 )
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
-from fintoolsom.rates import LinearInterestConvention, Rate, RateConvention, ZeroCouponCurve
+from fintoolsom.rates import DiscountCurve, IndexCurve, LinearInterestConvention, Rate, RateConvention
 
 # ── Dates ──────────────────────────────────────────────────────────────────
 
@@ -296,10 +296,17 @@ def build_swap(case: SwapCase) -> Swap:
 # ── Market ─────────────────────────────────────────────────────────────────
 
 
-def _flat_curve(rate: float) -> ZeroCouponCurve:
-    pillars = [VAL_DATE + timedelta(days=d) for d in (1, 7, 30, 91, 182, 365, 730, 1095, 1825, 3650)]
-    dfs = [(d, math.exp(-rate * (d - VAL_DATE).days / 365)) for d in pillars]
-    return ZeroCouponCurve(VAL_DATE, date_dfs=dfs)
+_PILLARS = [VAL_DATE + timedelta(days=d) for d in (1, 7, 30, 91, 182, 365, 730, 1095, 1825, 3650)]
+
+
+def _flat_index_curve(index, rate: float) -> IndexCurve:
+    """Flat continuously compounded act/365 `rate` from the valuation date."""
+    return IndexCurve(VAL_DATE, index, [VAL_DATE, _PILLARS[-1]], [rate])
+
+
+def _flat_discount_curve(currency, rate: float) -> DiscountCurve:
+    dfs = [math.exp(-rate * (d - VAL_DATE).days / 365) for d in _PILLARS]
+    return DiscountCurve(VAL_DATE, currency, RISKLESS, list(_PILLARS), dfs)
 
 
 def _history_days() -> list[date]:
@@ -319,8 +326,8 @@ def build_market() -> Market:
     # One curve per index (floating and collateral indexes; ICP doubles as CLP funding),
     # plus one cross-currency curve per non-riskless currency. Nothing is stored twice.
     indexes = {*FLOAT_INDEXES.values(), *(c for c in COLLATERAL_INDEXES.values() if c is not None)}
-    curves: dict = {index: _flat_curve(FLAT_RATES[index]) for index in indexes}
-    curves.update({ccy: _flat_curve(r) for ccy, r in CURRENCY_CURVE_RATES.items()})
+    curves = [_flat_index_curve(index, FLAT_RATES[index]) for index in indexes]
+    curves += [_flat_discount_curve(ccy, r) for ccy, r in CURRENCY_CURVE_RATES.items()]
 
     # Daily fixings (every calendar day, so any calendar's business days are covered),
     # exposed both as Market.interest_rates (read by the calculator today) and as
@@ -346,7 +353,7 @@ def build_market() -> Market:
 
     market = Market(
         t=VAL_DATE,
-        riskless_index=RISKLESS,
+        risk_free_index=RISKLESS,
         curves=curves,
         interest_rates=interest_rates,
         index_to_interest_rate_map=index_to_rate,

@@ -120,7 +120,51 @@ def test_quote_order_does_not_change_the_cycle_build(cycle):
     shuffled = list(cycle)
     random.Random(11).shuffle(shuffled)
     a, b = _build(cycle), _build(shuffled)
-    for key in a.curves:
-        assert a.curves[key].get_dfs(list(a.curves[key].dates)) == pytest.approx(
-            b.curves[key].get_dfs(list(a.curves[key].dates)), rel=1e-9
-        )
+    assert set(a.curves) == set(b.curves)
+    for key, curve in a.curves.items():
+        dates = list(getattr(curve, "pillar_dates", None) or curve.knot_dates)
+        assert curve.get_dfs(dates) == pytest.approx(b.curves[key].get_dfs(dates), rel=1e-9)
+
+
+def test_ditched_quotes_are_warned_with_their_mtm():
+    from fintoolsom.curve_builder import RedundantQuoteWarning
+    from tests.factories.quote_factory import quote_market
+
+    real = load_quotes()
+    market = quote_market()
+    with pytest.warns(RedundantQuoteWarning, match="5 quote") as record:
+        build_curves(real, market)
+    (warning,) = [w.message for w in record if isinstance(w.message, RedundantQuoteWarning)]
+    # The XCCY up to 1Y sit inside the FX forwards' range of USD funding.
+    assert {str(q.term) for q, *_ in warning.ditched} == {"1M", "3M", "6M", "9M", "1Y"}
+    for quote, mtm, pct, bp in warning.ditched:
+        assert isinstance(quote, CrossCurrencyFloatFloatQuote)
+        assert mtm == pytest.approx(quote_mtm(quote, market), rel=1e-12)
+        assert pct is None and bp is not None and abs(bp) < 20  # a swap: bp only
+        assert f"CrossCurrencyFloatFloatQuote {quote.term} USD-CLP: MTM {mtm:,.4f} CLP = {bp:+.4f} bp" in str(warning)
+    assert "of notional" not in str(warning)
+
+
+def test_a_ditched_swap_reports_how_many_bp_it_is_off_par():
+    import dataclasses
+
+    from fintoolsom.curve_builder import RedundantQuoteWarning
+    from fintoolsom.rates import Rate
+    from tests.factories.quote_factory import built_market
+
+    market, real = built_market()
+    irs = next(q for q in real if isinstance(q, IRSQuote) and q.fixed_leg.currency == Currency.CLP and str(q.term) == "5Y")
+    xccy = next(q for q in real if isinstance(q, CrossCurrencyFloatFloatQuote) and str(q.term) == "5Y")
+    off_irs = dataclasses.replace(irs, fixed_leg=dataclasses.replace(
+        irs.fixed_leg, rate=Rate(irs.fixed_leg.rate.rate_convention, irs.fixed_leg.rate.rate + 2e-4)))
+    off_xccy = dataclasses.replace(xccy, receive_leg=dataclasses.replace(
+        xccy.receive_leg, spread=Rate(xccy.receive_leg.spread.rate_convention, xccy.receive_leg.spread.rate - 3e-4)))
+    # Every curve is already built past 5Y: both quotes are ditched. MTM is linear in the
+    # quoted rate, so MTM / DV01 is exactly the bump.
+    with pytest.warns(RedundantQuoteWarning) as record:
+        build_curves([off_irs, off_xccy], market)
+    assert "IRSQuote 5Y CLP: MTM" in str(record[0].message)
+    assert "CrossCurrencyFloatFloatQuote 5Y USD-CLP: MTM" in str(record[0].message)
+    bps = {type(q): bp for q, _, _, bp in record[0].message.ditched}
+    assert abs(bps[IRSQuote]) == pytest.approx(2.0, rel=1e-6)
+    assert abs(bps[CrossCurrencyFloatFloatQuote]) == pytest.approx(3.0, rel=1e-6)

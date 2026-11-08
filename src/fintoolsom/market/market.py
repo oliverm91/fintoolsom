@@ -9,14 +9,7 @@ import numpy as np
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
-from ..rates import (
-    Rate,
-    Curve,
-    ProjectionCurve,
-    DiscountProjectionView,
-    InterpolationMethod,
-    ProjectionInterpolationMethod,
-)
+from ..rates import Rate, Curve, IndexCurve, LegacyCurve
 from ..dates import Calendar, get_calendar
 
 if TYPE_CHECKING:
@@ -24,32 +17,6 @@ if TYPE_CHECKING:
     # Swap (derivatives.swaps -> market.currencies), so a runtime import here
     # would cycle back into this module before Market is defined.
     from .volatility_surface import VolatilitySurface
-
-
-# A discount curve is identified by an Index (that index's own curve) or by a
-# Currency (that currency's uncollateralised, cross-currency-implied curve).
-CurveKey = Index | Currency
-
-
-def funding_key(riskless_index: Index, currency: Currency) -> CurveKey:
-    """Key of the uncollateralised discount curve of `currency`.
-
-    Parameters
-    ----------
-    riskless_index : Index
-        The market funding index (Chile: ICP).
-    currency : Currency
-        Currency of the flows.
-
-    Returns
-    -------
-    Index or Currency
-        `riskless_index` for its own currency; otherwise `currency`, whose curve
-        is implied from cross-currency products.
-    """
-    if currency == riskless_index.currency:
-        return riskless_index
-    return currency
 
 
 @dataclass(slots=True)
@@ -62,38 +29,36 @@ class Market:
 
     interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
 
-    # The market's funding index (Chile: ICP). Uncollateralised flows in its own
-    # currency discount on its curve; it says nothing about any other currency.
-    riskless_index: Index | None = None
+    # The market's funding index (Chile: ICP): the numeraire its discount curves are
+    # built under. Uncollateralised flows in its currency discount on its curve.
+    risk_free_index: Index | None = None
 
-    # Discount-factor curves, each stored once under a CurveKey:
-    #   Index    → that index's own curve (e.g. ICP, SOFR, Cámara). Used to discount
-    #              (as funding or collateral) and, via get_projection, to project it.
-    #   Currency → the uncollateralised curve of a currency other than the riskless
-    #              index's, implied from cross-currency products (USD/UF/EUR in Chile).
-    # Collateralised curves are not stored: get_discount_dfs derives them.
-    curves: dict[CurveKey, Curve] = field(default_factory=dict)
-    # Independent-basis forward curves (e.g. a term index such as TAB 3M), keyed by
-    # Index. An index with a discount curve in `curves` needs no entry here:
-    # get_projection falls back to a forward view over that curve.
-    projection_curves: dict[Index, ProjectionCurve] = field(default_factory=dict)
+    # Every curve, under its id (``curve.get_id()``):
+    #   IndexCurve    -> "<index name>" (ICP, SOFR, a term index): projects that index
+    #                    and discounts with it.
+    #   DiscountCurve -> "<currency>_<risk-free index>" (e.g. "USD_ICP"): a currency
+    #                    other than the risk-free index's, implied from cross-currency
+    #                    products.
+    # Collateralised discounting across currencies is not stored: get_dfs derives it.
+    # Construction also accepts an iterable of curves.
+    curves: dict[str, Curve] = field(default_factory=dict)
     volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(default_factory=dict)
 
-    # Default interpolation per curve role, used when build_curves / the accessors are
-    # not given an explicit override. Discount curves interpolate log-linearly in DF
-    # (consistent with the log-df bootstrap); projection curves are piecewise-constant
-    # in forward. The method is baked at bootstrap — it is the curve's calibration
-    # identity — so changing it means re-solving that curve, not resampling in place.
-    discount_interpolation_method: InterpolationMethod = InterpolationMethod.LogLinear
-    projection_interpolation_method: ProjectionInterpolationMethod = (
-        ProjectionInterpolationMethod.PiecewiseConstant
-    )
-
     def __post_init__(self):
-        if self.riskless_index is not None and self.riskless_index.currency is None:
+        if self.risk_free_index is not None and self.risk_free_index.currency is None:
             raise ValueError(
-                f"riskless_index '{self.riskless_index.name}' needs a currency: it funds that currency."
+                f"risk_free_index '{self.risk_free_index.name}' needs a currency: it funds that currency."
             )
+        if isinstance(self.curves, dict):
+            for key, curve in self.curves.items():
+                if isinstance(curve, Curve) and key != curve.get_id():
+                    raise ValueError(f"Curve stored under '{key}' has id '{curve.get_id()}'.")
+            given = list(self.curves.values())
+        else:
+            given = list(self.curves)
+        self.curves = {}
+        for curve in given:
+            self.set_curve(curve)
         fxs_to_add = {}
         for cp, fx_data in self.fx_history.items():
             # Check fx_history FX_RateData is correctly mapped to CurrencyPairs.
@@ -120,63 +85,85 @@ class Market:
             for index_name, rate_name in self.index_to_interest_rate_map.items()
         }
 
-    def get_curve(self, key: CurveKey) -> Curve:
-        """Stored discount curve under `key`.
+    # ── Curves ───────────────────────────────────────────────────────────────
 
-        Parameters
-        ----------
-        key : Index or Currency
-            Curve key.
+    def set_curve(self, curve: Curve) -> None:
+        """Store `curve` under its id, replacing any curve with that id.
 
-        Returns
-        -------
-        Curve
+        Two indexes with the same name share an id: keeping names unique is the
+        caller's responsibility.
+
+        Raises
+        ------
+        TypeError
+            If `curve` is not a :class:`Curve` (e.g. a legacy ZeroCouponCurve).
+        """
+        if isinstance(curve, LegacyCurve):
+            raise TypeError(
+                f"{type(curve).__name__} is a legacy curve and cannot be stored in a Market; "
+                "use IndexCurve / DiscountCurve (see their from_zero_coupon_curve)."
+            )
+        if not isinstance(curve, Curve):
+            raise TypeError(f"Market curves must be Curve instances, got {type(curve).__name__}.")
+        self.curves[curve.get_id()] = curve
+
+    def get_index_curve(self, index: Index) -> IndexCurve:
+        """Curve of `index`: it projects the index and discounts with it.
 
         Raises
         ------
         KeyError
-            If no curve is stored under `key`.
+            If the market has no curve for `index`.
         """
-        try:
-            return self.curves[key]
-        except KeyError:
-            kind = "index" if isinstance(key, Index) else "currency"
-            raise KeyError(f"No discount curve for {kind} '{key}' in market.") from None
+        curve = self.curves.get(index.name)
+        if not isinstance(curve, IndexCurve):
+            raise KeyError(f"No index curve for '{index.name}' in market.")
+        return curve
 
-    def funding_key(self, currency: Currency) -> CurveKey:
-        """Key of the uncollateralised curve of `currency`; see :func:`funding_key`.
+    def get_discount_curve(self, currency: Currency, *, risk_free_index: Index | None = None) -> Curve:
+        """Uncollateralised discount curve of `currency` under `risk_free_index`.
 
-        Raises
-        ------
-        ValueError
-            If the market has no `riskless_index`.
-        """
-        if self.riskless_index is None:
-            raise ValueError("Market has no riskless_index; cannot resolve funding curves.")
-        return funding_key(self.riskless_index, currency)
-
-    def get_funding_curve(self, currency: Currency) -> Curve:
-        """Uncollateralised discount curve of `currency`.
+        The risk-free index's own curve for its currency, else the stored
+        ``"<currency>_<index>"`` :class:`DiscountCurve`.
 
         Parameters
         ----------
         currency : Currency
             Currency of the flows.
+        risk_free_index : Index, optional
+            Numeraire; defaults to :attr:`risk_free_index`.
 
-        Returns
-        -------
-        Curve
+        Raises
+        ------
+        ValueError
+            If no risk-free index is given or set on the market.
+        KeyError
+            If no curve was built for that currency under that numeraire.
         """
-        return self.get_curve(self.funding_key(currency))
+        rfi = risk_free_index if risk_free_index is not None else self.risk_free_index
+        if rfi is None:
+            raise ValueError("Market has no risk_free_index; cannot resolve discount curves.")
+        if currency == rfi.currency:
+            return self.get_index_curve(rfi)
+        curve_id = f"{currency.value}_{rfi.name}"
+        try:
+            return self.curves[curve_id]
+        except KeyError:
+            raise KeyError(f"No discount curve '{curve_id}' in market.") from None
 
-    def get_discount_dfs(
-        self, currency: Currency, dates: list[date], collateral: Index | None = None
+    def get_dfs(
+        self,
+        currency: Currency,
+        dates: list[date],
+        *,
+        collateral: Index | None = None,
+        risk_free_index: Index | None = None,
     ) -> np.ndarray:
         """Discount factors of `currency` flows paid on `dates`.
 
-        ``df = funding(ccy) * curve(collateral) / funding(collateral.ccy)``. When the
-        collateral is the funding index of its own currency the ratio is 1: CLP
-        flows under ICP collateral in an ICP market discount on plain ICP.
+        Uncollateralised: one curve, :meth:`get_discount_curve`. Collateral in the
+        flows' currency: the collateral index's curve. Collateral in another
+        currency: ``disc(ccy) * curve(collateral) / disc(collateral.ccy)``.
 
         Parameters
         ----------
@@ -186,80 +173,33 @@ class Market:
             Payment dates.
         collateral : Index, optional
             CSA collateral index; None means uncollateralised.
+        risk_free_index : Index, optional
+            Numeraire of the discount curves; defaults to :attr:`risk_free_index`.
 
         Returns
         -------
         numpy.ndarray
         """
-        collateral_ccy = getattr(collateral, "currency", None)
-        if collateral is not None and collateral_ccy == currency:
-            # funding(ccy) / funding(ccy) cancels: the collateral curve discounts directly.
-            return self.get_curve(collateral).get_dfs(dates)
-        dfs = self.get_funding_curve(currency).get_dfs(dates)
         if collateral is None:
-            return dfs
+            return self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(dates)
+        if collateral.currency == currency:
+            return self.get_index_curve(collateral).get_dfs(dates)
         return (
-            dfs
-            * self.get_curve(collateral).get_dfs(dates)
-            / self.get_funding_curve(collateral_ccy).get_dfs(dates)
+            self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(dates)
+            * self.get_index_curve(collateral).get_dfs(dates)
+            / self.get_discount_curve(collateral.currency, risk_free_index=risk_free_index).get_dfs(dates)
         )
 
-    def get_discount_df(self, currency: Currency, t: date, collateral: Index | None = None) -> float:
-        """Single-date :meth:`get_discount_dfs`."""
-        return float(self.get_discount_dfs(currency, [t], collateral)[0])
-
-    def get_projection(
-        self, index: Index, *, interpolation_method=None
-    ) -> ProjectionCurve | DiscountProjectionView:
-        """Forward-projection curve of `index`, exposing ``get_accrual``.
-
-        Returns the stored :class:`ProjectionCurve` of an index with an independent
-        basis; otherwise a :class:`DiscountProjectionView` over the index's own
-        discount curve, so an index's curve is never stored twice.
-
-        Parameters
-        ----------
-        index : Index
-            Index to project.
-        interpolation_method : optional
-            Reserved for a resampled view; currently ignored.
-
-        Returns
-        -------
-        ProjectionCurve or DiscountProjectionView
-
-        Raises
-        ------
-        KeyError
-            If `index` has neither a projection nor a discount curve.
-        """
-        if index in self.projection_curves:
-            return self.projection_curves[index]
-        if index not in self.curves:
-            raise KeyError(f"No projection or discount curve for index '{index.name}' in market.")
-        return DiscountProjectionView(self.curves[index])
-
-    def set_projection(self, index: Index, curve: ProjectionCurve) -> None:
-        """Store the independent forward curve of a projection-only `index`.
-
-        Parameters
-        ----------
-        index : Index
-            Projection-only index.
-        curve : ProjectionCurve
-            Its forward curve.
-
-        Raises
-        ------
-        ValueError
-            If `index` already has a discount curve, which is its projection.
-        """
-        if index in self.curves:
-            raise ValueError(
-                f"Index '{index.name}' already has a discount curve; it projects off that "
-                "curve and cannot also hold an independent projection curve."
-            )
-        self.projection_curves[index] = curve
+    def get_df(
+        self,
+        currency: Currency,
+        t: date,
+        *,
+        collateral: Index | None = None,
+        risk_free_index: Index | None = None,
+    ) -> float:
+        """Single-date :meth:`get_dfs`."""
+        return float(self.get_dfs(currency, [t], collateral=collateral, risk_free_index=risk_free_index)[0])
 
     def add_index(self, history: IndexHistory):
         """Register `history` under its index name (case-insensitive)."""

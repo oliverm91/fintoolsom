@@ -6,7 +6,6 @@ over a prebuilt SOFR discount curve: fixed-vs-TERM3M swaps collateralised in SOF
 pin the TERM3M projection. After the bootstrap every swap must reprice to par.
 """
 
-import math
 from datetime import date, timedelta
 import numpy as np
 import pytest
@@ -20,10 +19,7 @@ from fintoolsom.rates import (
     RateConvention,
     LinearInterestConvention,
     ExponentialInterestConvention,
-    ZeroCouponCurve,
-    InterpolationMethod,
-    ProjectionCurve,
-    ProjectionInterpolationMethod,
+    IndexCurve,
 )
 from fintoolsom.derivatives.swaps.builders import fixed_leg, term_rate_leg
 from fintoolsom.derivatives.swaps.swaps import Swap
@@ -43,7 +39,7 @@ def _bootstrap_projection(index, swaps, market) -> None:
     """Drive the independent-basis projection solve through a _CurveBuilder (the
     bootstrap lives on the orchestrator; empty quotes since we invoke it directly)."""
     _CurveBuilder(
-        [], market, InterpolationMethod.LogLinear, ProjectionInterpolationMethod.PiecewiseConstant
+        [], market
     )._bootstrap_projection_curve(index, swaps)
 
 
@@ -52,17 +48,15 @@ def _market_with_sofr_discount() -> tuple[Market, OvernightRateIndex, TermRateIn
     adj = ModifiedFollowingConvention(sofr.calendar)
     term3m = TermRateIndex("TERM3M", currency=USD, term=Term(3, TermUnit.M, adj))
 
-    # Flat 5% (cont, act/365) SOFR discount curve.
-    pillars = [90, 180, 365, 730, 1095]
-    date_dfs = [(T + _days(d), math.exp(-0.05 * d / 365)) for d in pillars]
-    sofr_curve = ZeroCouponCurve(T, date_dfs=date_dfs, df_interpolation_method=InterpolationMethod.LogLinear)
+    # Flat 5% (cont, act/365) SOFR curve.
+    sofr_curve = IndexCurve(T, sofr, [T, T + _days(1095)], [0.05])
 
     term_hist = TermRateHistory(
         term3m,
         {T: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 0.052)},
     )
-    market = Market(T, indexes_history={"TERM3M": term_hist}, riskless_index=sofr)
-    market.curves[sofr] = sofr_curve
+    market = Market(T, indexes_history={"TERM3M": term_hist}, risk_free_index=sofr)
+    market.set_curve(sofr_curve)
     return market, sofr, term3m, adj
 
 
@@ -96,10 +90,10 @@ def test_independent_projection_reprices_all_swaps():
 
     _bootstrap_projection(term3m, swaps, market)
 
-    proj = market.get_projection(term3m)
-    assert isinstance(proj, ProjectionCurve)
+    proj = market.get_index_curve(term3m)
+    assert isinstance(proj, IndexCurve)
     # One anchor segment + one solved segment per swap.
-    assert len(proj) == 1 + len(swaps)
+    assert len(proj.forward_rates) == 1 + len(swaps)
 
     for s in swaps:
         mtm = Calculator.get_swap_mtm(s, market, USD)
@@ -113,8 +107,8 @@ def test_independent_projection_forwards_are_positive_and_near_par():
         _term_swap(term3m, sofr, adj, 2, TermUnit.Y, 0.050),
     ]
     _bootstrap_projection(term3m, swaps, market)
-    proj = market.get_projection(term3m)
-    assert isinstance(proj, ProjectionCurve)
+    proj = market.get_index_curve(term3m)
+    assert isinstance(proj, IndexCurve)
     # Solved forwards should be sane (positive, in a plausible rate range).
     assert np.all(proj.forward_rates > 0.0)
     assert np.all(proj.forward_rates < 0.20)

@@ -5,7 +5,7 @@ from fintoolsom.derivatives.swaps.coupons import FixedCoupon, OvernightCoupon
 from fintoolsom.derivatives.swaps.legs import FixedLeg, OvernightLeg
 from fintoolsom.derivatives.swaps.swaps import Swap
 from fintoolsom.market import Currency, Market, OvernightRateIndex
-from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
+from fintoolsom.rates import IndexCurve, Rate, RateConvention, LinearInterestConvention
 from fintoolsom.dates import ActualDayCountConvention
 
 
@@ -20,9 +20,9 @@ FIXED_RATE = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvent
 
 
 def _sofr_market(curve_date, sample_zero_coupon_curve) -> Market:
-    # A single curve stored under SOFR (the riskless index) serves both as the USD discount curve
-    # for USD and — via get_projection's fallback view — as SOFR's projection curve.
-    return Market(t=curve_date, riskless_index=SOFR, curves={SOFR: sample_zero_coupon_curve})
+    # SOFR's index curve (SOFR is the risk-free index) both discounts USD and projects SOFR.
+    sofr = IndexCurve.from_zero_coupon_curve(sample_zero_coupon_curve, SOFR)
+    return Market(t=curve_date, risk_free_index=SOFR, curves=[sofr])
 
 
 def test_leg_pv_projects_overnight_leg_via_projection_curve(

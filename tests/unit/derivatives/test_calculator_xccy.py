@@ -14,7 +14,6 @@ from tests.factories.swap_factory import (
     NOTIONALS,
     PAST_FX_FACTOR,
     PAYMENT_FREQUENCY,
-    RISKLESS,
     SOFR,
     SPREAD,
     START_DATES,
@@ -70,7 +69,7 @@ def _fixed(ccy: Ccy, status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag:
 
 def _df(market, currency: Currency, d: date) -> float:
     """Uncollateralised DF: the riskless (ICP) curve for CLP, the currency curve otherwise."""
-    return market.curves[RISKLESS if currency == CLP else currency].get_df(d)
+    return market.get_discount_curve(currency).get_df(d)
 
 
 def _forward_fx(market, d: date) -> float:
@@ -79,7 +78,7 @@ def _forward_fx(market, d: date) -> float:
 
 def _xccy_flows(market, leg) -> list[float]:
     """Unstarted SOFR coupons: projected interest + spread + final notional."""
-    curve = market.curves[SOFR]
+    curve = market.get_index_curve(SOFR)
     return [
         c.residual * (curve.get_df(c.start_date) / curve.get_df(c.end_date) - 1)
         + c.residual * SPREAD.rate * (c.end_date - c.start_date).days / 360

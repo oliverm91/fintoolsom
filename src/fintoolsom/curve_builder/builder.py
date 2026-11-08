@@ -8,19 +8,24 @@ The build is split in private modules:
 * :mod:`._solver` — the unknown layout, the atomic root, the date-by-date bootstrap.
 
 :class:`_CurveBuilder` drives them: it solves one ready group at a time, merges
-groups that wait on each other, and finally checks that every quote that pinned a
-pillar still reprices.
+groups that wait on each other, finally checks that every quote that pinned a
+pillar still reprices and warns about the quotes it ditched (no pillar of their own).
 """
 from __future__ import annotations
 
+import dataclasses
+import warnings
+
 from ..derivatives.calculator import Calculator
+from ..derivatives.forwards import Forward
 from ..derivatives.swaps import Swap
 from ..market.currencies import Currency, CurrencyName
 from ..market.index import Index
+from ..market.conventions import FixedLegSpec, FloatingLegSpec
 from ..market.market import Market
-from ..rates import InterpolationMethod, ProjectionInterpolationMethod
-from ._errors import InsufficientQuotesError, RepricingError
-from ._keys import _Proj
+from ..rates import InterpolationMethod, Rate
+from ._errors import InsufficientQuotesError, RedundantQuoteWarning, RepricingError
+from ._keys import _instrument_of
 from ._plan import _Planner
 from ._seeds import _Seeder
 from ._solver import _GroupSolve, _solve_unknowns
@@ -34,30 +39,30 @@ _REPRICE_TOL = 1e-4
 
 
 class _CurveBuilder:
-    """One curve build: every discount and projection curve, by one scheduler.
+    """One curve build: every index and discount curve, by one scheduler.
 
     Quotes are grouped by the curves they read; each quote owns at most one pillar.
     A group is solved once no other pending group still owns a pillar it reads, so
     every curve is complete where it is read; groups waiting on each other are
-    merged and solved jointly. Discount curves go to ``market.curves``, the forward
-    curves of projection-only indexes to ``market.projection_curves``. Mutates
-    `market` in place.
+    merged and solved jointly. Curves go to ``market.curves`` under their ids.
+    Mutates `market` in place.
 
     Parameters
     ----------
     quotes : list of InstrumentQuote
         Quotes to reprice.
     market : Market
-        Market to build into; needs a `riskless_index`.
-    discount_method : InterpolationMethod
-        Interpolation of the discount curves.
-    projection_method : ProjectionInterpolationMethod
-        Interpolation of the projection curves.
+        Market to build into; needs a `risk_free_index`.
+    discount_interp_method : InterpolationMethod, optional
+        Interpolation of the discount curves it creates (log-linear by default).
+    index_interp_method : InterpolationMethod, optional
+        Interpolation of the index curves it creates (piecewise-constant forwards
+        by default).
 
     Raises
     ------
     ValueError
-        If the market has no `riskless_index`.
+        If the market has no `risk_free_index`.
     """
 
     # Bootstrap each group date by date when its interpolation allows it; False always
@@ -68,16 +73,16 @@ class _CurveBuilder:
         self,
         quotes: list,
         market: Market,
-        discount_method: InterpolationMethod,
-        projection_method: ProjectionInterpolationMethod,
+        discount_interp_method: InterpolationMethod = InterpolationMethod.LogLinear,
+        index_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
     ):
-        if market.riskless_index is None:
-            raise ValueError("Market has no riskless_index; curve building needs one.")
+        if market.risk_free_index is None:
+            raise ValueError("Market has no risk_free_index; curve building needs one.")
         self.market = market
         self.t = market.t
-        self.discount_method = discount_method
-        self.projection_method = projection_method
-        self.seeder = _Seeder(market, market.riskless_index)
+        self.discount_interp_method = discount_interp_method
+        self.index_interp_method = index_interp_method
+        self.seeder = _Seeder(market, market.risk_free_index)
         self.plan = _Planner(quotes, market, self.seeder)
         self._pinning: list = []  # (instrument, report currency) of every quote that owned a pillar
 
@@ -91,6 +96,11 @@ class _CurveBuilder:
             under-determined or read a curve no quote builds.
         RepricingError
             If a quote that pinned a pillar no longer reprices at the end.
+
+        Warns
+        -----
+        RedundantQuoteWarning
+            Listing the quotes that owned no pillar, with their MTM.
         """
         plan = self.plan
         pending = [g for g in plan.groups if g]
@@ -111,6 +121,7 @@ class _CurveBuilder:
                     f"the available quotes: {[set(g) for g in pending]}."
                 )
         self._check_repricing()
+        self._warn_ditched()
 
     def _solve_group(
         self, group, instruments, report_currency: Currency = _REPORT_CURRENCY, candidates: list | None = None
@@ -138,16 +149,16 @@ class _CurveBuilder:
         if candidates is None:  # a single-curve solve: every instrument pins that curve
             candidates = [tuple(group)] * len(instruments)
         owners = plan.assign_pillars(instruments, candidates)
-        fixed_pillars, free_dates, free_seed_dfs = plan.partition_pillars(group, instruments, owners)
+        fixed_pillars, free_dates, free_seeds = plan.partition_pillars(group, instruments, owners)
         if not free_dates:
             return "nothing"
-        if not set(group) <= plan.existing_keys() | set(free_dates):
+        if not all(plan.exists(c) or c in free_dates for c in group):
             return "defer"  # it reads a curve that is not built and gets no pillar from it.
 
         residual_instruments, pillar_dates = plan.residual_instruments(instruments, free_dates, owners)
         solve = _GroupSolve.from_free_pillars(
-            self.market, self.t, self.discount_method, fixed_pillars, free_dates, free_seed_dfs,
-            self.projection_method,
+            self.market, self.t, self.discount_interp_method, fixed_pillars, free_dates, free_seeds,
+            self.index_interp_method,
         )
         if solve.n_unknowns != len(residual_instruments):
             return "defer"  # duplicate pillars: over-determined.
@@ -173,8 +184,47 @@ class _CurveBuilder:
                 f"on a {type(instr).__name__}): a curve they were fitted on was changed afterwards."
             )
 
+    def ditched_quotes(self) -> list[tuple]:
+        """``(quote, mtm, mtm_pct, mtm_bp)`` of every quote that owned no pillar.
+
+        See :class:`RedundantQuoteWarning` for the fields.
+        """
+        pinning = {id(i) for i, _ in self._pinning}
+        out = []
+        for quote, instr in self.plan.instrument.items():
+            if id(instr) in pinning:
+                continue
+            mtm = Calculator.valuate(instr, self.market, _REPORT_CURRENCY)
+            if isinstance(instr, Forward):  # no quoted rate: MTM against its notional
+                notional = _forward_notional(instr, self.market, _REPORT_CURRENCY)
+                out.append((quote, mtm, mtm / notional if notional else float("nan"), None))
+            else:  # a swap: MTM in bp of its quoted rate
+                dv01 = _quote_dv01(quote, mtm, self.market)
+                out.append((quote, mtm, None, mtm / abs(dv01) if dv01 else None))
+        return out
+
+    def _warn_ditched(self) -> None:
+        """Warn, once per build, about the quotes the curves ignore."""
+        ditched = self.ditched_quotes()
+        if not ditched:
+            return
+        lines = [
+            f"  {_describe(q, self.plan.instrument[q], self.market)}: MTM {mtm:,.4f} {_REPORT_CURRENCY}"
+            + (f" = {pct:.4%} of notional" if pct is not None else "")
+            + (f" = {bp:+.4f} bp" if bp is not None else "")
+            for q, mtm, pct, bp in ditched
+        ]
+        warnings.warn(
+            RedundantQuoteWarning(
+                f"{len(ditched)} quote(s) own no pillar and were not fitted (the curves they would "
+                "pin are already built past their maturity by other quotes):\n" + "\n".join(lines),
+                ditched,
+            ),
+            stacklevel=4,  # the caller of build_curves
+        )
+
     def _bootstrap_projection_curve(self, index: Index, swaps: list[Swap]) -> None:
-        """Solve the projection curve of `index` alone from `swaps`.
+        """Solve the curve of `index` alone from `swaps`.
 
         The discount curves the swaps read must already be in the market.
 
@@ -183,23 +233,67 @@ class _CurveBuilder:
         InsufficientQuotesError
             If the swaps do not pin one distinct new segment each.
         """
-        if self._solve_group(frozenset({_Proj(index)}), swaps, index.currency) != "solved":
+        if self._solve_group(frozenset({index}), swaps, index.currency) != "solved":
             raise InsufficientQuotesError(
                 f"Projection curve for '{index.name}' is under-determined by its swaps."
             )
+
+
+def _forward_notional(forward: Forward, market: Market, currency: Currency) -> float:
+    """Base-currency notional of `forward`, in `currency`."""
+    amount, ccy = forward.notional, forward.currency_pair.base_currency
+    return abs(amount if ccy == currency else Calculator._convert(amount, ccy, currency, market))
+
+
+def _quote_dv01(quote, mtm: float, market: Market) -> float | None:
+    """MTM change, in the report currency, for +1bp on the quote's quoted rate.
+
+    The fixed rate of a fixed-float swap quote, the receive-leg spread of a
+    float-float one; None for a quote that is not a swap (an FX forward).
+    """
+    bp = 1e-4
+    if isinstance(fixed := getattr(quote, "fixed_leg", None), FixedLegSpec):
+        bumped = dataclasses.replace(
+            quote, fixed_leg=dataclasses.replace(fixed, rate=Rate(fixed.rate.rate_convention, fixed.rate.rate + bp))
+        )
+    elif isinstance(leg := getattr(quote, "receive_leg", None), FloatingLegSpec) and leg.spread is not None:
+        bumped = dataclasses.replace(
+            quote, receive_leg=dataclasses.replace(leg, spread=Rate(leg.spread.rate_convention, leg.spread.rate + bp))
+        )
+    else:
+        return None
+    return Calculator.valuate(_instrument_of(bumped, market), market, _REPORT_CURRENCY) - mtm
+
+
+def _describe(quote, instrument, market: Market) -> str:
+    """Short label of a quote: type, tenor (or payment date) and currencies.
+
+    One currency (``CLP``) for a single-currency swap; two as a pair (``USD-CLP``)
+    for a cross-currency swap or an FX forward: its base-quote order for a forward,
+    the risk-free currency last for a swap.
+    """
+    when = getattr(quote, "term", None) or getattr(quote, "payment_date", "")
+    if isinstance(instrument, Forward):
+        currencies = [instrument.currency_pair.base_currency, instrument.currency_pair.quote_currency]
+    else:
+        local = getattr(market.risk_free_index, "currency", None)
+        legs = {instrument.receive_leg.currency, instrument.pay_leg.currency}
+        currencies = sorted(legs, key=lambda c: (c == local, str(c)))
+    return f"{type(quote).__name__} {when} {'-'.join(map(str, currencies))}"
 
 
 def build_curves(
     quotes: list,
     market: Market,
     *,
-    interpolation_method: InterpolationMethod | None = None,
+    discount_interp_method: InterpolationMethod = InterpolationMethod.LogLinear,
+    index_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
 ) -> None:
     """Bootstrap the curves that reprice `quotes` into `market`, in place.
 
-    Discount curves go to ``market.curves`` (keyed by Index, or by a non-riskless
-    Currency) and projection-only indexes get a curve in
-    ``market.projection_curves``.
+    Every index a quote reads gets an :class:`IndexCurve`, under the index name;
+    a currency other than the risk-free index's gets a :class:`DiscountCurve`,
+    under ``<currency>_<risk-free index>``. Both go to ``market.curves``.
 
     Parameters
     ----------
@@ -207,9 +301,13 @@ def build_curves(
         Quotes sharing one quote date, equal to ``market.t``.
     market : Market
         Market as of the quote date, with the FX and fixings valuation needs.
-    interpolation_method : InterpolationMethod, optional
-        Discount-curve interpolation for this build; defaults to
-        ``market.discount_interpolation_method``.
+    discount_interp_method : InterpolationMethod, optional
+        Interpolation of the discount curves this build creates: ``LogLinear``
+        (default, solved date by date) or ``HermiteCubicSpline``. A curve already
+        in the market keeps its own method when the build extends it.
+    index_interp_method : InterpolationMethod, optional
+        Interpolation of the index curves this build creates (``PiecewiseConstant``
+        forwards by default); an extended one keeps its own.
 
     Raises
     ------
@@ -220,6 +318,13 @@ def build_curves(
         If the quotes under-determine a curve.
     RepricingError
         If a quote that pinned a pillar does not reprice once every curve is built.
+
+    Warns
+    -----
+    RedundantQuoteWarning
+        When quotes were ditched (they own no pillar): each with its MTM and, for a
+        swap, that MTM in basis points of its DV01; for an FX forward, as a
+        percentage of its notional.
     """
     # Derive the valuation date from the quotes and cross-check market.t, since
     # Calculator.valuate reads FX (and other) market data off market.t internally.
@@ -237,8 +342,5 @@ def build_curves(
         )
 
     _CurveBuilder(
-        quotes,
-        market,
-        discount_method=interpolation_method or market.discount_interpolation_method,
-        projection_method=market.projection_interpolation_method,
+        quotes, market, discount_interp_method=discount_interp_method, index_interp_method=index_interp_method
     ).build()

@@ -5,7 +5,7 @@ from fintoolsom.derivatives.forwards.forwards import NDF
 from fintoolsom.market import Currency, Market, OvernightRateIndex, uf
 from fintoolsom.market.currencies import CurrencyPair
 from fintoolsom.market.quotes import ForwardPointsQuote, ForwardPriceQuote
-from fintoolsom.rates import ZeroCouponCurve
+from fintoolsom.rates import DiscountCurve, IndexCurve
 
 
 
@@ -35,9 +35,12 @@ def uf_level(d: date) -> float:
     return UF_T * 1.0001 ** (d - T).days
 
 
-def _flat_curve(rate: float) -> ZeroCouponCurve:
+def _flat_curve(rate: float, currency: Currency | None = None) -> IndexCurve | DiscountCurve:
+    """Flat continuous zero rate: the risk-free index curve, or `currency`'s discount curve."""
+    if currency is None:
+        return IndexCurve(T, RISKLESS, [T, T + timedelta(days=1825)], [rate])
     pillars = [T + timedelta(days=d) for d in (1, 7, 30, 91, 365, 730, 1825)]
-    return ZeroCouponCurve(T, date_dfs=[(d, math.exp(-rate * (d - T).days / 365)) for d in pillars])
+    return DiscountCurve(T, currency, RISKLESS, pillars, [math.exp(-rate * (d - T).days / 365) for d in pillars])
 
 
 def _market() -> Market:
@@ -46,8 +49,8 @@ def _market() -> Market:
     levels = {T + timedelta(days=i): uf_level(T + timedelta(days=i)) for i in range(-60, 6)}
     return Market(
         t=T,
-        riskless_index=RISKLESS,
-        curves={RISKLESS: _flat_curve(R_CLP), CLF: _flat_curve(R_CLF)},
+        risk_free_index=RISKLESS,
+        curves=[_flat_curve(R_CLP), _flat_curve(R_CLF, CLF)],
         fx_history={CLFCLP: uf.uf_rate_data(levels)},
     )
 

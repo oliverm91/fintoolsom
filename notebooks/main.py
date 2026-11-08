@@ -47,5 +47,5 @@ icp_data =  OvernightInterestPriceHistory(icp, {t: 100.0})
 cp = CurrencyPair(usd, clp)
 
 fx_rate_data = FX_RateData(cp, {t: FX_Rate(cp, 900)})
-market = Market(t, fx_history={cp: fx_rate_data}, indexes_history={"SOFR": sofr_data, "ICP": icp_data}, riskless_index=icp)
+market = Market(t, fx_history={cp: fx_rate_data}, indexes_history={"SOFR": sofr_data, "ICP": icp_data}, risk_free_index=icp)
 build_curves(quotes, market)

@@ -1,13 +1,14 @@
-"""Curve-builder routing: every index gets exactly one curve.
+"""Curve-builder routing: every index gets exactly one curve, keyed by the index.
 
-A floating index whose curve discounts (the riskless index, or a collateral index) is
-a discount-curve key; any other floating index is projection-only: it is pinned as
-``_Proj(index)`` and solved into ``market.projection_curves``, never ``market.curves``.
+Whether that curve also discounts (the risk-free index, or a collateral index) or
+only projects (any other floating index), it is the same IndexCurve key; a
+currency other than the risk-free index's is a DiscountCurve key.
 """
 
 from types import SimpleNamespace
 import pytest
-from fintoolsom.curve_builder._keys import _curves_needed, _Proj
+from fintoolsom.market.currencies import Currency, CurrencyName
+from fintoolsom.curve_builder._keys import _curve_id, _curves_needed
 from tests.factories.swap_factory import CAMARA, ICP, RISKLESS, TAB_3M, Ccy, LegCase, LegKind, SwapCase, SwapStatus, build_swap
 
 
@@ -26,8 +27,8 @@ def _quote(float_kind: LegKind, collateral=None) -> SimpleNamespace:
     "float_kind, collateral, pinned",
     [
         (LegKind.PRICE, None, {ICP}),                         # riskless index: its curve discounts
-        (LegKind.TERM, None, {ICP, _Proj(TAB_3M)}),           # term index: projection-only
-        (LegKind.OVERNIGHT, None, {ICP, _Proj(CAMARA)}),      # overnight, discounts nothing here
+        (LegKind.TERM, None, {ICP, TAB_3M}),                  # term index: projection-only
+        (LegKind.OVERNIGHT, None, {ICP, CAMARA}),             # overnight, discounts nothing here
         (LegKind.OVERNIGHT, CAMARA, {CAMARA}),                # own collateral: its curve discounts
     ],
 )
@@ -35,6 +36,6 @@ def test_floating_index_routing(float_kind, collateral, pinned):
     assert _curves_needed(_quote(float_kind, collateral), RISKLESS) == frozenset(pinned)
 
 
-def test_projection_key_reads_its_index_currency():
-    assert _Proj(TAB_3M).currency == TAB_3M.currency
-    assert _Proj(TAB_3M) == _Proj(TAB_3M) and _Proj(TAB_3M) != TAB_3M
+def test_curve_ids_of_index_and_currency_keys():
+    assert _curve_id(TAB_3M, RISKLESS) == TAB_3M.name
+    assert _curve_id(Currency(CurrencyName.USD), RISKLESS) == f"USD_{RISKLESS.name}"

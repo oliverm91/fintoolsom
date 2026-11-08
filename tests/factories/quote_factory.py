@@ -3,7 +3,7 @@
 Port of ``notebooks/build_quotes.py`` reading ``tests/data/quotes_20260629.json``:
 CLP fixed vs ICP and USD fixed vs SOFR OIS, USD/CLP forward points and ICP/SOFR
 cross-currency basis swaps. Unlike the notebook loader, it reads the quoted
-``spread_bps`` and uses one ICP index (the market's riskless index) everywhere.
+``spread_bps`` and uses one ICP index (the market's risk-free index) everywhere.
 """
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def quote_market(t: date = QUOTE_DATE) -> Market:
         t,
         fx_history={USDCLP: FX_RateData(USDCLP, {t: FX_Rate(USDCLP, USDCLP_SPOT)})},
         indexes_history={"SOFR": sofr_history, "ICP": icp_history},
-        riskless_index=ICP,
+        risk_free_index=ICP,
     )
 
 

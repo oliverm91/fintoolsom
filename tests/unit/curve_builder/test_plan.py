@@ -1,16 +1,16 @@
 """Solver planning (_plan._Planner): candidates, pillar ownership, readiness, cycles."""
 import dataclasses
+import math
 from datetime import date
 
 import pytest
 
-from fintoolsom.curve_builder._keys import _Proj
 from fintoolsom.curve_builder._plan import _Planner
 from fintoolsom.curve_builder._seeds import _Seeder
 from fintoolsom.market import CrossCurrencyFloatFloatQuote, Currency, ForwardPointsQuote, IRSQuote, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.market.quotes import ForwardPriceQuote
-from fintoolsom.rates import ZeroCouponCurve
+from fintoolsom.rates import DiscountCurve
 from tests.factories.quote_factory import (
     ICP, SOFR, TERM3M, TERM6M, built_market, load_quotes, quote_market, term_basis_quotes, term_irs_quotes,
 )
@@ -20,7 +20,7 @@ USD = Currency.USD
 
 def _planner(quotes, market=None) -> _Planner:
     market = quote_market() if market is None else market
-    return _Planner(quotes, market, _Seeder(market, market.riskless_index))
+    return _Planner(quotes, market, _Seeder(market, market.risk_free_index))
 
 
 def _is(kind, ccy=None, collateral="any"):
@@ -63,8 +63,8 @@ def test_a_basis_swap_prefers_the_index_no_irs_pins(real):
     irs = term_irs_quotes(real, tenors=["2Y"])
     basis = term_basis_quotes(irs)
     plan = _planner(irs + basis)
-    assert plan.candidates[irs[0]][0] == _Proj(TERM3M)
-    assert plan.candidates[basis[0]][0] == _Proj(TERM6M)
+    assert plan.candidates[irs[0]][0] == TERM3M
+    assert plan.candidates[basis[0]][0] == TERM6M
 
 
 # ── Ownership ───────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ def test_quotes_inside_built_curves_own_nothing(real):
 def test_a_quote_falls_back_when_its_preferred_curve_is_built():
     t, pay = date(2024, 1, 2), date(2024, 7, 2)
     riskless = OvernightRateIndex("OIS", currency=Currency.CLP)
-    market = Market(t=t, riskless_index=riskless, curves={USD: ZeroCouponCurve(t, date_dfs=[(pay, 0.98)])})
+    market = Market(t=t, risk_free_index=riskless, curves=[DiscountCurve(t, USD, riskless, [pay], [0.98])])
     usdclp = CurrencyPair(USD, Currency.CLP)
     market.add_fx_rate(t, FX_Rate(usdclp, 900.0))
     quote = ForwardPriceQuote(currency_pair=usdclp, value=928.0, is_buy=True, payment_date=pay, quote_date=t)
@@ -94,7 +94,8 @@ def test_a_quote_falls_back_when_its_preferred_curve_is_built():
     assert plan.owned_pillars(group) == {(riskless, pay)}
     fixed, free, seeds = plan.partition_pillars(group, plan.instruments_of(group), [riskless])
     assert free == {riskless: [pay]}
-    assert seeds[riskless][0] == pytest.approx(900.0 * 0.98 / 928.0, rel=1e-12)  # covered interest parity
+    # An index curve is seeded in its first forward: covered interest parity on the df.
+    assert math.exp(-seeds[riskless][0] * (pay - t).days / 365) == pytest.approx(900.0 * 0.98 / 928.0, rel=1e-12)
 
 
 # ── Readiness ───────────────────────────────────────────────────────────────

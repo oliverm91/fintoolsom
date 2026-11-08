@@ -63,7 +63,8 @@ T = VAL_DATE
 
 
 def _df(key, d: date) -> float:
-    return MARKET.curves[key].get_df(d)
+    curve = MARKET.get_discount_curve(key) if isinstance(key, Currency) else MARKET.get_index_curve(key)
+    return curve.get_df(d)
 
 
 def _funding_df(ccy: Currency, d: date) -> float:

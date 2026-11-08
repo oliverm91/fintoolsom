@@ -1,5 +1,4 @@
-"""Rates, ZeroCouponCurve and ProjectionCurve: accessors, conversions and validation."""
-import math
+"""Rates and the legacy ZeroCouponCurve: accessors, conversions and validation."""
 from copy import copy
 from datetime import timedelta
 
@@ -8,19 +7,15 @@ import pytest
 
 from fintoolsom.rates import (
     CompoundedInterestConvention,
-    DiscountProjectionView,
     ExponentialInterestConvention,
     InterpolationMethod,
     LinearInterestConvention,
-    ProjectionCurve,
-    ProjectionInterpolationMethod,
     Rate,
-    RateConvention,
     ZeroCouponCurve,
     ZeroCouponCurvePoint,
 )
 from tests.factories.curve_factory import SAMPLE_CURVE_DATE, flat_zero_coupon_curve, sample_zero_coupon_curve
-from tests.factories.rate_factory import comp_act365, exp_act365, lin_act360, rate
+from tests.factories.rate_factory import exp_act365, lin_act360, rate
 
 T = SAMPLE_CURVE_DATE
 
@@ -132,35 +127,8 @@ def test_curve_str_lists_its_pillars():
     assert text.startswith(f"ZeroCouponCurve class. Curve date {T}.") and text.count("|") == 3
 
 
-@pytest.mark.parametrize("method", list(InterpolationMethod))
+@pytest.mark.parametrize("method", [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline])
 def test_every_interpolation_reprices_its_pillars(method):
     curve = sample_zero_coupon_curve(method)
     for t_i, df in [(d, df) for d, df in curve.date_dfs]:
         assert curve.get_df(t_i) == pytest.approx(df, rel=1e-9)
-
-
-# ── ProjectionCurve ─────────────────────────────────────────────────────────
-
-KNOTS = [T, T + timedelta(days=1), T + timedelta(days=180), T + timedelta(days=720)]
-FWDS = np.array([0.05, 0.055, 0.06])
-
-
-def test_projection_curve_pseudo_dfs_str_and_equivalent_rate():
-    pc = ProjectionCurve(T, KNOTS, FWDS, ProjectionInterpolationMethod.PiecewiseConstant)
-    dfs = pc.pseudo_dfs(KNOTS[1:])
-    assert np.all(np.diff(dfs) < 0) and dfs[0] == pytest.approx(math.exp(-0.05 / 365))
-    assert str(pc).startswith("ProjectionCurve(PiecewiseConstant)") and len(pc) == 3
-    s, e = KNOTS[2], KNOTS[3]
-    fwd = pc.get_equivalent_forward_rate(s, e, exp_act365())
-    assert fwd.rate == pytest.approx(0.06, rel=1e-9)
-    assert pc.get_equivalent_forward_rate(s, e).rate_convention == RateConvention()
-
-
-def test_discount_projection_view_reads_the_discount_curve():
-    curve = flat_zero_coupon_curve(T, 0.05)
-    view = DiscountProjectionView(curve)
-    dates = [T + timedelta(days=100), T + timedelta(days=400)]
-    assert view.pseudo_dfs(dates) == pytest.approx(curve.get_dfs(dates))
-    assert view.get_equivalent_forward_rate(dates[0], dates[1], exp_act365()).rate == pytest.approx(0.05, rel=1e-3)
-    assert view.get_equivalent_forward_rate(dates[0], dates[1]).rate_convention == RateConvention()
-    assert comp_act365() == RateConvention()
