@@ -26,7 +26,7 @@ class Coupon:
     accrue_rate: Rate = field(init=False)
 
     def __post_init__(self):
-        self.validate_inputs()
+        self._validate_inputs()
         self.amortization = float(self.amortization)
         self.interest = float(self.interest)
         self.flow = self.amortization + self.interest
@@ -44,7 +44,7 @@ class Coupon:
             ),
         )
 
-    def validate_inputs(self):
+    def _validate_inputs(self):
         if not isinstance(self.amortization, (float, int)):
             raise TypeError(
                 f"Amortization must be an int or float. Got {type(self.amortization)}"
@@ -123,7 +123,7 @@ class Coupons:
                 )
         self.sort()
         if self.check_residuals:
-            self.validate_residuals()
+            self._validate_residuals()
 
     def copy(self) -> Self:
         return Coupons([c.copy() for c in self.coupons])
@@ -137,7 +137,7 @@ class Coupons:
         self.flows = self.get_flows()
         self.end_dates = self.get_end_dates()
 
-    def validate_residuals(self):
+    def _validate_residuals(self):
         for i in range(len(self.coupons)):
             calculated_residual = sum(
                 [self.coupons[j].amortization for j in range(i, len(self.coupons))]
@@ -200,7 +200,7 @@ class Coupons:
                 raise ValueError(
                     f"Could not adjust to notional {notional}. Sum of amortization is {n}."
                 )
-            self.validate_residuals()
+            self._validate_residuals()
 
 
 class CLBond:
@@ -299,7 +299,7 @@ class CLBond:
         return total_pv
 
     def get_present_value_zc(
-        self, date: date, zc_curve: rates.Curve
+        self, date: date, zc_curve: rates.ZeroCouponCurve
     ) -> float:
         """
         Retuns present value using a Zero Coupon Curve object.
@@ -321,7 +321,7 @@ class CLBond:
         self,
         date: date,
         irr: rates.Rate,
-        zc_curve: rates.Curve,
+        zc_curve: rates.ZeroCouponCurve,
         initial_guess: float = None,
         maxiter: int = 50,
     ) -> float:
@@ -353,7 +353,7 @@ class CLBond:
             zc_curve.parallel_bump_rates_bps(-bp_bump)
             return bumped_val - irr_value
 
-        result = newton(bp_bump_curve_value, initial_guess)
+        result = newton(bp_bump_curve_value, initial_guess, maxiter=maxiter)
         return result
 
     def get_irr_from_present_value(
@@ -395,7 +395,7 @@ class CLBond:
     def get_irr_with_zcc(
         self,
         date: date,
-        zero_coupon_curve: rates.Curve,
+        zero_coupon_curve: rates.ZeroCouponCurve,
         irr_rate_convention: RateConvention,
         initial_guess: float = None,
     ) -> Rate:
