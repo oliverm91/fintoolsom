@@ -59,7 +59,7 @@ class LinearInterestConvention(InterestConventionBase):
 
     @staticmethod
     def _strfy():
-        return "l"
+        return "lin"
 
 
 class CompoundedInterestConvention(InterestConventionBase):
@@ -77,7 +77,7 @@ class CompoundedInterestConvention(InterestConventionBase):
 
     @staticmethod
     def _strfy():
-        return "c"
+        return "comp"
 
 
 class ExponentialInterestConvention(InterestConventionBase):
@@ -95,7 +95,7 @@ class ExponentialInterestConvention(InterestConventionBase):
 
     @staticmethod
     def _strfy():
-        return "e"
+        return "exp"
 
 
 @dataclass(slots=True)
@@ -121,8 +121,8 @@ class RateConvention:
     def __str__(self) -> str:
         # The conventions are classes: str() of a class ignores its __str__ classmethod.
         return (
-            self.interest_convention.__str__()
-            + self.day_count_convention.__str__()
+            self.interest_convention.__str__() + "/"
+            + self.day_count_convention.__str__() + "/"
             + str(self.time_fraction_base)
         )
 

@@ -24,7 +24,7 @@ T = SAMPLE_CURVE_DATE
 
 @pytest.mark.parametrize(
     "convention, name",
-    [(LinearInterestConvention, "l"), (CompoundedInterestConvention, "c"), (ExponentialInterestConvention, "e")],
+    [(LinearInterestConvention, "lin"), (CompoundedInterestConvention, "comp"), (ExponentialInterestConvention, "exp")],
 )
 def test_interest_conventions_have_short_names(convention, name):
     assert convention.__str__() == name
@@ -32,7 +32,7 @@ def test_interest_conventions_have_short_names(convention, name):
 
 def test_rate_convention_str_and_copy():
     conv = lin_act360()
-    assert str(conv) == "lact360"
+    assert str(conv) == "lin/act/360"
     duplicate = copy(conv)
     assert duplicate == conv and duplicate is not conv
 
