@@ -96,3 +96,13 @@ def test_a_holiday_added_to_a_shared_calendar_reaches_every_consumer():
         )  # an own calendar is independent
     finally:
         get_calendar("CL")._calendar.pop(extra)
+
+
+def test_repr_is_short():
+    from datetime import date
+    from fintoolsom.dates import Calendar
+
+    assert repr(Calendar()) == "Calendar(weekends only)"
+    cal = Calendar(country="CL", subdiv=None, custom_holidays=[date(2025, 1, 2)])
+    assert repr(cal) == "Calendar(CL, 1 custom)"
+    assert str(cal) == repr(cal)

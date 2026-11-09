@@ -61,6 +61,15 @@ class Calendar:
     def __add__(self, other: Self) -> Self:
         return self.combine(other)
 
+    def __repr__(self) -> str:
+        # The default dataclass repr would list every holiday of every loaded year.
+        parts = [self.country if self.country is not None else "weekends only"]
+        if self.subdiv:
+            parts.append(f"subdiv={self.subdiv}")
+        if self.custom_holidays:
+            parts.append(f"{len(self.custom_holidays)} custom")
+        return f"Calendar({', '.join(parts)})"
+
 
 # One shared calendar per country (None: weekends only). Building a country calendar
 # and filling its holiday years is costly, so every consumer that names a country
