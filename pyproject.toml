@@ -30,7 +30,7 @@ dependencies = [
     "numpy",
     "pandas",
     "scipy",
-    "holidays>=0.58",
+    "holidays>=0.88",
     "python-dateutil",
 ]
 
