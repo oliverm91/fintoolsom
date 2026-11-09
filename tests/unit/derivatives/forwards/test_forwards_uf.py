@@ -5,7 +5,6 @@ from fintoolsom.market import Currency
 from fintoolsom.market.currencies import CurrencyPair
 
 
-
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
 
 

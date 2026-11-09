@@ -144,7 +144,10 @@ class Coupons:
             )
             # Remaining amortizations must repay the residual (within 1%), both ways.
             if (
-                abs(round(calculated_residual, 1) / round(self.coupons[i].residual, 1) - 1)
+                abs(
+                    round(calculated_residual, 1) / round(self.coupons[i].residual, 1)
+                    - 1
+                )
                 > 1 / 100
             ):
                 raise ValueError(

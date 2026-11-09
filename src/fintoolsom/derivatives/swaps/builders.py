@@ -23,6 +23,7 @@ fx_fixing_lag : int, default 0
     Business days between each FX fixing and its payment date; used only when the
     leg settles non-deliverably in another currency (keyword-only).
 """
+
 from __future__ import annotations
 
 from datetime import date

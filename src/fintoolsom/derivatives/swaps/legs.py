@@ -108,7 +108,9 @@ class SwapLeg:
 
     @staticmethod
     def _fx_fixing_dates(
-        payment_dates: list[date], adj_convention: AdjustmentDateConventionBase, fx_fixing_lag: int
+        payment_dates: list[date],
+        adj_convention: AdjustmentDateConventionBase,
+        fx_fixing_lag: int,
     ) -> list[date]:
         """FX fixing dates `fx_fixing_lag` business days before each payment date.
 
@@ -198,8 +200,13 @@ class FixedLeg(SwapLeg):
         FixedLeg
         """
         schedule = cls._build_schedule(
-            start_date, term, payment_frequency,
-            adj_convention, stub_first, long_stub, maturity_date,
+            start_date,
+            term,
+            payment_frequency,
+            adj_convention,
+            stub_first,
+            long_stub,
+            maturity_date,
         )
         maturity = max(schedule)
         fx_dates = cls._fx_fixing_dates(schedule[1:], adj_convention, fx_fixing_lag)
@@ -241,7 +248,9 @@ class FloatingLeg(SwapLeg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.spreads_values = self.residuals * (self.spread.get_wealth_factor(self.start_dates, self.end_dates) - 1)
+        self.spreads_values = self.residuals * (
+            self.spread.get_wealth_factor(self.start_dates, self.end_dates) - 1
+        )
 
     @property
     def currency(self) -> Currency:
@@ -299,15 +308,22 @@ class TermRateLeg(FloatingLeg):
         TermRateLeg
         """
         schedule = cls._build_schedule(
-            start_date, term, payment_frequency,
-            adj_convention, stub_first, long_stub, maturity_date,
+            start_date,
+            term,
+            payment_frequency,
+            adj_convention,
+            stub_first,
+            long_stub,
+            maturity_date,
         )
         spread = _zero_spread() if spread is None else spread
         if fixing_lag is None:
             fixing_lag = getattr(index, "spot_lag", 0)
         calendar = adj_convention.calendar
         n = len(schedule) - 1
-        fixing_dates = [calendar.add_business_days(schedule[i], -fixing_lag) for i in range(n)]
+        fixing_dates = [
+            calendar.add_business_days(schedule[i], -fixing_lag) for i in range(n)
+        ]
         maturity = max(schedule)
         fx_dates = cls._fx_fixing_dates(schedule[1:], adj_convention, fx_fixing_lag)
         coupons = [
@@ -323,7 +339,9 @@ class TermRateLeg(FloatingLeg):
             )
             for i in range(n)
         ]
-        return cls(coupons=coupons, index=index, spread=spread, fixing_dates=fixing_dates)
+        return cls(
+            coupons=coupons, index=index, spread=spread, fixing_dates=fixing_dates
+        )
 
 
 @dataclass
@@ -363,19 +381,45 @@ class OvernightLeg(FloatingLeg):
         OvernightLeg
         """
         return cls._from_schedule(
-            OvernightCoupon, notional, start_date, term, payment_frequency, adj_convention,
-            index, spread, stub_first, long_stub, maturity_date, fx_fixing_lag,
+            OvernightCoupon,
+            notional,
+            start_date,
+            term,
+            payment_frequency,
+            adj_convention,
+            index,
+            spread,
+            stub_first,
+            long_stub,
+            maturity_date,
+            fx_fixing_lag,
         )
 
     @classmethod
     def _from_schedule(
-        cls, coupon_cls, notional, start_date, term, payment_frequency, adj_convention,
-        index, spread, stub_first, long_stub, maturity_date, fx_fixing_lag,
+        cls,
+        coupon_cls,
+        notional,
+        start_date,
+        term,
+        payment_frequency,
+        adj_convention,
+        index,
+        spread,
+        stub_first,
+        long_stub,
+        maturity_date,
+        fx_fixing_lag,
     ):
         """Bullet daily-compounded leg of `coupon_cls` coupons (shared by subclasses)."""
         schedule = cls._build_schedule(
-            start_date, term, payment_frequency,
-            adj_convention, stub_first, long_stub, maturity_date,
+            start_date,
+            term,
+            payment_frequency,
+            adj_convention,
+            stub_first,
+            long_stub,
+            maturity_date,
         )
         spread = _zero_spread() if spread is None else spread
         maturity = max(schedule)
@@ -428,6 +472,16 @@ class XCCYFloatingLeg(OvernightLeg):
         XCCYFloatingLeg
         """
         return cls._from_schedule(
-            XCCYCoupon, notional, start_date, term, payment_frequency, adj_convention,
-            index, spread, stub_first, long_stub, maturity_date, fx_fixing_lag,
+            XCCYCoupon,
+            notional,
+            start_date,
+            term,
+            payment_frequency,
+            adj_convention,
+            index,
+            spread,
+            stub_first,
+            long_stub,
+            maturity_date,
+            fx_fixing_lag,
         )

@@ -6,7 +6,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 def test_get_rate_falls_back_to_the_latest_past_fixing():
     d1, d2, d3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
     market = Market(t=d3, interest_rates={"x": {d1: _rate(0.01), d3: _rate(0.03)}})

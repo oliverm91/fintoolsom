@@ -110,7 +110,6 @@ class TF_Actual360(TimeFractionBase):
         return (end_date - start_date).days / 360
 
 
-
 @dataclass
 class TF_Actual364(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
@@ -161,7 +160,9 @@ class TF_NL_360(TimeFractionBase):
         The denominator is always 360.
         The first day in the period is excluded, the last day is included.
         """
-        return ((end_date - start_date).days - _feb_29_count(start_date, end_date)) / 360
+        return (
+            (end_date - start_date).days - _feb_29_count(start_date, end_date)
+        ) / 360
 
 
 @dataclass
@@ -174,7 +175,9 @@ class TF_NL_365(TimeFractionBase):
         The denominator is always 365.
         The first day in the period is excluded, the last day is included.
         """
-        return ((end_date - start_date).days - _feb_29_count(start_date, end_date)) / 365
+        return (
+            (end_date - start_date).days - _feb_29_count(start_date, end_date)
+        ) / 365
 
 
 @dataclass
@@ -228,7 +231,9 @@ class TF_ActualActualICMA(TimeFractionBase):
         """
         period_start = start_date if period_start is None else period_start
         period_end = end_date if period_end is None else period_end
-        return (end_date - start_date).days / (frequency * (period_end - period_start).days)
+        return (end_date - start_date).days / (
+            frequency * (period_end - period_start).days
+        )
 
 
 def _feb_29_count(start_date: date, end_date: date) -> int:

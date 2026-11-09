@@ -107,8 +107,12 @@ class Days30UDayCountConvention(DayCountConventionBase):
         # 30U/360 with the end-of-month rule (Strata THIRTY_U_360_EOM, SIA):
         # 1. both dates last of February -> D2 = 30; 2. D1 last of February -> D1 = 30;
         # 3. D2 = 31 and D1 >= 30 -> D2 = 30; 4. D1 = 31 -> D1 = 30.
-        start_last_of_february = start_date.month == 2 and d1 == calendar.monthrange(y1, m1)[1]
-        end_last_of_february = end_date.month == 2 and d2 == calendar.monthrange(y2, m2)[1]
+        start_last_of_february = (
+            start_date.month == 2 and d1 == calendar.monthrange(y1, m1)[1]
+        )
+        end_last_of_february = (
+            end_date.month == 2 and d2 == calendar.monthrange(y2, m2)[1]
+        )
         if start_last_of_february and end_last_of_february:
             d2 = 30
         if start_last_of_february:

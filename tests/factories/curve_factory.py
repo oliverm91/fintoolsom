@@ -1,4 +1,5 @@
 """Zero-coupon curves used across the tests."""
+
 import math
 from datetime import date
 
@@ -32,7 +33,9 @@ SAMPLE_CURVE_DFS = [
 ]
 
 
-def sample_zero_coupon_curve(method: InterpolationMethod | None = None) -> ZeroCouponCurve:
+def sample_zero_coupon_curve(
+    method: InterpolationMethod | None = None,
+) -> ZeroCouponCurve:
     """The sample CLP curve (log-linear unless `method` is given)."""
     kwargs = {} if method is None else {"df_interpolation_method": method}
     return ZeroCouponCurve(SAMPLE_CURVE_DATE, date_dfs=list(SAMPLE_CURVE_DFS), **kwargs)
@@ -42,7 +45,9 @@ def flat_zero_coupon_curve(
     t: date, rate: float, years: int = 30, method: InterpolationMethod | None = None
 ) -> ZeroCouponCurve:
     """Curve at a flat continuously compounded act/365 `rate`, yearly pillars to `years`."""
-    pillars = [t + relativedelta(days=1)] + [t + relativedelta(years=y) for y in range(1, years + 1)]
+    pillars = [t + relativedelta(days=1)] + [
+        t + relativedelta(years=y) for y in range(1, years + 1)
+    ]
     date_dfs = [(d, math.exp(-rate * (d - t).days / 365)) for d in pillars]
     kwargs = {} if method is None else {"df_interpolation_method": method}
     return ZeroCouponCurve(t, date_dfs=date_dfs, **kwargs)

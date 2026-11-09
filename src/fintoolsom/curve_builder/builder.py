@@ -11,6 +11,7 @@ The build is split in private modules:
 groups that wait on each other, finally checks that every quote that pinned a
 pillar still reprices and warns about the quotes it ditched (no pillar of their own).
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -109,12 +110,20 @@ class _CurveBuilder:
             waits = {g: plan.waits(g, pending, owned) for g in pending}
             ready = (g for g in sorted(pending, key=plan.priority) if not waits[g])
             solved = next(
-                (g for g in ready if self._solve_group(g, plan.instruments_of(g), candidates=plan.candidates_of(g))
-                 in ("solved", "nothing")),
+                (
+                    g
+                    for g in ready
+                    if self._solve_group(
+                        g, plan.instruments_of(g), candidates=plan.candidates_of(g)
+                    )
+                    in ("solved", "nothing")
+                ),
                 None,
             )
             if solved is not None:
-                pending.remove(solved)  # ownership changed: re-plan before the next solve
+                pending.remove(
+                    solved
+                )  # ownership changed: re-plan before the next solve
             elif not plan.merge_cycles(pending, waits):
                 raise InsufficientQuotesError(
                     "Curve build stalled: the remaining groups are under-determined given "
@@ -124,7 +133,11 @@ class _CurveBuilder:
         self._warn_ditched()
 
     def _solve_group(
-        self, group, instruments, report_currency: Currency = _REPORT_CURRENCY, candidates: list | None = None
+        self,
+        group,
+        instruments,
+        report_currency: Currency = _REPORT_CURRENCY,
+        candidates: list | None = None,
     ) -> str:
         """Solve the free pillars of `group` so the instruments owning them reprice.
 
@@ -149,23 +162,36 @@ class _CurveBuilder:
         if candidates is None:  # a single-curve solve: every instrument pins that curve
             candidates = [tuple(group)] * len(instruments)
         owners = plan.assign_pillars(instruments, candidates)
-        fixed_pillars, free_dates, free_seeds = plan.partition_pillars(group, instruments, owners)
+        fixed_pillars, free_dates, free_seeds = plan.partition_pillars(
+            group, instruments, owners
+        )
         if not free_dates:
             return "nothing"
         if not all(plan.exists(c) or c in free_dates for c in group):
             return "defer"  # it reads a curve that is not built and gets no pillar from it.
 
-        residual_instruments, pillar_dates = plan.residual_instruments(instruments, free_dates, owners)
+        residual_instruments, pillar_dates = plan.residual_instruments(
+            instruments, free_dates, owners
+        )
         solve = _GroupSolve.from_free_pillars(
-            self.market, self.t, self.discount_interp_method, fixed_pillars, free_dates, free_seeds,
+            self.market,
+            self.t,
+            self.discount_interp_method,
+            fixed_pillars,
+            free_dates,
+            free_seeds,
             self.index_interp_method,
         )
         if solve.n_unknowns != len(residual_instruments):
             return "defer"  # duplicate pillars: over-determined.
 
         y = _solve_unknowns(
-            solve, residual_instruments, pillar_dates, report_currency,
-            f"Curve solve for group {set(free_dates)}", date_by_date=self.date_by_date,
+            solve,
+            residual_instruments,
+            pillar_dates,
+            report_currency,
+            f"Curve solve for group {set(free_dates)}",
+            date_by_date=self.date_by_date,
         )
         solve.apply(y)  # root's last f-eval is not guaranteed to be at the solution.
         self._pinning += [(i, report_currency) for i in residual_instruments]
@@ -174,7 +200,8 @@ class _CurveBuilder:
     def _check_repricing(self) -> None:
         """Raise if a quote that pinned a pillar was moved off par by a later group."""
         off = [
-            (abs(v), i) for i, ccy in self._pinning
+            (abs(v), i)
+            for i, ccy in self._pinning
             if abs(v := Calculator.valuate(i, self.market, ccy)) > _REPRICE_TOL
         ]
         if off:
@@ -197,7 +224,9 @@ class _CurveBuilder:
             mtm = Calculator.valuate(instr, self.market, _REPORT_CURRENCY)
             if isinstance(instr, Forward):  # no quoted rate: MTM against its notional
                 notional = _forward_notional(instr, self.market, _REPORT_CURRENCY)
-                out.append((quote, mtm, mtm / notional if notional else float("nan"), None))
+                out.append(
+                    (quote, mtm, mtm / notional if notional else float("nan"), None)
+                )
             else:  # a swap: MTM in bp of its quoted rate
                 dv01 = _quote_dv01(quote, mtm, self.market)
                 out.append((quote, mtm, None, mtm / abs(dv01) if dv01 else None))
@@ -217,7 +246,8 @@ class _CurveBuilder:
         warnings.warn(
             RedundantQuoteWarning(
                 f"{len(ditched)} quote(s) own no pillar and were not fitted (the curves they would "
-                "pin are already built past their maturity by other quotes):\n" + "\n".join(lines),
+                "pin are already built past their maturity by other quotes):\n"
+                + "\n".join(lines),
                 ditched,
             ),
             stacklevel=4,  # the caller of build_curves
@@ -242,7 +272,11 @@ class _CurveBuilder:
 def _forward_notional(forward: Forward, market: Market, currency: Currency) -> float:
     """Base-currency notional of `forward`, in `currency`."""
     amount, ccy = forward.notional, forward.currency_pair.base_currency
-    return abs(amount if ccy == currency else Calculator._convert(amount, ccy, currency, market))
+    return abs(
+        amount
+        if ccy == currency
+        else Calculator._convert(amount, ccy, currency, market)
+    )
 
 
 def _quote_dv01(quote, mtm: float, market: Market) -> float | None:
@@ -254,15 +288,27 @@ def _quote_dv01(quote, mtm: float, market: Market) -> float | None:
     bp = 1e-4
     if isinstance(fixed := getattr(quote, "fixed_leg", None), FixedLegSpec):
         bumped = dataclasses.replace(
-            quote, fixed_leg=dataclasses.replace(fixed, rate=Rate(fixed.rate.rate_convention, fixed.rate.rate + bp))
+            quote,
+            fixed_leg=dataclasses.replace(
+                fixed, rate=Rate(fixed.rate.rate_convention, fixed.rate.rate + bp)
+            ),
         )
-    elif isinstance(leg := getattr(quote, "receive_leg", None), FloatingLegSpec) and leg.spread is not None:
+    elif (
+        isinstance(leg := getattr(quote, "receive_leg", None), FloatingLegSpec)
+        and leg.spread is not None
+    ):
         bumped = dataclasses.replace(
-            quote, receive_leg=dataclasses.replace(leg, spread=Rate(leg.spread.rate_convention, leg.spread.rate + bp))
+            quote,
+            receive_leg=dataclasses.replace(
+                leg, spread=Rate(leg.spread.rate_convention, leg.spread.rate + bp)
+            ),
         )
     else:
         return None
-    return Calculator.valuate(_instrument_of(bumped, market), market, _REPORT_CURRENCY) - mtm
+    return (
+        Calculator.valuate(_instrument_of(bumped, market), market, _REPORT_CURRENCY)
+        - mtm
+    )
 
 
 def _describe(quote, instrument, market: Market) -> str:
@@ -274,7 +320,10 @@ def _describe(quote, instrument, market: Market) -> str:
     """
     when = getattr(quote, "term", None) or getattr(quote, "payment_date", "")
     if isinstance(instrument, Forward):
-        currencies = [instrument.currency_pair.base_currency, instrument.currency_pair.quote_currency]
+        currencies = [
+            instrument.currency_pair.base_currency,
+            instrument.currency_pair.quote_currency,
+        ]
     else:
         local = getattr(market.risk_free_index, "currency", None)
         legs = {instrument.receive_leg.currency, instrument.pay_leg.currency}
@@ -328,11 +377,17 @@ def build_curves(
     """
     # Derive the valuation date from the quotes and cross-check market.t, since
     # Calculator.valuate reads FX (and other) market data off market.t internally.
-    quote_dates = {q.quote_date for q in quotes if getattr(q, "quote_date", None) is not None}
+    quote_dates = {
+        q.quote_date for q in quotes if getattr(q, "quote_date", None) is not None
+    }
     if not quote_dates:
-        raise ValueError("No quotes with a quote_date were provided; cannot derive a valuation date.")
+        raise ValueError(
+            "No quotes with a quote_date were provided; cannot derive a valuation date."
+        )
     if len(quote_dates) > 1:
-        raise ValueError(f"All quotes must share the same quote_date; got {sorted(quote_dates)}.")
+        raise ValueError(
+            f"All quotes must share the same quote_date; got {sorted(quote_dates)}."
+        )
     t = next(iter(quote_dates))
     if t != market.t:
         raise ValueError(
@@ -342,5 +397,8 @@ def build_curves(
         )
 
     _CurveBuilder(
-        quotes, market, discount_interp_method=discount_interp_method, index_interp_method=index_interp_method
+        quotes,
+        market,
+        discount_interp_method=discount_interp_method,
+        index_interp_method=index_interp_method,
     ).build()

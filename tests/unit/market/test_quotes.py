@@ -3,7 +3,11 @@ from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.swaps.legs import TermRateLeg, XCCYFloatingLeg
 from fintoolsom.market import Currency
-from fintoolsom.market.conventions import FixedLegSpec, FloatingLegSpec, PaymentFrequency
+from fintoolsom.market.conventions import (
+    FixedLegSpec,
+    FloatingLegSpec,
+    PaymentFrequency,
+)
 from fintoolsom.market.quotes import (
     CrossCurrencyFixedFloatQuote,
     CrossCurrencyFloatFloatQuote,
@@ -20,7 +24,6 @@ from tests.factories.swap_factory import (
     adj_convention,
     build_market,
 )
-
 
 
 CLP, USD = Currency.CLP, Currency.USD
@@ -63,19 +66,25 @@ def _fixed_float_quote(index: object = SOFR, **kw) -> CrossCurrencyFixedFloatQuo
 
 
 def test_xccy_quotes_are_deliverable_by_default():
-    swap = _fixed_float_quote().get_instrument()  # used to raise NameError (spec.spread)
+    swap = (
+        _fixed_float_quote().get_instrument()
+    )  # used to raise NameError (spec.spread)
     assert swap.is_deliverable and swap.settlement_currency is None
     assert isinstance(swap.pay_leg, XCCYFloatingLeg)
     assert swap.pay_leg.spread is SPREAD
 
 
 def test_non_deliverable_xccy_quote_settles_in_payment_currency():
-    quote = _fixed_float_quote(is_deliverable=False, payment_currency=CLP, fx_fixing_lag=2)
+    quote = _fixed_float_quote(
+        is_deliverable=False, payment_currency=CLP, fx_fixing_lag=2
+    )
     swap = quote.get_instrument()
     assert not swap.is_deliverable and swap.settlement_currency == CLP
     calendar = ADJ_CLP.calendar
     for leg in (swap.receive_leg, swap.pay_leg):
-        assert leg.fx_fixing_dates == [calendar.add_business_days(p, -2) for p in leg.payment_dates]
+        assert leg.fx_fixing_dates == [
+            calendar.add_business_days(p, -2) for p in leg.payment_dates
+        ]
 
 
 def test_float_float_quote_supports_non_deliverable_settlement():
@@ -91,11 +100,15 @@ def test_float_float_quote_supports_non_deliverable_settlement():
     )
     swap = quote.get_instrument(build_market())
     assert swap.settlement_currency == CLP
-    assert swap.receive_leg.residuals[0] == pytest.approx(swap.pay_leg.residuals[0] * 950.0)
+    assert swap.receive_leg.residuals[0] == pytest.approx(
+        swap.pay_leg.residuals[0] * 950.0
+    )
 
 
 @pytest.mark.parametrize(
-    "kw", [dict(payment_currency=CLP), dict(is_deliverable=False)], ids=["deliv+ccy", "nondeliv-no-ccy"]
+    "kw",
+    [dict(payment_currency=CLP), dict(is_deliverable=False)],
+    ids=["deliv+ccy", "nondeliv-no-ccy"],
 )
 def test_inconsistent_xccy_settlement_is_rejected(kw):
     with pytest.raises(ValueError, match="payment_currency"):
@@ -128,15 +141,24 @@ USDCLP = CurrencyPair(USD, CLP)
 
 def _irs(side: QuotedSide, **kw) -> IRSQuote:
     return IRSQuote(
-        quoted_side=side, term=TWO_Y, quote_date=VAL_DATE, adj_convention=ADJ_CLP,
-        fixed_leg=_fixed_spec(CLP), floating_leg=_float_spec(ICP), **kw,
+        quoted_side=side,
+        term=TWO_Y,
+        quote_date=VAL_DATE,
+        adj_convention=ADJ_CLP,
+        fixed_leg=_fixed_spec(CLP),
+        floating_leg=_float_spec(ICP),
+        **kw,
     )
 
 
 @pytest.mark.parametrize("side", [QuotedSide.RECEIVE, QuotedSide.PAY])
 def test_irs_quote_puts_the_fixed_leg_on_the_quoted_side(side):
     swap = _irs(side).get_instrument()
-    fixed, floating = (swap.receive_leg, swap.pay_leg) if side == QuotedSide.RECEIVE else (swap.pay_leg, swap.receive_leg)
+    fixed, floating = (
+        (swap.receive_leg, swap.pay_leg)
+        if side == QuotedSide.RECEIVE
+        else (swap.pay_leg, swap.receive_leg)
+    )
     assert isinstance(fixed, FixedLeg) and isinstance(floating, OvernightLeg)
     start = ADJ_CLP.calendar.add_business_days(VAL_DATE, 2)  # spot lag
     assert fixed.start_dates[0] == start and floating.start_dates[0] == start
@@ -145,7 +167,9 @@ def test_irs_quote_puts_the_fixed_leg_on_the_quoted_side(side):
 
 def test_swap_quote_honours_explicit_start_and_nearby_maturity():
     start, maturity = date(2024, 7, 15), date(2026, 7, 17)
-    swap = _irs(QuotedSide.RECEIVE, start_date=start, maturity_date=maturity).get_instrument()
+    swap = _irs(
+        QuotedSide.RECEIVE, start_date=start, maturity_date=maturity
+    ).get_instrument()
     assert swap.receive_leg.start_dates[0] == start
     assert swap.receive_leg.end_dates[-1] == maturity
 
@@ -158,46 +182,65 @@ def test_swap_quote_rejects_a_maturity_far_from_its_term():
 def test_irs_quote_needs_legs_in_one_currency():
     with pytest.raises(ValueError):
         IRSQuote(
-            quoted_side=QuotedSide.RECEIVE, term=TWO_Y, quote_date=VAL_DATE,
-            fixed_leg=_fixed_spec(USD), floating_leg=_float_spec(ICP),
+            quoted_side=QuotedSide.RECEIVE,
+            term=TWO_Y,
+            quote_date=VAL_DATE,
+            fixed_leg=_fixed_spec(USD),
+            floating_leg=_float_spec(ICP),
         )
 
 
 def test_ir_basis_quote_builds_two_floating_legs():
     quote = IRBasisQuote(
-        quoted_side=QuotedSide.RECEIVE, term=TWO_Y, quote_date=VAL_DATE, adj_convention=ADJ_CLP,
-        receive_leg=_float_spec(TAB_3M), pay_leg=_float_spec(CAMARA),
+        quoted_side=QuotedSide.RECEIVE,
+        term=TWO_Y,
+        quote_date=VAL_DATE,
+        adj_convention=ADJ_CLP,
+        receive_leg=_float_spec(TAB_3M),
+        pay_leg=_float_spec(CAMARA),
     )
     swap = quote.get_instrument()
-    assert isinstance(swap.receive_leg, TermRateLeg) and isinstance(swap.pay_leg, OvernightLeg)
+    assert isinstance(swap.receive_leg, TermRateLeg) and isinstance(
+        swap.pay_leg, OvernightLeg
+    )
     assert swap.receive_leg.index is TAB_3M and swap.pay_leg.index is CAMARA
 
 
 def test_ir_basis_quote_needs_legs_in_one_currency():
     with pytest.raises(ValueError):
         IRBasisQuote(
-            quoted_side=QuotedSide.RECEIVE, term=TWO_Y, quote_date=VAL_DATE,
-            receive_leg=_float_spec(ICP), pay_leg=_float_spec(SOFR),
+            quoted_side=QuotedSide.RECEIVE,
+            term=TWO_Y,
+            quote_date=VAL_DATE,
+            receive_leg=_float_spec(ICP),
+            pay_leg=_float_spec(SOFR),
         )
 
 
 def test_cross_currency_float_float_quote_needs_two_currencies():
     with pytest.raises(ValueError, match="different currencies"):
         CrossCurrencyFloatFloatQuote(
-            quoted_side=QuotedSide.RECEIVE, term=TWO_Y, quote_date=VAL_DATE,
-            receive_leg=_float_spec(SOFR), pay_leg=_float_spec(SOFR),
+            quoted_side=QuotedSide.RECEIVE,
+            term=TWO_Y,
+            quote_date=VAL_DATE,
+            receive_leg=_float_spec(SOFR),
+            pay_leg=_float_spec(SOFR),
         )
 
 
 def test_cross_currency_fixed_float_quote_needs_two_currencies():
     with pytest.raises(ValueError, match="different currencies"):
         CrossCurrencyFixedFloatQuote(
-            quoted_side=QuotedSide.RECEIVE, term=TWO_Y, quote_date=VAL_DATE,
-            fixed_leg=_fixed_spec(USD), floating_leg=_float_spec(SOFR),
+            quoted_side=QuotedSide.RECEIVE,
+            term=TWO_Y,
+            quote_date=VAL_DATE,
+            fixed_leg=_fixed_spec(USD),
+            floating_leg=_float_spec(SOFR),
         )
 
 
 # ── FX forward quotes ───────────────────────────────────────────────────────
+
 
 def test_forward_price_quote_from_a_term_fixes_after_spot_and_pays_a_day_later():
     term = Term(1, TermUnit.M, ADJ_CLP)
@@ -211,7 +254,9 @@ def test_forward_price_quote_from_a_term_fixes_after_spot_and_pays_a_day_later()
 
 
 def test_forward_price_quote_with_a_payment_date_is_deliverable():
-    fwd = ForwardPriceQuote(USDCLP, 950.0, False, payment_date=date(2024, 10, 8)).get_instrument()
+    fwd = ForwardPriceQuote(
+        USDCLP, 950.0, False, payment_date=date(2024, 10, 8)
+    ).get_instrument()
     assert type(fwd) is Forward and fwd.strike == 950.0 and not fwd.is_buy
 
 
@@ -222,10 +267,16 @@ def test_forward_quote_without_dates_cannot_build():
 
 def test_forward_points_add_to_the_spot_in_either_quotation():
     quote = ForwardPointsQuote(
-        currency_pair=USDCLP, value=250.0, is_buy=True, points_divisor=100, payment_date=date(2024, 10, 8)
+        currency_pair=USDCLP,
+        value=250.0,
+        is_buy=True,
+        points_divisor=100,
+        payment_date=date(2024, 10, 8),
     )
     assert quote.to_outright(FX_Rate(USDCLP, 900.0)) == pytest.approx(902.5)
-    assert quote.to_outright(FX_Rate(CurrencyPair(CLP, USD), 1 / 900.0)) == pytest.approx(902.5)
+    assert quote.to_outright(
+        FX_Rate(CurrencyPair(CLP, USD), 1 / 900.0)
+    ) == pytest.approx(902.5)
     with pytest.raises(ValueError, match="incompatible"):
         quote.to_outright(FX_Rate(CurrencyPair(Currency.EUR, CLP), 1000.0))
     assert quote.get_instrument().strike == 0.0  # structure only, no market
@@ -233,4 +284,6 @@ def test_forward_points_add_to_the_spot_in_either_quotation():
 
 def test_forward_points_divisor_must_be_positive():
     with pytest.raises(ValueError):
-        ForwardPointsQuote(currency_pair=USDCLP, value=1.0, is_buy=True, points_divisor=0)
+        ForwardPointsQuote(
+            currency_pair=USDCLP, value=1.0, is_buy=True, points_divisor=0
+        )

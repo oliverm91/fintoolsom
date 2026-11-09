@@ -35,6 +35,7 @@ class Index(ABC):
         Fixing and business-day calendar of the currency's locality (a plain
         weekend calendar when there is no currency).
     """
+
     name: str
     _: KW_ONLY
     currency: Currency = field(default=None)
@@ -42,7 +43,9 @@ class Index(ABC):
     calendar: Calendar = field(init=False, default=None)
 
     def __post_init__(self):
-        self.calendar = get_calendar(self.currency.locality.value if self.currency is not None else None)
+        self.calendar = get_calendar(
+            self.currency.locality.value if self.currency is not None else None
+        )
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -89,6 +92,7 @@ class RateIndex(Index, InterestIndex):
         Business days from the fixing date to the accrual start (keyword-only):
         0 for an overnight index, typically 2 for a term rate.
     """
+
     spot_lag: int = field(default=0, kw_only=True)
 
 
@@ -126,6 +130,7 @@ class TermRateIndex(RateIndex):
     spot_lag : int, default 2
         Business days from the fixing date to the accrual start (keyword-only).
     """
+
     term: Term
     spot_lag: int = field(default=2, kw_only=True)
 
@@ -162,7 +167,9 @@ class InterestPriceIndex(PriceIndex, InterestIndex):
         (keyword-only). ICP's own convention is the default.
     """
 
-    rate_convention: RateConvention = field(default_factory=_linear_act_360, kw_only=True)
+    rate_convention: RateConvention = field(
+        default_factory=_linear_act_360, kw_only=True
+    )
 
 
 @dataclass(eq=False)

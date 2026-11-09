@@ -11,6 +11,7 @@ maturity (:meth:`_Planner.assign_pillars`). From that ownership:
 * groups waiting on each other form a cycle and are merged into one joint group
   (:meth:`_Planner.merge_cycles`).
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -19,7 +20,15 @@ from datetime import date
 from ..market.index import Index
 from ..market.market import Market
 from ..market.quotes import InstrumentQuote
-from ._keys import CurveKey, _built, _curves_needed, _get_maturity, _instrument_of, _last_date, _primary_candidates
+from ._keys import (
+    CurveKey,
+    _built,
+    _curves_needed,
+    _get_maturity,
+    _instrument_of,
+    _last_date,
+    _primary_candidates,
+)
 from ._seeds import _FLAT_GUESS, _IndexFixed, _Seeder
 
 Group = frozenset  # of curve keys: the curves the group's quotes read
@@ -61,10 +70,18 @@ class _Planner:
         """
         raw = {q: _primary_candidates(q, self.pinned[q]) for q in quotes}
         single = {c[0] for c in raw.values() if len(c) == 1}
-        first = {q: next((k for k in c if k not in single), c[0]) for q, c in raw.items()}
+        first = {
+            q: next((k for k in c if k not in single), c[0]) for q, c in raw.items()
+        }
         preferred = set(first.values())
         return {
-            q: (first[q], *sorted((k for k in self.pinned[q] if k not in preferred), key=lambda k: (k not in raw[q], str(k))))
+            q: (
+                first[q],
+                *sorted(
+                    (k for k in self.pinned[q] if k not in preferred),
+                    key=lambda k: (k not in raw[q], str(k)),
+                ),
+            )
             for q in quotes
         }
 
@@ -105,8 +122,10 @@ class _Planner:
         owners, taken = [], set()
         for instr, cands in zip(instruments, candidates):
             open_ = [
-                (c, m) for c in cands
-                if (m := _get_maturity(c, instr, self.risk_free_index)) is not None and self.is_open(c, m)
+                (c, m)
+                for c in cands
+                if (m := _get_maturity(c, instr, self.risk_free_index)) is not None
+                and self.is_open(c, m)
             ]
             free = [p for p in open_ if p not in taken]
             pick = free[0] if free else (open_[0] if open_ else None)
@@ -119,7 +138,11 @@ class _Planner:
         """``(curve, date)`` pillars the quotes of `group` would add now."""
         instruments = self.instruments_of(group)
         owners = self.assign_pillars(instruments, self.candidates_of(group))
-        return {(c, _get_maturity(c, i, self.risk_free_index)) for i, c in zip(instruments, owners) if c is not None}
+        return {
+            (c, _get_maturity(c, i, self.risk_free_index))
+            for i, c in zip(instruments, owners)
+            if c is not None
+        }
 
     def residual_instruments(self, instruments, free_dates, owners):
         """Instruments owning a free pillar, and that pillar's date.
@@ -139,7 +162,9 @@ class _Planner:
 
     # -- readiness and cycles -------------------------------------------------
 
-    def waits(self, group: Group, pending: list[Group], owned: dict[Group, set]) -> set[Group]:
+    def waits(
+        self, group: Group, pending: list[Group], owned: dict[Group, set]
+    ) -> set[Group]:
         """Pending groups `group` must wait for.
 
         `group` reads every curve of its key up to its last date. It waits on H when
@@ -163,11 +188,16 @@ class _Planner:
         for c, held in owners.items():
             within = [(h, d) for h, d in held if d <= last]
             if not within and not self.exists(c) and c not in first_own:
-                out |= {h for h, _ in held}  # it must exist before it is read: wait for its builders
+                out |= {
+                    h for h, _ in held
+                }  # it must exist before it is read: wait for its builders
                 continue
             out |= {
-                h for h, d in within
-                if c not in first_own or d < first_own[c] or self.priority(h) < self.priority(group)
+                h
+                for h, d in within
+                if c not in first_own
+                or d < first_own[c]
+                or self.priority(h) < self.priority(group)
             }
         return out
 
@@ -178,6 +208,7 @@ class _Planner:
         and :attr:`groups`, by one group holding all their quotes; with one pillar
         per quote it is square. Returns False when there is no cycle.
         """
+
         def reach(g) -> set:
             seen, stack = set(), [g]
             while stack:
@@ -245,7 +276,8 @@ class _Planner:
         for curve in group:
             maturities = {
                 _get_maturity(curve, instr, self.risk_free_index)
-                for instr, owner in zip(instruments, owners) if owner == curve
+                for instr, owner in zip(instruments, owners)
+                if owner == curve
             }
             maturities.discard(None)
             if not maturities:
@@ -255,7 +287,11 @@ class _Planner:
                 if built is None:
                     fixed, flat_guess[curve] = self.seeder.index_anchor(curve)
                 else:
-                    fixed = _IndexFixed(list(built.knot_dates), [float(f) for f in built.forward_rates], built.spot_rate)
+                    fixed = _IndexFixed(
+                        list(built.knot_dates),
+                        [float(f) for f in built.forward_rates],
+                        built.spot_rate,
+                    )
                 fixed_pillars[curve] = fixed
                 if new_dates := sorted(m for m in maturities if m > fixed.knots[-1]):
                     free_dates[curve] = new_dates
@@ -267,11 +303,16 @@ class _Planner:
                 if new_dates := sorted(m for m in maturities if m > built.last_date):
                     free_dates[curve] = new_dates
         points = {
-            c: f.knot_dfs(self.t, c) if isinstance(c, Index) else f for c, f in fixed_pillars.items()
+            c: f.knot_dfs(self.t, c) if isinstance(c, Index) else f
+            for c, f in fixed_pillars.items()
         }
-        seed_dfs = self.seeder.seed_free_pillars(instruments, points, free_dates, flat_guess)
+        seed_dfs = self.seeder.seed_free_pillars(
+            instruments, points, free_dates, flat_guess
+        )
         free_seeds = {
-            c: fixed_pillars[c].forwards_to(self.t, c, dates, seed_dfs[c]) if isinstance(c, Index) else seed_dfs[c]
+            c: fixed_pillars[c].forwards_to(self.t, c, dates, seed_dfs[c])
+            if isinstance(c, Index)
+            else seed_dfs[c]
             for c, dates in free_dates.items()
         }
         return fixed_pillars, free_dates, free_seeds

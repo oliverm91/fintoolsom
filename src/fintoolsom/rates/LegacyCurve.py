@@ -36,7 +36,9 @@ class LegacyCurve(ABC):
     def get_df_fwd(self, start_date: date, end_date: date) -> float: ...
 
     @abstractmethod
-    def get_dfs_fwds(self, start_dates: list[date], end_dates: list[date]) -> np.ndarray: ...
+    def get_dfs_fwds(
+        self, start_dates: list[date], end_dates: list[date]
+    ) -> np.ndarray: ...
 
     @abstractmethod
     def get_wf(self, date: date) -> float: ...
@@ -48,12 +50,16 @@ class LegacyCurve(ABC):
     def get_wf_fwd(self, start_date: date, end_date: date) -> float: ...
 
     @abstractmethod
-    def get_wfs_fwds(self, start_dates: list[date], end_dates: list[date]) -> np.ndarray: ...
+    def get_wfs_fwds(
+        self, start_dates: list[date], end_dates: list[date]
+    ) -> np.ndarray: ...
 
     # ── Rates ────────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def get_zero_rate(self, date: date, rate_convention: RateConvention | None = None) -> Rate: ...
+    def get_zero_rate(
+        self, date: date, rate_convention: RateConvention | None = None
+    ) -> Rate: ...
 
     @abstractmethod
     def get_forward_rates(
@@ -74,7 +80,9 @@ class LegacyCurve(ABC):
     # ── Interest ─────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float: ...
+    def get_accrued_interest(
+        self, notional: float, start_date: date, end_date: date
+    ) -> float: ...
 
     @abstractmethod
     def get_accrued_interests(

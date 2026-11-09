@@ -11,7 +11,10 @@ from fintoolsom.market import CurrencyName, Currency, CurrencyPair, Market
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
 from fintoolsom.market.currencies import FX_RateData, FX_Rate
 from fintoolsom.market.index import OvernightRateIndex, OvernightInterestPriceIndex
-from fintoolsom.market.index_history import OvernightRateHistory, OvernightInterestPriceHistory
+from fintoolsom.market.index_history import (
+    OvernightRateHistory,
+    OvernightInterestPriceHistory,
+)
 
 QUOTES_FILE = Path(__file__).parent / "quotes.json"
 
@@ -29,10 +32,14 @@ for type_name, qs in by_type.items():
     print(f"--- {type_name} ({len(qs)}) ---")
     for q in qs:
         if isinstance(q, IRSQuote):
-            print(f"  {q.term}  rate={q.fixed_leg.rate.rate:.4%}  collateral={q.collateral_index}")
+            print(
+                f"  {q.term}  rate={q.fixed_leg.rate.rate:.4%}  collateral={q.collateral_index}"
+            )
         elif isinstance(q, CrossCurrencyFloatFloatQuote):
             spread = q.pay_leg.spread.rate if q.pay_leg.spread else 0.0
-            print(f"  {q.term}  spread={spread:.1f}bps  collateral={q.collateral_index}")
+            print(
+                f"  {q.term}  spread={spread:.1f}bps  collateral={q.collateral_index}"
+            )
         elif isinstance(q, ForwardPointsQuote):
             print(f"  {q.term}  points={q.value}")
     print()
@@ -41,11 +48,26 @@ usd = Currency(CurrencyName.USD)
 clp = Currency(CurrencyName.CLP)
 sofr = OvernightRateIndex("SOFR", currency=usd)
 
-sofr_data = OvernightRateHistory(sofr, {t: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 5.25/100)})
+sofr_data = OvernightRateHistory(
+    sofr,
+    {
+        t: Rate(
+            RateConvention(
+                interest_convention=LinearInterestConvention, time_fraction_base=360
+            ),
+            5.25 / 100,
+        )
+    },
+)
 icp = OvernightInterestPriceIndex("ICP", currency=clp)
-icp_data =  OvernightInterestPriceHistory(icp, {t: 100.0})
+icp_data = OvernightInterestPriceHistory(icp, {t: 100.0})
 cp = CurrencyPair(usd, clp)
 
 fx_rate_data = FX_RateData(cp, {t: FX_Rate(cp, 900)})
-market = Market(t, fx_history={cp: fx_rate_data}, indexes_history={"SOFR": sofr_data, "ICP": icp_data}, risk_free_index=icp)
+market = Market(
+    t,
+    fx_history={cp: fx_rate_data},
+    indexes_history={"SOFR": sofr_data, "ICP": icp_data},
+    risk_free_index=icp,
+)
 build_curves(quotes, market)

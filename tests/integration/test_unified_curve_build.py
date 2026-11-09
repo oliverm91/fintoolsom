@@ -5,6 +5,7 @@ collateralised): fixed vs TERM3M IRS pin the TERM3M projection curve, and TERM6M
 TERM3M + 8bp basis swaps then pin TERM6M on top of it. Projection-only indexes are
 solved by the same scheduler as the discount curves.
 """
+
 from datetime import timedelta
 
 import numpy as np
@@ -27,7 +28,9 @@ from tests.factories.quote_factory import (
 )
 
 CLP = Currency.CLP
-GRID = [QUOTE_DATE + timedelta(days=d) for d in (1, 91, 365, 730, 1826, 3652, 7305, 10957)]
+GRID = [
+    QUOTE_DATE + timedelta(days=d) for d in (1, 91, 365, 730, 1826, 3652, 7305, 10957)
+]
 # 1M-1Y XCCY quotes are redundant with the forward points (see test_curve_build_and_valuation).
 REDUNDANT_XCCY_TERMS = {"1M", "3M", "6M", "9M", "1Y"}
 REPRICE_TOL = 1e-6  # CLP, on quote notionals of 100 USD (90,000 CLP)
@@ -63,12 +66,21 @@ def _build(quotes, **kwargs):
 
 def _mtm(quote, market) -> float:
     fx_dependent = isinstance(quote, (CrossCurrencyFloatFloatQuote, ForwardPointsQuote))
-    instrument = quote.get_instrument(market) if fx_dependent else quote.get_instrument()
+    instrument = (
+        quote.get_instrument(market) if fx_dependent else quote.get_instrument()
+    )
     return Calculator.valuate(instrument, market, CLP)
 
 
 def _exact(quotes):
-    return [q for q in quotes if not (isinstance(q, CrossCurrencyFloatFloatQuote) and str(q.term) in REDUNDANT_XCCY_TERMS)]
+    return [
+        q
+        for q in quotes
+        if not (
+            isinstance(q, CrossCurrencyFloatFloatQuote)
+            and str(q.term) in REDUNDANT_XCCY_TERMS
+        )
+    ]
 
 
 def _dfs(market) -> dict:
@@ -103,15 +115,20 @@ def _spy_block_sizes(monkeypatch) -> list[int]:
 
 # ── Projection curves in the shared scheduler ───────────────────────────────
 
+
 def test_term_index_gets_a_projection_curve_that_reprices_its_swaps(real, term_irs):
     market = _build(real + term_irs)
     curve = market.get_index_curve(TERM3M)
     assert isinstance(curve, IndexCurve) and curve.spot_rate is None
-    assert len(curve.forward_rates) == 1 + len(term_irs)  # the spot anchor + one segment per swap
+    assert len(curve.forward_rates) == 1 + len(
+        term_irs
+    )  # the spot anchor + one segment per swap
     assert max(abs(_mtm(q, market)) for q in term_irs) < REPRICE_TOL
 
 
-def test_basis_swaps_pin_a_second_projection_curve_on_top_of_the_first(full, term_irs, basis):
+def test_basis_swaps_pin_a_second_projection_curve_on_top_of_the_first(
+    full, term_irs, basis
+):
     assert {TERM3M.name, TERM6M.name} <= set(full.curves)
     assert max(abs(_mtm(q, full)) for q in term_irs + basis) < REPRICE_TOL
     # Receiving 6M against 3M + 8bp at par: 6M forwards sit ~8bp above the 3M ones.
@@ -124,7 +141,9 @@ def test_basis_swaps_pin_a_second_projection_curve_on_top_of_the_first(full, ter
 
 def test_basis_swaps_do_not_move_the_curves_their_irs_pin(real, term_irs, full):
     alone = _build(real + term_irs)
-    np.testing.assert_allclose(_accruals(full)[TERM3M.name], _accruals(alone)[TERM3M.name], rtol=1e-9)
+    np.testing.assert_allclose(
+        _accruals(full)[TERM3M.name], _accruals(alone)[TERM3M.name], rtol=1e-9
+    )
     for key, dfs in _dfs(alone).items():
         np.testing.assert_allclose(_dfs(full)[key], dfs, rtol=1e-12)
 
@@ -147,7 +166,10 @@ def test_existing_discount_curves_keep_the_real_quotes_repriced(real, full):
 
 # ── Date-by-date bootstrap ──────────────────────────────────────────────────
 
-def test_date_by_date_bootstrap_matches_the_joint_solve(real, term_irs, basis, full, monkeypatch):
+
+def test_date_by_date_bootstrap_matches_the_joint_solve(
+    real, term_irs, basis, full, monkeypatch
+):
     monkeypatch.setattr(_CurveBuilder, "date_by_date", False)
     _assert_same_curves(_build(real + term_irs + basis), full, rel=1e-8)
 

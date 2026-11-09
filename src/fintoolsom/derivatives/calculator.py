@@ -34,11 +34,18 @@ class Calculator:
     # --- Forwards ---
 
     @staticmethod
-    def _convert(value: float, from_currency: Currency, to_currency: Currency, market: Market) -> float:
+    def _convert(
+        value: float, from_currency: Currency, to_currency: Currency, market: Market
+    ) -> float:
         """`value` in `from_currency` converted to `to_currency` at spot (``market.t``)."""
         from ..market.currencies import CurrencyPair as _CurrencyPair
 
-        return value * market.get_fx_rate(market.t, _CurrencyPair(from_currency, to_currency)).value
+        return (
+            value
+            * market.get_fx_rate(
+                market.t, _CurrencyPair(from_currency, to_currency)
+            ).value
+        )
 
     @staticmethod
     def get_forward_mtm(
@@ -441,7 +448,9 @@ class Calculator:
 
         if isinstance(leg, _TermRateLeg):
             # Once fixing_date <= t the rate is locked, wherever start_date falls.
-            fixed_mask = future_payment & np.array([d <= market.t for d in leg.fixing_dates], dtype=bool)
+            fixed_mask = future_payment & np.array(
+                [d <= market.t for d in leg.fixing_dates], dtype=bool
+            )
             to_proj_mask = future_payment & ~fixed_mask
 
             if fixed_mask.any():
@@ -460,7 +469,11 @@ class Calculator:
                 starts = [s for s, f in zip(leg.start_dates, to_proj_mask) if f]
                 ends = [e for e, f in zip(leg.end_dates, to_proj_mask) if f]
                 accruals = proj_curve.get_accrual(starts, ends)
-                flows[to_proj_mask[future_payment]] = leg.residuals[to_proj_mask] * accruals + leg.spreads_values[to_proj_mask] + leg.amortizations[to_proj_mask]
+                flows[to_proj_mask[future_payment]] = (
+                    leg.residuals[to_proj_mask] * accruals
+                    + leg.spreads_values[to_proj_mask]
+                    + leg.amortizations[to_proj_mask]
+                )
 
         else:
             future_start = np.array([s > market.t for s in leg.start_dates], dtype=bool)
@@ -490,8 +503,12 @@ class Calculator:
                 )
                 interest = accrued
                 if realised_end < c.end_date:
-                    interest += (c.residual + accrued) * proj_curve.get_accrual(market.t, c.end_date)
-                flows[current_mask[future_payment]] = interest + leg.spreads_values[idx] + leg.amortizations[idx]
+                    interest += (c.residual + accrued) * proj_curve.get_accrual(
+                        market.t, c.end_date
+                    )
+                flows[current_mask[future_payment]] = (
+                    interest + leg.spreads_values[idx] + leg.amortizations[idx]
+                )
 
         return future_payment, flows
 
@@ -533,7 +550,10 @@ class Calculator:
 
     @staticmethod
     def get_fx_fixings(
-        base_currency: Currency, quote_currency: Currency, fixing_dates: list[date], market: Market
+        base_currency: Currency,
+        quote_currency: Currency,
+        fixing_dates: list[date],
+        market: Market,
     ) -> np.ndarray:
         """FX rates (quote per unit of base) fixed on `fixing_dates`.
 
@@ -583,7 +603,9 @@ class Calculator:
             dates = [known_until] + projected
             df_base = market.get_discount_curve(base_currency).get_dfs(dates)
             df_quote = market.get_discount_curve(quote_currency).get_dfs(dates)
-            fx[~known] = anchor * (df_base[1:] / df_base[0]) / (df_quote[1:] / df_quote[0])
+            fx[~known] = (
+                anchor * (df_base[1:] / df_base[0]) / (df_quote[1:] / df_quote[0])
+            )
         return fx
 
     @staticmethod
@@ -619,7 +641,9 @@ class Calculator:
             return 0.0
         pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
         fixing_dates = [d for d, f in zip(leg.fx_fixing_dates, future_payment) if f]
-        fx = Calculator.get_fx_fixings(leg.currency, settlement_currency, fixing_dates, market)
+        fx = Calculator.get_fx_fixings(
+            leg.currency, settlement_currency, fixing_dates, market
+        )
         dfs = market.get_dfs(settlement_currency, pay_dates, collateral=collateral)
         return float(np.sum(flows * fx * dfs))
 
@@ -648,9 +672,9 @@ class Calculator:
         float
             PV of the received leg minus PV of the paid leg, in `currency`.
         """
-        return Calculator.get_leg_pv(swap, swap.receive_leg, market, currency) - Calculator.get_leg_pv(
-            swap, swap.pay_leg, market, currency
-        )
+        return Calculator.get_leg_pv(
+            swap, swap.receive_leg, market, currency
+        ) - Calculator.get_leg_pv(swap, swap.pay_leg, market, currency)
 
     @staticmethod
     def get_leg_pv(swap: Swap, leg, market: Market, currency: Currency) -> float:
@@ -676,7 +700,9 @@ class Calculator:
             PV of the unpaid flows, positive for a leg that pays to its holder.
         """
         settlement = swap.leg_settlement_currency(leg)
-        pv = Calculator._leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
+        pv = Calculator._leg_pv_non_deliverable(
+            leg, swap.collateral_index, market, settlement
+        )
         return Calculator._convert(pv, settlement, currency, market)
 
     @staticmethod
@@ -795,8 +821,12 @@ class Calculator:
         float
             MTM in the quote currency.
         """
-        domestic_curve = market.get_discount_curve(instrument.currency_pair.quote_currency)
-        foreign_curve = market.get_discount_curve(instrument.currency_pair.base_currency)
+        domestic_curve = market.get_discount_curve(
+            instrument.currency_pair.quote_currency
+        )
+        foreign_curve = market.get_discount_curve(
+            instrument.currency_pair.base_currency
+        )
         spot = market.get_fx_rate(market.t, instrument.currency_pair).value
 
         log_moneyness = Calculator.get_option_log_moneyness(
@@ -811,7 +841,9 @@ class Calculator:
         )
 
     @staticmethod
-    def valuate(instrument: Forward | NDF | Option | Swap, market: Market, currency: Currency) -> float:
+    def valuate(
+        instrument: Forward | NDF | Option | Swap, market: Market, currency: Currency
+    ) -> float:
         """Mark-to-market of any supported instrument.
 
         NDF is checked before Forward, since NDF subclasses Forward.

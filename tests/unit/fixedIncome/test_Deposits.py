@@ -3,7 +3,6 @@ import pytest
 from fintoolsom.fixedIncome import Deposit
 
 
-
 @pytest.fixture
 def sample_deposit() -> Deposit:
     return Deposit("TEST", "usd", date(2024, 7, 1), 1000)

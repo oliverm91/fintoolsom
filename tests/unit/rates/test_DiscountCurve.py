@@ -1,4 +1,5 @@
 """DiscountCurve: dfs at pillars, interpolation, flat-forward extrapolation, bumps."""
+
 import math
 from datetime import date, timedelta
 
@@ -14,7 +15,10 @@ CLP = Currency(CurrencyName.CLP)
 ICP = OvernightRateIndex("ICP", currency=CLP)
 PILLARS = [T + timedelta(days=n) for n in (1, 30, 182, 365, 730, 1825, 3650)]
 # A gently humped curve so interpolation choices show.
-DFS = [math.exp(-(0.04 + 0.01 * math.sin(i)) * (p - T).days / 365) for i, p in enumerate(PILLARS)]
+DFS = [
+    math.exp(-(0.04 + 0.01 * math.sin(i)) * (p - T).days / 365)
+    for i, p in enumerate(PILLARS)
+]
 INSIDE = [T + timedelta(days=n) for n in (1, 10, 95, 400, 1100, 2500, 3650)]
 
 
@@ -31,7 +35,9 @@ def test_a_currency_with_its_own_risk_free_index_has_no_discount_curve():
         DiscountCurve(T, CLP, ICP, PILLARS, DFS)
 
 
-@pytest.mark.parametrize("method", [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline])
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline]
+)
 def test_reprices_its_pillars_and_is_one_at_the_curve_date(method):
     curve = _curve(method)
     assert curve.get_dfs(PILLARS) == pytest.approx(DFS, rel=1e-14)
@@ -50,7 +56,9 @@ def test_extrapolates_the_last_forward_flat():
     tau = [(d - T).days / 365 for d in PILLARS[-2:]]
     last_forward = -(math.log(DFS[-1]) - math.log(DFS[-2])) / (tau[1] - tau[0])
     beyond = PILLARS[-1] + timedelta(days=365)
-    assert curve.get_df(beyond) == pytest.approx(DFS[-1] * math.exp(-last_forward * 1.0), rel=1e-13)
+    assert curve.get_df(beyond) == pytest.approx(
+        DFS[-1] * math.exp(-last_forward * 1.0), rel=1e-13
+    )
 
 
 def test_parallel_bump_shifts_every_continuous_zero_rate_and_returns_a_copy():
@@ -58,7 +66,9 @@ def test_parallel_bump_shifts_every_continuous_zero_rate_and_returns_a_copy():
     bumped = curve.parallel_bump_bps(2)
     for d in INSIDE + [PILLARS[-1] + timedelta(days=500)]:
         tau = (d - T).days / 365
-        assert (math.log(curve.get_df(d)) - math.log(bumped.get_df(d))) / tau == pytest.approx(2e-4, abs=1e-12)
+        assert (
+            math.log(curve.get_df(d)) - math.log(bumped.get_df(d))
+        ) / tau == pytest.approx(2e-4, abs=1e-12)
     assert list(curve.dfs) == pytest.approx(DFS)
 
 
@@ -69,5 +79,7 @@ def test_pillars_are_sorted_and_validated():
         DiscountCurve(T, USD, ICP, [T], [1.0])
     with pytest.raises(ValueError, match="Duplicate"):
         DiscountCurve(T, USD, ICP, [PILLARS[0], PILLARS[0]], [0.99, 0.99])
-    with pytest.raises(ValueError, match="does not support interpolation 'PiecewiseConstant'"):
+    with pytest.raises(
+        ValueError, match="does not support interpolation 'PiecewiseConstant'"
+    ):
         DiscountCurve(T, USD, ICP, PILLARS, DFS, InterpolationMethod.PiecewiseConstant)

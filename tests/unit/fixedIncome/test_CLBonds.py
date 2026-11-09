@@ -10,7 +10,6 @@ from fintoolsom.rates import (
 from fintoolsom.dates import ActualDayCountConvention, Days30EDayCountConvention
 
 
-
 def test_bond_present_value_with_irr(sample_bond, curve_date):
     irr_convention = RateConvention(
         CompoundedInterestConvention, ActualDayCountConvention, 365

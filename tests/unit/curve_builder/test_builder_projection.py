@@ -28,7 +28,6 @@ from fintoolsom.curve_builder import InsufficientQuotesError
 from fintoolsom.curve_builder.builder import _CurveBuilder
 
 
-
 T = date(2026, 6, 29)
 
 
@@ -38,12 +37,12 @@ USD = Currency(CurrencyName.USD)
 def _bootstrap_projection(index, swaps, market) -> None:
     """Drive the independent-basis projection solve through a _CurveBuilder (the
     bootstrap lives on the orchestrator; empty quotes since we invoke it directly)."""
-    _CurveBuilder(
-        [], market
-    )._bootstrap_projection_curve(index, swaps)
+    _CurveBuilder([], market)._bootstrap_projection_curve(index, swaps)
 
 
-def _market_with_sofr_discount() -> tuple[Market, OvernightRateIndex, TermRateIndex, ModifiedFollowingConvention]:
+def _market_with_sofr_discount() -> tuple[
+    Market, OvernightRateIndex, TermRateIndex, ModifiedFollowingConvention
+]:
     sofr = OvernightRateIndex("SOFR", currency=USD)
     adj = ModifiedFollowingConvention(sofr.calendar)
     term3m = TermRateIndex("TERM3M", currency=USD, term=Term(3, TermUnit.M, adj))
@@ -53,7 +52,14 @@ def _market_with_sofr_discount() -> tuple[Market, OvernightRateIndex, TermRateIn
 
     term_hist = TermRateHistory(
         term3m,
-        {T: Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), 0.052)},
+        {
+            T: Rate(
+                RateConvention(
+                    interest_convention=LinearInterestConvention, time_fraction_base=360
+                ),
+                0.052,
+            )
+        },
     )
     market = Market(T, indexes_history={"TERM3M": term_hist}, risk_free_index=sofr)
     market.set_curve(sofr_curve)
@@ -68,16 +74,32 @@ def _term_swap(term3m, sofr, adj, tenor_value, tenor_unit, fixed_rate) -> Swap:
     start = term3m.calendar.add_business_days(T, term3m.spot_lag)
     tenor = Term(tenor_value, tenor_unit, adj)
     fixed = fixed_leg(
-        notional=100.0, start_date=start, term=tenor, frequency="QUARTERLY",
+        notional=100.0,
+        start_date=start,
+        term=tenor,
+        frequency="QUARTERLY",
         adj_convention=adj,
-        rate=Rate(RateConvention(interest_convention=ExponentialInterestConvention, time_fraction_base=365), fixed_rate),
+        rate=Rate(
+            RateConvention(
+                interest_convention=ExponentialInterestConvention,
+                time_fraction_base=365,
+            ),
+            fixed_rate,
+        ),
         currency=USD,
     )
     floating = term_rate_leg(
-        notional=100.0, start_date=start, term=tenor, frequency="QUARTERLY",
-        adj_convention=adj, index=term3m, spread=Rate(RateConvention(), 0.0),
+        notional=100.0,
+        start_date=start,
+        term=tenor,
+        frequency="QUARTERLY",
+        adj_convention=adj,
+        index=term3m,
+        spread=Rate(RateConvention(), 0.0),
     )
-    return Swap(receive_leg=fixed, pay_leg=floating, payment_currency=USD, collateral_index=sofr)
+    return Swap(
+        receive_leg=fixed, pay_leg=floating, payment_currency=USD, collateral_index=sofr
+    )
 
 
 def test_independent_projection_reprices_all_swaps():
@@ -129,4 +151,6 @@ def test_projection_index_without_rate_history_cannot_be_anchored():
     market, sofr, term3m, adj = _market_with_sofr_discount()
     market.indexes_history.clear()
     with pytest.raises(InsufficientQuotesError, match="no rate history"):
-        _bootstrap_projection(term3m, [_term_swap(term3m, sofr, adj, 1, TermUnit.Y, 0.05)], market)
+        _bootstrap_projection(
+            term3m, [_term_swap(term3m, sofr, adj, 1, TermUnit.Y, 0.05)], market
+        )

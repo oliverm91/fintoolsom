@@ -1,4 +1,5 @@
 """Discount curve of a currency under a risk-free index, stored as discount factors."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -64,28 +65,46 @@ class DiscountCurve(Curve):
                 f"{self.currency} is the currency of the risk-free index '{self.risk_free_index.name}': "
                 "it discounts on that index's IndexCurve, not on a DiscountCurve."
             )
-        pairs = sorted(zip(self.pillar_dates, np.asarray(self.dfs, dtype=float)), key=lambda p: p[0])
+        pairs = sorted(
+            zip(self.pillar_dates, np.asarray(self.dfs, dtype=float)),
+            key=lambda p: p[0],
+        )
         if not pairs:
             raise ValueError("A DiscountCurve needs at least one pillar.")
         if any(b == a for (a, _), (b, _) in zip(pairs, pairs[1:])):
             raise ValueError(f"Duplicate pillar dates: {[d for d, _ in pairs]}.")
         if pairs[0][0] <= self.curve_date:
-            raise ValueError(f"Pillars must be after the curve date {self.curve_date}; got {pairs[0][0]}.")
+            raise ValueError(
+                f"Pillars must be after the curve date {self.curve_date}; got {pairs[0][0]}."
+            )
         if any(df <= 0 for _, df in pairs):
             raise ValueError("Discount factors must be positive.")
         self.pillar_dates = [d for d, _ in pairs]
         self.dfs = np.array([df for _, df in pairs])
-        self._tau = np.concatenate(([0.0], year_fractions(self.curve_date, self.pillar_dates)))
+        self._tau = np.concatenate(
+            ([0.0], year_fractions(self.curve_date, self.pillar_dates))
+        )
         self._log_dfs = np.concatenate(([0.0], np.log(self.dfs)))
-        self._last_forward = -(self._log_dfs[-1] - self._log_dfs[-2]) / (self._tau[-1] - self._tau[-2])
-        if self.interpolation_method is InterpolationMethod.HermiteCubicSpline and len(self._tau) > 2:
+        self._last_forward = -(self._log_dfs[-1] - self._log_dfs[-2]) / (
+            self._tau[-1] - self._tau[-2]
+        )
+        if (
+            self.interpolation_method is InterpolationMethod.HermiteCubicSpline
+            and len(self._tau) > 2
+        ):
             self._pchip = PchipInterpolator(self._tau, np.exp(self._log_dfs))
 
     @classmethod
-    def from_zero_coupon_curve(cls, zcc, currency: "Currency", risk_free_index: "Index") -> DiscountCurve:
+    def from_zero_coupon_curve(
+        cls, zcc, currency: "Currency", risk_free_index: "Index"
+    ) -> DiscountCurve:
         """The same pillars and dfs as a legacy ZeroCouponCurve, with its method."""
         return cls(
-            zcc.curve_date, currency, risk_free_index, list(zcc.dates), np.array(zcc.dfs, dtype=float),
+            zcc.curve_date,
+            currency,
+            risk_free_index,
+            list(zcc.dates),
+            np.array(zcc.dfs, dtype=float),
             zcc.df_interpolation_method,
         )
 
@@ -112,20 +131,30 @@ class DiscountCurve(Curve):
             out[inside] = self._pchip(tau[inside])
         else:
             out[inside] = np.exp(np.interp(tau[inside], self._tau, self._log_dfs))
-        out[~inside] = np.exp(self._log_dfs[-1] - self._last_forward * (tau[~inside] - last))
+        out[~inside] = np.exp(
+            self._log_dfs[-1] - self._last_forward * (tau[~inside] - last)
+        )
         return out
 
     def parallel_bump_bps(self, bps: float) -> DiscountCurve:
         shift = bps / 10_000
         return DiscountCurve(
-            self.curve_date, self.currency, self.risk_free_index, list(self.pillar_dates),
-            self.dfs * np.exp(-shift * self._tau[1:]), self.interpolation_method,
+            self.curve_date,
+            self.currency,
+            self.risk_free_index,
+            list(self.pillar_dates),
+            self.dfs * np.exp(-shift * self._tau[1:]),
+            self.interpolation_method,
         )
 
     def copy(self) -> DiscountCurve:
         return DiscountCurve(
-            self.curve_date, self.currency, self.risk_free_index, list(self.pillar_dates),
-            self.dfs.copy(), self.interpolation_method,
+            self.curve_date,
+            self.currency,
+            self.risk_free_index,
+            list(self.pillar_dates),
+            self.dfs.copy(),
+            self.interpolation_method,
         )
 
     def __str__(self) -> str:

@@ -34,6 +34,7 @@ class LegSpec:
     time_fraction : TimeFractionBase
         Day-count basis of the accrual.
     """
+
     currency: Currency
     payment_frequency: PaymentFrequency
     adj_convention: AdjustmentDateConventionBase

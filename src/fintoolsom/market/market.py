@@ -42,7 +42,9 @@ class Market:
     # Collateralised discounting across currencies is not stored: get_dfs derives it.
     # Construction also accepts an iterable of curves.
     curves: dict[str, Curve] = field(default_factory=dict)
-    volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(default_factory=dict)
+    volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self):
         if self.risk_free_index is not None and self.risk_free_index.currency is None:
@@ -52,7 +54,9 @@ class Market:
         if isinstance(self.curves, dict):
             for key, curve in self.curves.items():
                 if isinstance(curve, Curve) and key != curve.get_id():
-                    raise ValueError(f"Curve stored under '{key}' has id '{curve.get_id()}'.")
+                    raise ValueError(
+                        f"Curve stored under '{key}' has id '{curve.get_id()}'."
+                    )
             given = list(self.curves.values())
         else:
             given = list(self.curves)
@@ -104,7 +108,9 @@ class Market:
                 "use IndexCurve / DiscountCurve (see their from_zero_coupon_curve)."
             )
         if not isinstance(curve, Curve):
-            raise TypeError(f"Market curves must be Curve instances, got {type(curve).__name__}.")
+            raise TypeError(
+                f"Market curves must be Curve instances, got {type(curve).__name__}."
+            )
         self.curves[curve.get_id()] = curve
 
     def get_index_curve(self, index: Index) -> IndexCurve:
@@ -120,7 +126,9 @@ class Market:
             raise KeyError(f"No index curve for '{index.name}' in market.")
         return curve
 
-    def get_discount_curve(self, currency: Currency, *, risk_free_index: Index | None = None) -> Curve:
+    def get_discount_curve(
+        self, currency: Currency, *, risk_free_index: Index | None = None
+    ) -> Curve:
         """Uncollateralised discount curve of `currency` under `risk_free_index`.
 
         The risk-free index's own curve for its currency, else the stored
@@ -142,7 +150,9 @@ class Market:
         """
         rfi = risk_free_index if risk_free_index is not None else self.risk_free_index
         if rfi is None:
-            raise ValueError("Market has no risk_free_index; cannot resolve discount curves.")
+            raise ValueError(
+                "Market has no risk_free_index; cannot resolve discount curves."
+            )
         if currency == rfi.currency:
             return self.get_index_curve(rfi)
         curve_id = f"{currency.value}_{rfi.name}"
@@ -181,13 +191,19 @@ class Market:
         numpy.ndarray
         """
         if collateral is None:
-            return self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(dates)
+            return self.get_discount_curve(
+                currency, risk_free_index=risk_free_index
+            ).get_dfs(dates)
         if collateral.currency == currency:
             return self.get_index_curve(collateral).get_dfs(dates)
         return (
-            self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(dates)
+            self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(
+                dates
+            )
             * self.get_index_curve(collateral).get_dfs(dates)
-            / self.get_discount_curve(collateral.currency, risk_free_index=risk_free_index).get_dfs(dates)
+            / self.get_discount_curve(
+                collateral.currency, risk_free_index=risk_free_index
+            ).get_dfs(dates)
         )
 
     def get_df(
@@ -199,7 +215,11 @@ class Market:
         risk_free_index: Index | None = None,
     ) -> float:
         """Single-date :meth:`get_dfs`."""
-        return float(self.get_dfs(currency, [t], collateral=collateral, risk_free_index=risk_free_index)[0])
+        return float(
+            self.get_dfs(
+                currency, [t], collateral=collateral, risk_free_index=risk_free_index
+            )[0]
+        )
 
     def add_index(self, history: IndexHistory):
         """Register `history` under its index name (case-insensitive)."""
@@ -248,7 +268,9 @@ class Market:
             raise ValueError(f"Rate {name} not found for date {t}.")
         past_dates = [d for d in series if d < t]
         if not past_dates:
-            raise ValueError(f"Rate {name} not found for date {t} and there were no past dates.")
+            raise ValueError(
+                f"Rate {name} not found for date {t} and there were no past dates."
+            )
         return series[max(past_dates)]
 
     def accrue_rates_reset_business_days(
@@ -359,7 +381,9 @@ class Market:
 
     def get_volatility_surface(self, currency_pair: CurrencyPair) -> VolatilitySurface:
         if currency_pair not in self.volatility_surfaces:
-            raise KeyError(f"No volatility surface found for currency pair {currency_pair}.")
+            raise KeyError(
+                f"No volatility surface found for currency pair {currency_pair}."
+            )
         return self.volatility_surfaces[currency_pair]
 
     def get_fx_known_until(self, currency_pair: CurrencyPair) -> date:
@@ -400,7 +424,9 @@ class Market:
         for fxr in (fx_rate, fx_rate.invert()):
             data = self.fx_history.get(fxr.currency_pair)
             if data is None:
-                self.fx_history[fxr.currency_pair] = FX_RateData(fxr.currency_pair, {t: fxr})
+                self.fx_history[fxr.currency_pair] = FX_RateData(
+                    fxr.currency_pair, {t: fxr}
+                )
             else:
                 data.add_date(t, fxr)
 

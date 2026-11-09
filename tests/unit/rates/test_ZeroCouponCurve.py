@@ -10,7 +10,6 @@ from fintoolsom.rates import (
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 def test_get_df_at_known_point_matches_input(curve_date, sample_zero_coupon_curve):
     known_date = date(2024, 7, 11)
     df = sample_zero_coupon_curve.get_df(known_date)

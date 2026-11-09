@@ -10,7 +10,6 @@ from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
 
 
@@ -22,8 +21,13 @@ LIN = RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
 
 def _fixed(ccy: Currency, notional: float, rate: float):
     return builders.fixed_leg(
-        notional=notional, start_date=date(2024, 8, 6), term=Term(1, TermUnit.Y, ADJ),
-        frequency="QUARTERLY", adj_convention=ADJ, rate=Rate(LIN, rate), currency=ccy,
+        notional=notional,
+        start_date=date(2024, 8, 6),
+        term=Term(1, TermUnit.Y, ADJ),
+        frequency="QUARTERLY",
+        adj_convention=ADJ,
+        rate=Rate(LIN, rate),
+        currency=ccy,
     )
 
 

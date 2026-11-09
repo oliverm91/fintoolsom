@@ -1,4 +1,5 @@
 """End-to-end behaviour of build_curves and the _CurveBuilder orchestrator."""
+
 import inspect
 from datetime import date
 import pytest
@@ -6,7 +7,12 @@ import warnings
 
 import math
 
-from fintoolsom.curve_builder import InsufficientQuotesError, RedundantQuoteWarning, RepricingError, build_curves
+from fintoolsom.curve_builder import (
+    InsufficientQuotesError,
+    RedundantQuoteWarning,
+    RepricingError,
+    build_curves,
+)
 from fintoolsom.curve_builder._keys import _curves_needed
 from fintoolsom.curve_builder.builder import _CurveBuilder
 from fintoolsom.rates import InterpolationMethod
@@ -16,11 +22,12 @@ from fintoolsom.market.quotes import ForwardPriceQuote
 from fintoolsom.rates import DiscountCurve, IndexCurve
 
 
-
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 
-RISKLESS = OvernightRateIndex("OIS", currency=Currency.CLP)  # funds CLP; USD has its own curve
+RISKLESS = OvernightRateIndex(
+    "OIS", currency=Currency.CLP
+)  # funds CLP; USD has its own curve
 
 
 def _index_curve(t: date, d: date, df: float) -> IndexCurve:
@@ -48,8 +55,11 @@ def test_build_curves_solves_missing_currency_curve_from_one_forward_quote():
 
     market = _market(t, spot, usd_df, payment_date)
     quote = ForwardPriceQuote(
-        currency_pair=USDCLP, value=strike, is_buy=True,
-        payment_date=payment_date, quote_date=t,
+        currency_pair=USDCLP,
+        value=strike,
+        is_buy=True,
+        payment_date=payment_date,
+        quote_date=t,
     )
 
     build_curves([quote], market)
@@ -57,7 +67,9 @@ def test_build_curves_solves_missing_currency_curve_from_one_forward_quote():
     solved_df = market.get_index_curve(RISKLESS).get_df(payment_date)
     assert solved_df == pytest.approx(target_clp_df, abs=1e-6)
     # USD curve, already fully seeded at this maturity, must be left untouched.
-    assert market.get_discount_curve(Currency.USD).get_df(payment_date) == pytest.approx(usd_df)
+    assert market.get_discount_curve(Currency.USD).get_df(
+        payment_date
+    ) == pytest.approx(usd_df)
 
 
 def test_build_curves_raises_insufficient_quotes_when_under_determined():
@@ -66,8 +78,11 @@ def test_build_curves_raises_insufficient_quotes_when_under_determined():
     market = Market(t=t, risk_free_index=RISKLESS)
     market.add_fx_rate(t, FX_Rate(USDCLP, 900.0))
     quote = ForwardPriceQuote(
-        currency_pair=USDCLP, value=928.0, is_buy=True,
-        payment_date=payment_date, quote_date=t,
+        currency_pair=USDCLP,
+        value=928.0,
+        is_buy=True,
+        payment_date=payment_date,
+        quote_date=t,
     )
     # Neither USD nor CLP curve exists yet: 1 quote, 2 unknown pillars.
     with pytest.raises(InsufficientQuotesError):
@@ -78,8 +93,11 @@ def test_build_curves_raises_when_quote_date_mismatches_market_t():
     t = date(2024, 1, 2)
     market = Market(t=date(2024, 1, 3), risk_free_index=RISKLESS)
     quote = ForwardPriceQuote(
-        currency_pair=USDCLP, value=900.0, is_buy=True,
-        payment_date=date(2024, 7, 2), quote_date=t,
+        currency_pair=USDCLP,
+        value=900.0,
+        is_buy=True,
+        payment_date=date(2024, 7, 2),
+        quote_date=t,
     )
     with pytest.raises(ValueError):
         build_curves([quote], market)
@@ -89,25 +107,35 @@ def test_curves_needed_forward_quote_does_not_crash_on_missing_collateral_index(
     # ForwardPriceQuote has no collateral_index attribute at all; _curves_needed
     # must not assume every quote type carries one.
     quote = ForwardPriceQuote(
-        currency_pair=USDCLP, value=900.0, is_buy=True,
-        payment_date=date(2024, 7, 2), quote_date=date(2024, 1, 2),
+        currency_pair=USDCLP,
+        value=900.0,
+        is_buy=True,
+        payment_date=date(2024, 7, 2),
+        quote_date=date(2024, 1, 2),
     )
     keys = _curves_needed(quote, RISKLESS)
     assert keys == frozenset({Currency.USD, RISKLESS})
 
 
 def _builder(market: Market, quotes=()) -> _CurveBuilder:
-    return _CurveBuilder(
-        list(quotes), market
-    )
+    return _CurveBuilder(list(quotes), market)
 
 
 def _forward_case():
-    t, payment_date, spot, usd_df, target_clp_df = date(2024, 1, 2), date(2024, 7, 2), 900.0, 0.98, 0.95
+    t, payment_date, spot, usd_df, target_clp_df = (
+        date(2024, 1, 2),
+        date(2024, 7, 2),
+        900.0,
+        0.98,
+        0.95,
+    )
     market = _market(t, spot, usd_df, payment_date)
     quote = ForwardPriceQuote(
-        currency_pair=USDCLP, value=spot * usd_df / target_clp_df, is_buy=True,
-        payment_date=payment_date, quote_date=t,
+        currency_pair=USDCLP,
+        value=spot * usd_df / target_clp_df,
+        is_buy=True,
+        payment_date=payment_date,
+        quote_date=t,
     )
     return market, quote
 
@@ -118,7 +146,9 @@ def test_quote_falls_back_to_the_curve_it_can_still_pin():
     market, quote = _forward_case()
     builder = _builder(market, [quote])
     assert builder.plan.candidates[quote] == (Currency.USD, RISKLESS)
-    assert builder.plan.assign_pillars([quote.get_instrument()], [builder.plan.candidates[quote]]) == [RISKLESS]
+    assert builder.plan.assign_pillars(
+        [quote.get_instrument()], [builder.plan.candidates[quote]]
+    ) == [RISKLESS]
 
 
 def test_every_pinning_quote_is_checked_after_the_build():
@@ -149,25 +179,40 @@ def test_a_forward_inside_built_curves_is_ditched_with_its_mtm_over_the_base_not
     market, quote = _forward_case()
     market.set_curve(_index_curve(market.t, date(2024, 12, 31), 0.93))
     builder = _builder(market, [quote])
-    with pytest.warns(RedundantQuoteWarning, match="ForwardPriceQuote 2024-07-02 USD-CLP: MTM") as record:
+    with pytest.warns(
+        RedundantQuoteWarning, match="ForwardPriceQuote 2024-07-02 USD-CLP: MTM"
+    ) as record:
         builder.build()
     ((ditched, mtm, pct, bp),) = record[0].message.ditched
     assert ditched is quote and mtm != 0
     assert bp is None  # not a swap: no quoted rate to express the error in
-    assert "bp" not in str(record[0].message) and f"= {pct:.4%} of notional" in str(record[0].message)
+    assert "bp" not in str(record[0].message) and f"= {pct:.4%} of notional" in str(
+        record[0].message
+    )
     instrument = quote.get_instrument()
-    assert pct == pytest.approx(mtm / (instrument.notional * 900.0), rel=1e-12)  # base USD notional, in CLP
+    assert pct == pytest.approx(
+        mtm / (instrument.notional * 900.0), rel=1e-12
+    )  # base USD notional, in CLP
 
 
 # ── Interpolation method ────────────────────────────────────────────────────
+
 
 def test_curves_default_to_the_builders_interpolation():
     t = date(2024, 1, 2)
     params = inspect.signature(build_curves).parameters
     discount = DiscountCurve(t, Currency.USD, RISKLESS, [date(2025, 1, 2)], [0.95])
-    assert discount.interpolation_method is params["discount_interp_method"].default is InterpolationMethod.LogLinear
+    assert (
+        discount.interpolation_method
+        is params["discount_interp_method"].default
+        is InterpolationMethod.LogLinear
+    )
     index = IndexCurve(t, RISKLESS, [t, date(2025, 1, 2)], [0.05])
-    assert index.interpolation_method is params["index_interp_method"].default is InterpolationMethod.PiecewiseConstant
+    assert (
+        index.interpolation_method
+        is params["index_interp_method"].default
+        is InterpolationMethod.PiecewiseConstant
+    )
 
 
 def test_an_extended_curve_keeps_its_own_interpolation():
@@ -175,14 +220,27 @@ def test_an_extended_curve_keeps_its_own_interpolation():
     from tests.factories.quote_factory import load_quotes, quote_market, quote_mtm
 
     real = load_quotes()
-    icp_irs = [q for q in real if isinstance(q, IRSQuote) and q.fixed_leg.currency == Currency.CLP
-               and q.collateral_index.name == "ICP"]
+    icp_irs = [
+        q
+        for q in real
+        if isinstance(q, IRSQuote)
+        and q.fixed_leg.currency == Currency.CLP
+        and q.collateral_index.name == "ICP"
+    ]
     forwards = [q for q in real if isinstance(q, ForwardPointsQuote)]
     market = quote_market()
     # USD funding from the FX forwards, monotone cubic.
-    build_curves(icp_irs + forwards, market, discount_interp_method=InterpolationMethod.HermiteCubicSpline)
+    build_curves(
+        icp_irs + forwards,
+        market,
+        discount_interp_method=InterpolationMethod.HermiteCubicSpline,
+    )
     usd = market.get_discount_curve(Currency.USD)
-    between = [date(2024, 2, 15), date(2024, 5, 20), date(2024, 11, 5)]  # inside the forwards' range
+    between = [
+        date(2024, 2, 15),
+        date(2024, 5, 20),
+        date(2024, 11, 5),
+    ]  # inside the forwards' range
     before = usd.get_dfs(between)
 
     # The rest extends USD funding past 1Y, LogLinear by default: the short end must not move.

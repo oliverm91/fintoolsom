@@ -1,4 +1,5 @@
 """Chilean bonds (CLBond) and their coupons, built by hand (no fixed_income.db)."""
+
 from datetime import date
 
 from dateutil.relativedelta import relativedelta
@@ -26,7 +27,9 @@ def bullet_coupons(
     for i in range(n_coupons):
         end = start + relativedelta(months=months * (i + 1))
         amortization = 100.0 if i == n_coupons - 1 else 0.0
-        coupons.append(Coupon(amortization, coupon_amount, 100.0, current, end, convention.copy()))
+        coupons.append(
+            Coupon(amortization, coupon_amount, 100.0, current, end, convention.copy())
+        )
         current = end
     return Coupons(coupons, check_residuals=True)
 
@@ -45,7 +48,9 @@ def amortizing_coupons(
     for i in range(n_coupons):
         end = start + relativedelta(months=months * (i + 1))
         interest = residual * annual_rate * months / 12
-        coupons.append(Coupon(amortization, interest, residual, current, end, convention.copy()))
+        coupons.append(
+            Coupon(amortization, interest, residual, current, end, convention.copy())
+        )
         residual -= amortization
         current = end
     return Coupons(coupons, check_residuals=True)
@@ -59,7 +64,11 @@ def bullet_clbond(
     currency: str = "clp",
 ) -> CLBond:
     """Bullet CLBond; the defaults describe BTP0470930."""
-    return CLBond(bullet_coupons(start, n_coupons, coupon_amount), currency=currency, notional=notional)
+    return CLBond(
+        bullet_coupons(start, n_coupons, coupon_amount),
+        currency=currency,
+        notional=notional,
+    )
 
 
 def btp0470930(notional: float = 380_000_000) -> CLBond:

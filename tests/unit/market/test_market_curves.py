@@ -1,4 +1,5 @@
 """Market curve storage: ids, the index / discount getters and get_dfs."""
+
 import math
 from datetime import date, timedelta
 
@@ -23,7 +24,11 @@ def _index_curve(index, rate):
 
 def _market() -> Market:
     usd_icp = DiscountCurve(T, USD, ICP, [END], [math.exp(-0.03 * 10)])
-    return Market(T, risk_free_index=ICP, curves=[_index_curve(ICP, 0.05), _index_curve(SOFR, 0.04), usd_icp])
+    return Market(
+        T,
+        risk_free_index=ICP,
+        curves=[_index_curve(ICP, 0.05), _index_curve(SOFR, 0.04), usd_icp],
+    )
 
 
 def _flat(rate):
@@ -49,11 +54,17 @@ def test_a_numeraire_not_built_raises():
 def test_get_dfs_uncollateralised_same_currency_and_cross_currency_collateral():
     market = _market()
     assert market.get_dfs(USD, DATES) == pytest.approx(_flat(0.03), rel=1e-13)
-    assert market.get_dfs(USD, DATES, collateral=SOFR) == pytest.approx(_flat(0.04), rel=1e-13)
+    assert market.get_dfs(USD, DATES, collateral=SOFR) == pytest.approx(
+        _flat(0.04), rel=1e-13
+    )
     # CLP under SOFR collateral: CLP_ICP * SOFR / USD_ICP.
     expected = [a * b / c for a, b, c in zip(_flat(0.05), _flat(0.04), _flat(0.03))]
-    assert market.get_dfs(CLP, DATES, collateral=SOFR) == pytest.approx(expected, rel=1e-13)
-    assert market.get_df(CLP, DATES[0], collateral=SOFR) == pytest.approx(expected[0], rel=1e-13)
+    assert market.get_dfs(CLP, DATES, collateral=SOFR) == pytest.approx(
+        expected, rel=1e-13
+    )
+    assert market.get_df(CLP, DATES[0], collateral=SOFR) == pytest.approx(
+        expected[0], rel=1e-13
+    )
 
 
 def test_a_bump_of_the_collateral_curve_moves_every_dependent_discount_factor():
@@ -62,7 +73,9 @@ def test_a_bump_of_the_collateral_curve_moves_every_dependent_discount_factor():
     market.set_curve(market.curves["SOFR"].parallel_bump_bps(1))
     after = market.get_dfs(CLP, DATES, collateral=SOFR)
     taus = [(d - T).days / 365 for d in DATES]
-    assert [math.log(b / a) / t for a, b, t in zip(after, before, taus)] == pytest.approx([1e-4] * 3, abs=1e-12)
+    assert [
+        math.log(b / a) / t for a, b, t in zip(after, before, taus)
+    ] == pytest.approx([1e-4] * 3, abs=1e-12)
 
 
 def test_index_curve_lookup_and_missing_curves():

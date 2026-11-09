@@ -4,6 +4,7 @@
 rebuilds its curves from it; :func:`_solve_unknowns` bootstraps them date by date
 (square blocks, ascending) and falls back to one joint ``root``.
 """
+
 from __future__ import annotations
 
 import math
@@ -26,7 +27,9 @@ from ._keys import CurveKey, _built, _curve_id
 # (report currency); otherwise the group falls back to one joint solve.
 _SWEEP_TOL = 1e-6
 # Interpolations where a pillar only moves the curve between its neighbours.
-_LOCAL_METHODS = frozenset({InterpolationMethod.LogLinear, InterpolationMethod.PiecewiseConstant})
+_LOCAL_METHODS = frozenset(
+    {InterpolationMethod.LogLinear, InterpolationMethod.PiecewiseConstant}
+)
 _MAX_SWEEPS = 4
 
 
@@ -152,15 +155,22 @@ class _GroupSolve:
         for curve, dates in free_dates.items():
             curve_slice[curve] = (start, start + len(dates))
             seeds = free_seeds[curve]
-            y0 += list(seeds) if isinstance(curve, Index) else [math.log(df) for df in seeds]
+            y0 += (
+                list(seeds)
+                if isinstance(curve, Index)
+                else [math.log(df) for df in seeds]
+            )
             start += len(dates)
-        return cls(market, t, method, fixed_pillars, free_dates, curve_slice, y0, index_method)
+        return cls(
+            market, t, method, fixed_pillars, free_dates, curve_slice, y0, index_method
+        )
 
     def __post_init__(self):
         self._snapshot = {c: _built(self.market, c) for c in self.curve_slice}
         # Interpolation of each rebuilt curve: an existing curve keeps its own.
         self.methods = {
-            c: prev.interpolation_method if prev is not None
+            c: prev.interpolation_method
+            if prev is not None
             else (self.index_method if isinstance(c, Index) else self.method)
             for c, prev in self._snapshot.items()
         }
@@ -183,14 +193,23 @@ class _GroupSolve:
             fixed = self.fixed_pillars[curve]
             if isinstance(curve, Index):
                 built = IndexCurve(
-                    self.t, curve, [*fixed.knots, *self.free_dates[curve]],
-                    [*fixed.forwards, *(float(v) for v in y[s:e])], fixed.spot_rate, self.methods[curve],
+                    self.t,
+                    curve,
+                    [*fixed.knots, *self.free_dates[curve]],
+                    [*fixed.forwards, *(float(v) for v in y[s:e])],
+                    fixed.spot_rate,
+                    self.methods[curve],
                 )
             else:
                 dates = [d for d, _ in fixed] + list(self.free_dates[curve])
                 dfs = [df for _, df in fixed] + [math.exp(v) for v in y[s:e]]
                 built = DiscountCurve(
-                    self.t, curve, self.market.risk_free_index, dates, dfs, self.methods[curve]
+                    self.t,
+                    curve,
+                    self.market.risk_free_index,
+                    dates,
+                    dfs,
+                    self.methods[curve],
                 )
             self.market.set_curve(built)
 
@@ -198,13 +217,21 @@ class _GroupSolve:
         """Put back the curves as they were before the solve."""
         for curve, previous in self._snapshot.items():
             if previous is None:
-                self.market.curves.pop(_curve_id(curve, self.market.risk_free_index), None)
+                self.market.curves.pop(
+                    _curve_id(curve, self.market.risk_free_index), None
+                )
             else:
                 self.market.set_curve(previous)
 
 
 def _solve_unknowns(
-    solve: _GroupSolve, instruments, pillar_dates, report_currency: Currency, what: str, *, date_by_date: bool = True
+    solve: _GroupSolve,
+    instruments,
+    pillar_dates,
+    report_currency: Currency,
+    what: str,
+    *,
+    date_by_date: bool = True,
 ) -> np.ndarray:
     """Bootstrap the free pillars date by date, falling back to one joint solve.
 
@@ -234,6 +261,7 @@ def _solve_unknowns(
     numpy.ndarray
         Solved unknowns.
     """
+
     def values(instrs, y) -> list[float]:
         solve.apply(y)
         return [Calculator.valuate(i, solve.market, report_currency) for i in instrs]
@@ -261,7 +289,11 @@ def _solve_unknowns(
                     y[pos] = x
                     return values(block, y)
 
-                y[pos] = _solve_or_rollback(block_residual, list(y[pos]), solve.restore, what).x
+                y[pos] = _solve_or_rollback(
+                    block_residual, list(y[pos]), solve.restore, what
+                ).x
             if max(abs(v) for v in values(instruments, y)) <= _SWEEP_TOL:
                 return y
-    return _solve_or_rollback(lambda v: values(instruments, v), list(y), solve.restore, what).x
+    return _solve_or_rollback(
+        lambda v: values(instruments, v), list(y), solve.restore, what
+    ).x

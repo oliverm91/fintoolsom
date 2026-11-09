@@ -24,6 +24,7 @@ class Term:
     adj_convention determines how the raw maturity date is adjusted
     (e.g., ModifiedFollowing on a joint calendar for XCCY swaps).
     """
+
     value: int
     unit: TermUnit
     adj_convention: AdjustmentDateConventionBase
@@ -36,7 +37,7 @@ class Term:
             raw = from_date + relativedelta(months=self.value)
         elif self.unit == TermUnit.Y:
             raw = from_date + relativedelta(years=self.value)
-        else: # D
+        else:  # D
             raw = self.adj_convention.calendar.add_business_days(from_date, self.value)
         return self.adj_convention.adjust(raw)
 

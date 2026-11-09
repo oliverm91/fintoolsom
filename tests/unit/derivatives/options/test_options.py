@@ -6,7 +6,6 @@ from fintoolsom.market.volatility_surface import VolatilitySurface, Interpolatio
 from fintoolsom.market.currencies import Currency, CurrencyPair
 
 
-
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 

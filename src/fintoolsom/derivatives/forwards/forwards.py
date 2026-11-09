@@ -44,6 +44,7 @@ class Forward:
         If `currency_pair` is missing or holds a non-deliverable currency (the UF,
         ``CLF``): such a forward can only be an :class:`NDF`.
     """
+
     notional: float
     strike: float
     payment_date: date
@@ -86,6 +87,7 @@ class NDF(Forward):
         If `fixing_date` is missing or after `payment_date`, or `currency_pair` is
         missing.
     """
+
     fixing_date: date = None
 
     def __post_init__(self):

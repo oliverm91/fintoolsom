@@ -16,7 +16,6 @@ from fintoolsom.rates import (
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 VALUATION_DATE = date(2026, 6, 24)
 
 

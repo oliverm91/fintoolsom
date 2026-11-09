@@ -16,15 +16,27 @@ from fintoolsom.market import (
     PriceHistory,
     OvernightInterestPriceHistory,
 )
-from fintoolsom.rates import CompoundedInterestConvention, Rate, RateConvention, LinearInterestConvention
-from fintoolsom.dates import ActualDayCountConvention, Calendar, ModifiedFollowingConvention
+from fintoolsom.rates import (
+    CompoundedInterestConvention,
+    Rate,
+    RateConvention,
+    LinearInterestConvention,
+)
+from fintoolsom.dates import (
+    ActualDayCountConvention,
+    Calendar,
+    ModifiedFollowingConvention,
+)
 
 
+RATE_5PCT = Rate(
+    RateConvention(LinearInterestConvention, ActualDayCountConvention, 365), 0.05
+)
 
-RATE_5PCT = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 365), 0.05)
 
-
-RATE_3PCT = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 365), 0.03)
+RATE_3PCT = Rate(
+    RateConvention(LinearInterestConvention, ActualDayCountConvention, 365), 0.03
+)
 
 
 # Mon–Fri week
@@ -145,22 +157,32 @@ def test_overnight_price_history_spot_overnight_rate_uses_last_realized_step():
 
 def test_overnight_price_history_spot_overnight_rate_uses_the_index_convention():
     act365 = RateConvention(CompoundedInterestConvention, ActualDayCountConvention, 365)
-    index = OvernightInterestPriceIndex("IDX", currency=Currency.CLP, rate_convention=act365)
+    index = OvernightInterestPriceIndex(
+        "IDX", currency=Currency.CLP, rate_convention=act365
+    )
     h = OvernightInterestPriceHistory(index=index, values={D0: 35000.0, D1: 35004.0})
     r = h.spot_overnight_rate(D1)
     assert r.rate == pytest.approx((35004.0 / 35000.0) ** (365 / (D1 - D0).days) - 1)
     assert r.rate_convention.interest_convention is CompoundedInterestConvention
-    assert r.rate_convention is not index.rate_convention  # a copy: the index is not exposed
+    assert (
+        r.rate_convention is not index.rate_convention
+    )  # a copy: the index is not exposed
     # The implied rate reprices the realised growth.
-    assert float(r.get_wealth_factor(D0, D1)) == pytest.approx(35004.0 / 35000.0, rel=1e-14)
+    assert float(r.get_wealth_factor(D0, D1)) == pytest.approx(
+        35004.0 / 35000.0, rel=1e-14
+    )
 
 
 def test_price_index_defaults_to_linear_act_360():
     rc = ICP.rate_convention
     assert (rc.interest_convention, rc.day_count_convention, rc.time_fraction_base) == (
-        LinearInterestConvention, ActualDayCountConvention, 360
+        LinearInterestConvention,
+        ActualDayCountConvention,
+        360,
     )
-    assert OvernightInterestPriceIndex("X").rate_convention is not rc  # no shared default
+    assert (
+        OvernightInterestPriceIndex("X").rate_convention is not rc
+    )  # no shared default
 
 
 def test_overnight_price_history_spot_overnight_rate_needs_two_levels():

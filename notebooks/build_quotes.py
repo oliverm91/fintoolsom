@@ -23,7 +23,12 @@ from fintoolsom.market import (
 )
 from fintoolsom.market.index import InterestPriceIndex, RateIndex, OvernightRateIndex
 from fintoolsom.market.localities import Locality
-from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention, CompoundedInterestConvention
+from fintoolsom.rates import (
+    Rate,
+    RateConvention,
+    LinearInterestConvention,
+    CompoundedInterestConvention,
+)
 
 
 # ── Lookup tables ────────────────────────────────────────────────────────────
@@ -36,8 +41,8 @@ _CURRENCY: dict[str, Currency] = {
 }
 
 _INDEX: dict[str, RateIndex | InterestPriceIndex] = {
-    "SOFR":   OvernightRateIndex("SOFR", currency=Currency.USD),
-    "ICP":    OvernightRateIndex("ICP", currency=Currency.CLP),
+    "SOFR": OvernightRateIndex("SOFR", currency=Currency.USD),
+    "ICP": OvernightRateIndex("ICP", currency=Currency.CLP),
 }
 
 _DAY_COUNT: dict[str, TimeFractionBase] = {
@@ -49,12 +54,13 @@ _RATE_DC_BASE: dict[str, tuple] = {
 }
 
 _INTEREST_CONVENTION = {
-    "Linear":     LinearInterestConvention,
+    "Linear": LinearInterestConvention,
     "Compounded": CompoundedInterestConvention,
 }
 
 
 # ── Private helpers ──────────────────────────────────────────────────────────
+
 
 def _build_adj_conv(conv_name: str, cal_name: str):
     if conv_name == "ModifiedFollowingConvention":
@@ -91,7 +97,13 @@ def _float_spec(leg: dict, adj_conv, tf: TimeFractionBase) -> FloatingLegSpec:
     currency = _CURRENCY[currency_str] if currency_str else index.currency
     spread_value = float(leg.get("spread", 0)) / 10_000
     from fintoolsom.rates.Rates import Rate, RateConvention, LinearInterestConvention
-    spread = Rate(RateConvention(interest_convention=LinearInterestConvention, time_fraction_base=360), spread_value)
+
+    spread = Rate(
+        RateConvention(
+            interest_convention=LinearInterestConvention, time_fraction_base=360
+        ),
+        spread_value,
+    )
     return FloatingLegSpec(
         currency=currency,
         payment_frequency=PaymentFrequency[leg["payment_frequency"]],
@@ -103,6 +115,7 @@ def _float_spec(leg: dict, adj_conv, tf: TimeFractionBase) -> FloatingLegSpec:
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
+
 
 def build_quotes(
     quote_date: date,
@@ -136,51 +149,63 @@ def build_quotes(
             collateral = _INDEX[collateral_str] if collateral_str else None
 
             if quote_type == "IRSQuote":
-                fixed_data = _deep_merge(group.get("fixed_leg", {}), q.get("fixed_leg", {}))
-                float_data = _deep_merge(group.get("floating_leg", {}), q.get("floating_leg", {}))
-                result.append(IRSQuote(
-                    quoted_side=QuotedSide[group["quoted_side"]],
-                    term=term,
-                    quote_date=quote_date,
-                    adj_convention=adj_conv,
-                    spot_lag=spot_lag,
-                    stub_first=stub_first,
-                    long_stub=long_stub,
-                    collateral_index=collateral,
-                    fixed_leg=_fixed_spec(fixed_data, adj_conv, tf, dc_key),
-                    floating_leg=_float_spec(float_data, adj_conv, tf),
-                ))
+                fixed_data = _deep_merge(
+                    group.get("fixed_leg", {}), q.get("fixed_leg", {})
+                )
+                float_data = _deep_merge(
+                    group.get("floating_leg", {}), q.get("floating_leg", {})
+                )
+                result.append(
+                    IRSQuote(
+                        quoted_side=QuotedSide[group["quoted_side"]],
+                        term=term,
+                        quote_date=quote_date,
+                        adj_convention=adj_conv,
+                        spot_lag=spot_lag,
+                        stub_first=stub_first,
+                        long_stub=long_stub,
+                        collateral_index=collateral,
+                        fixed_leg=_fixed_spec(fixed_data, adj_conv, tf, dc_key),
+                        floating_leg=_float_spec(float_data, adj_conv, tf),
+                    )
+                )
 
             elif quote_type == "CrossCurrencyFloatFloatQuote":
-                recv_data = _deep_merge(group.get("receive_leg", {}), q.get("receive_leg", {}))
+                recv_data = _deep_merge(
+                    group.get("receive_leg", {}), q.get("receive_leg", {})
+                )
                 pay_data = _deep_merge(group.get("pay_leg", {}), q.get("pay_leg", {}))
-                result.append(CrossCurrencyFloatFloatQuote(
-                    quoted_side=QuotedSide[group["quoted_side"]],
-                    term=term,
-                    quote_date=quote_date,
-                    adj_convention=adj_conv,
-                    spot_lag=spot_lag,
-                    stub_first=stub_first,
-                    long_stub=long_stub,
-                    collateral_index=collateral,
-                    receive_leg=_float_spec(recv_data, adj_conv, tf),
-                    pay_leg=_float_spec(pay_data, adj_conv, tf),
-                ))
+                result.append(
+                    CrossCurrencyFloatFloatQuote(
+                        quoted_side=QuotedSide[group["quoted_side"]],
+                        term=term,
+                        quote_date=quote_date,
+                        adj_convention=adj_conv,
+                        spot_lag=spot_lag,
+                        stub_first=stub_first,
+                        long_stub=long_stub,
+                        collateral_index=collateral,
+                        receive_leg=_float_spec(recv_data, adj_conv, tf),
+                        pay_leg=_float_spec(pay_data, adj_conv, tf),
+                    )
+                )
 
             elif quote_type == "ForwardPointsQuote":
                 cp_arr: list[str] = group["currency_pair"]
                 cp = CurrencyPair(_CURRENCY[cp_arr[0]], _CURRENCY[cp_arr[1]])
                 locality_str: str | None = group.get("locality")
-                result.append(ForwardPointsQuote(
-                    currency_pair=cp,
-                    value=q["value"],
-                    is_buy=group["is_buy"],
-                    points_divisor=group.get("points_divisor", 1),
-                    term=term,
-                    quote_date=quote_date,
-                    spot_lag=spot_lag,
-                    payment_lag=group.get("payment_lag", 1),
-                    locality=Locality[locality_str] if locality_str else None,
-                ))
+                result.append(
+                    ForwardPointsQuote(
+                        currency_pair=cp,
+                        value=q["value"],
+                        is_buy=group["is_buy"],
+                        points_divisor=group.get("points_divisor", 1),
+                        term=term,
+                        quote_date=quote_date,
+                        spot_lag=spot_lag,
+                        payment_lag=group.get("payment_lag", 1),
+                        locality=Locality[locality_str] if locality_str else None,
+                    )
+                )
 
     return result

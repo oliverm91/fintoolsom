@@ -11,7 +11,11 @@ from .conventions import FixedLegSpec, FloatingLegSpec
 from .currencies import Currency, CurrencyPair, FX_Rate
 from .localities import Locality
 from .index import InterestIndex
-from ..dates import AdjustmentDateConventionBase, ModifiedFollowingConvention, get_calendar
+from ..dates import (
+    AdjustmentDateConventionBase,
+    ModifiedFollowingConvention,
+    get_calendar,
+)
 from ..dates.term import Term
 
 if TYPE_CHECKING:
@@ -20,6 +24,7 @@ if TYPE_CHECKING:
 
 
 # ── Private: ABC and module constants ──────────────────────────────────────
+
 
 class InstrumentQuote(ABC):
     """Market quote of an instrument; every concrete quote builds its instrument."""
@@ -54,12 +59,17 @@ def _check_settlement(is_deliverable: bool, payment_currency: Currency | None) -
         has none.
     """
     if is_deliverable and payment_currency is not None:
-        raise ValueError("A deliverable cross-currency quote must not set payment_currency.")
+        raise ValueError(
+            "A deliverable cross-currency quote must not set payment_currency."
+        )
     if not is_deliverable and payment_currency is None:
-        raise ValueError("A non-deliverable cross-currency quote needs a payment_currency.")
+        raise ValueError(
+            "A non-deliverable cross-currency quote needs a payment_currency."
+        )
 
 
 # ── Private: forward base classes ──────────────────────────────────────────
+
 
 @dataclass
 class _ForwardQuote(InstrumentQuote):
@@ -69,7 +79,9 @@ class _ForwardQuote(InstrumentQuote):
     _: KW_ONLY
     payment_date: date | None = field(default=None)
     locality: Locality | None = field(default=None)
-    fixing_date: date | None = field(default=None)  # set → NDF, None → deliverable Forward
+    fixing_date: date | None = field(
+        default=None
+    )  # set → NDF, None → deliverable Forward
     term: Term | None = field(default=None)
     quote_date: date | None = field(default=None)
     spot_lag: int = field(default=2)
@@ -113,7 +125,9 @@ class _ForwardQuote(InstrumentQuote):
         if fixing is not None:
             cal = self.term.adj_convention.calendar if self.term else get_calendar()
             return cal.add_business_days(fixing, self.payment_lag)
-        raise ValueError("Cannot derive payment_date: provide payment_date, or term+quote_date.")
+        raise ValueError(
+            "Cannot derive payment_date: provide payment_date, or term+quote_date."
+        )
 
     def _build(self, strike: float) -> Forward | NDF:
         """Forward instrument at `strike`.
@@ -123,6 +137,7 @@ class _ForwardQuote(InstrumentQuote):
         payment date by default); a deliverable Forward otherwise.
         """
         from ..derivatives.forwards.forwards import Forward, NDF
+
         fixing = self._effective_fixing_date()
         pmt = self._effective_payment_date()
         pair = self.currency_pair
@@ -132,18 +147,24 @@ class _ForwardQuote(InstrumentQuote):
             fixing = pmt
         if fixing is not None:
             return NDF(
-                notional=_NOTIONAL, strike=strike,
-                payment_date=pmt, is_buy=self.is_buy,
-                currency_pair=pair, fixing_date=fixing,
+                notional=_NOTIONAL,
+                strike=strike,
+                payment_date=pmt,
+                is_buy=self.is_buy,
+                currency_pair=pair,
+                fixing_date=fixing,
             )
         return Forward(
-            notional=_NOTIONAL, strike=strike,
-            payment_date=pmt, is_buy=self.is_buy,
+            notional=_NOTIONAL,
+            strike=strike,
+            payment_date=pmt,
+            is_buy=self.is_buy,
             currency_pair=pair,
         )
 
 
 # ── Private: swap base class ───────────────────────────────────────────────
+
 
 class QuotedSide(Enum):
     RECEIVE = "RECEIVE"
@@ -177,6 +198,7 @@ class _SwapQuote(InstrumentQuote):
     stub_first, long_stub : bool
         Stub placement, as in the leg builders (keyword-only).
     """
+
     quoted_side: QuotedSide
     term: Term
     quote_date: date
@@ -186,8 +208,12 @@ class _SwapQuote(InstrumentQuote):
     locality: Locality | None = field(default=None)
     _: KW_ONLY
     spot_lag: int = field(default=2)
-    start_date: date | None = field(default=None)    # explicit start; ignores spot_lag when set
-    maturity_date: date | None = field(default=None) # explicit maturity; validated against term
+    start_date: date | None = field(
+        default=None
+    )  # explicit start; ignores spot_lag when set
+    maturity_date: date | None = field(
+        default=None
+    )  # explicit maturity; validated against term
     collateral_index: InterestIndex | None = field(default=None)
     stub_first: bool = True
     long_stub: bool = False
@@ -220,6 +246,7 @@ class _SwapQuote(InstrumentQuote):
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
+
 
 @dataclass
 class ForwardPriceQuote(_ForwardQuote):
@@ -276,6 +303,7 @@ class ForwardPointsQuote(_ForwardQuote):
     ValueError
         If `points_divisor` is not positive.
     """
+
     points_divisor: int = field(default=1)
 
     def __post_init__(self):
@@ -300,7 +328,11 @@ class ForwardPointsQuote(_ForwardQuote):
         # Outright strike = market spot + points, using the market FX at quote_date (the
         # same rate used to valuate the forward). Structure-only calls (no market) never
         # read the strike, so a 0 placeholder is fine there.
-        strike = self.to_outright(market.get_fx_rate(self.quote_date, self.currency_pair)) if market is not None else 0.0
+        strike = (
+            self.to_outright(market.get_fx_rate(self.quote_date, self.currency_pair))
+            if market is not None
+            else 0.0
+        )
         return self._build(strike)
 
 
@@ -340,6 +372,7 @@ class IRSQuote(_SwapQuote):
     ValueError
         If the legs are in different currencies.
     """
+
     _: KW_ONLY
     fixed_leg: FixedLegSpec
     floating_leg: FloatingLegSpec
@@ -382,8 +415,18 @@ class IRSQuote(_SwapQuote):
             maturity_date=mat,
         )
         if self.quoted_side == QuotedSide.RECEIVE:
-            return Swap(receive_leg=fixed, pay_leg=floating, payment_currency=self.fixed_leg.currency, collateral_index=self.collateral_index)
-        return Swap(receive_leg=floating, pay_leg=fixed, payment_currency=self.fixed_leg.currency, collateral_index=self.collateral_index)
+            return Swap(
+                receive_leg=fixed,
+                pay_leg=floating,
+                payment_currency=self.fixed_leg.currency,
+                collateral_index=self.collateral_index,
+            )
+        return Swap(
+            receive_leg=floating,
+            pay_leg=fixed,
+            payment_currency=self.fixed_leg.currency,
+            collateral_index=self.collateral_index,
+        )
 
 
 @dataclass
@@ -420,6 +463,7 @@ class IRBasisQuote(_SwapQuote):
     ValueError
         If the legs are in different currencies.
     """
+
     _: KW_ONLY
     receive_leg: FloatingLegSpec
     pay_leg: FloatingLegSpec
@@ -504,6 +548,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
     ValueError
         If the legs are in the same currency, or the settlement is inconsistent.
     """
+
     _: KW_ONLY
     fixed_leg: FixedLegSpec
     floating_leg: FloatingLegSpec
@@ -551,7 +596,11 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             maturity_date=mat,
             fx_fixing_lag=self.fx_fixing_lag,
         )
-        receive, pay = (fixed, floating) if self.quoted_side == QuotedSide.RECEIVE else (floating, fixed)
+        receive, pay = (
+            (fixed, floating)
+            if self.quoted_side == QuotedSide.RECEIVE
+            else (floating, fixed)
+        )
         return Swap(
             receive_leg=receive,
             pay_leg=pay,
@@ -606,6 +655,7 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
     ValueError
         If the legs are in the same currency, or the settlement is inconsistent.
     """
+
     _: KW_ONLY
     receive_leg: FloatingLegSpec
     pay_leg: FloatingLegSpec
@@ -635,7 +685,8 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
         recv_notional = pay_notional = _NOTIONAL
         if market is not None:
             fx = market.get_fx_rate(
-                self.quote_date, CurrencyPair(self.pay_leg.currency, self.receive_leg.currency)
+                self.quote_date,
+                CurrencyPair(self.pay_leg.currency, self.receive_leg.currency),
             ).value
             recv_notional = pay_notional * fx
 

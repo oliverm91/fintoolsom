@@ -21,7 +21,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 USD, CLP = Currency.USD, Currency.CLP
 
 
@@ -35,13 +34,20 @@ def _common(ccy: Ccy, status: SwapStatus) -> dict:
     )
 
 
-def _xccy_usd(status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0) -> Any:
+def _xccy_usd(
+    status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0
+) -> Any:
     return builders.xccy_floating_leg(
-        index=SOFR, spread=SPREAD, fx_fixing_lag=fx_fixing_lag, **_common(Ccy.USD, status)
+        index=SOFR,
+        spread=SPREAD,
+        fx_fixing_lag=fx_fixing_lag,
+        **_common(Ccy.USD, status),
     )
 
 
-def _fixed(ccy: Ccy, status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0) -> Any:
+def _fixed(
+    ccy: Ccy, status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0
+) -> Any:
     return builders.fixed_leg(
         rate=_rate(FIXED_RATES[ccy]),
         currency=USD if ccy is Ccy.USD else CLP,
@@ -74,7 +80,9 @@ def test_fx_fixing_dates_default_to_payment_dates():
 def test_fx_fixing_lag_counts_business_days_back_from_payment():
     calendar = adj_convention(Ccy.USD).calendar
     leg = _xccy_usd(fx_fixing_lag=2)
-    assert leg.fx_fixing_dates == [calendar.add_business_days(p, -2) for p in leg.payment_dates]
+    assert leg.fx_fixing_dates == [
+        calendar.add_business_days(p, -2) for p in leg.payment_dates
+    ]
     assert all(f < p for f, p in zip(leg.fx_fixing_dates, leg.payment_dates))
 
 
@@ -83,4 +91,12 @@ def test_invalid_fx_fixing_dates_raise():
         _xccy_usd(fx_fixing_lag=-1)
     with pytest.raises(ValueError, match="fx_fixing_date"):
         d = date(2025, 1, 10)
-        XCCYCoupon(1.0, 0.0, date(2024, 10, 10), d, d, fx_fixing_date=date(2025, 1, 13), spread=SPREAD)
+        XCCYCoupon(
+            1.0,
+            0.0,
+            date(2024, 10, 10),
+            d,
+            d,
+            fx_fixing_date=date(2025, 1, 13),
+            spread=SPREAD,
+        )

@@ -43,6 +43,7 @@ class IndexHistory(ABC):
 
 # ── Capability mixins (ABCs) ───────────────────────────────────────────────
 
+
 class InterestHistory(IndexHistory, ABC):
     """Index history that accrues interest.
 
@@ -50,7 +51,9 @@ class InterestHistory(IndexHistory, ABC):
     """
 
     @abstractmethod
-    def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float:
+    def get_accrued_interest(
+        self, notional: float, start_date: date, end_date: date
+    ) -> float:
         """Realised interest on `notional` over ``[start_date, end_date]``.
 
         Parameters
@@ -108,6 +111,7 @@ class OvernightHistory(IndexHistory, ABC):
 
 # ── Rate-valued interest histories ─────────────────────────────────────────
 
+
 @dataclass
 class RateHistory(InterestHistory, ABC):
     """Interest history whose fixings are :class:`Rate` values.
@@ -158,9 +162,12 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
     rates : dict of date to Rate, optional
         Daily fixings.
     """
+
     index: OvernightRateIndex
 
-    _index_values: dict[date, float] = field(init=False, repr=False, default_factory=dict)
+    _index_values: dict[date, float] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self):
         if self.rates:
@@ -174,7 +181,9 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
         end_t = max(self.rates)
         t = min(self.rates)
         while t < end_t:
-            next_t = self.index.get_maturity(t)  # next business day (overnight accrual step)
+            next_t = self.index.get_maturity(
+                t
+            )  # next business day (overnight accrual step)
             if next_t not in self.rates:
                 self.rates[next_t] = self.rates[t]
                 if verbose:
@@ -197,7 +206,9 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
             next_t = self.index.get_maturity(t)
             if t in self.rates:
                 r = self.rates[t]
-            self._index_values[next_t] = self._index_values[t] * r.get_wealth_factor(t, next_t)
+            self._index_values[next_t] = self._index_values[t] * r.get_wealth_factor(
+                t, next_t
+            )
             t = next_t
 
     def add_rate(self, t: date, rate: Rate):
@@ -205,8 +216,12 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
         self._check_for_gaps()
         self._rebuild_index()
 
-    def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float:
-        return notional * (self._index_values[end_date] / self._index_values[start_date] - 1.0)
+    def get_accrued_interest(
+        self, notional: float, start_date: date, end_date: date
+    ) -> float:
+        return notional * (
+            self._index_values[end_date] / self._index_values[start_date] - 1.0
+        )
 
     def spot_overnight_rate(self, t: date) -> Rate:
         # Today's published overnight fixing applies forward to [t, t+1bd].
@@ -229,10 +244,13 @@ class TermRateHistory(RateHistory):
     ) -> float:
         if fixing_date is None:
             fixing_date = start_date
-        return self.get_rate(fixing_date).get_accrued_interest(notional, start_date, end_date)
+        return self.get_rate(fixing_date).get_accrued_interest(
+            notional, start_date, end_date
+        )
 
 
 # ── Price-level history ────────────────────────────────────────────────────
+
 
 @dataclass
 class PriceHistory(IndexHistory):
@@ -271,6 +289,7 @@ class PriceHistory(IndexHistory):
 
 # ── Price-valued interest histories ────────────────────────────────────────
 
+
 @dataclass
 class InterestPriceHistory(PriceHistory, InterestHistory, ABC):
     """Interest history published as price levels (e.g. ICP).
@@ -283,6 +302,7 @@ class InterestPriceHistory(PriceHistory, InterestHistory, ABC):
     index : InterestPriceIndex
         Definition of the index.
     """
+
     index: InterestPriceIndex
 
 
@@ -305,6 +325,7 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
     ValueError
         If `values` is empty.
     """
+
     index: OvernightInterestPriceIndex
 
     def __post_init__(self):
@@ -325,20 +346,28 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
             t_end = sorted_known[i + 1]
             days_total = (t_end - t_start).days
             ratio = self.values[t_end] / self.values[t_start]
-            t = self.index.get_maturity(t_start)  # next business day (overnight accrual step)
+            t = self.index.get_maturity(
+                t_start
+            )  # next business day (overnight accrual step)
             while t < t_end:
                 if t not in self.values:
                     days_elapsed = (t - t_start).days
-                    self.values[t] = self.values[t_start] * ratio ** (days_elapsed / days_total)
+                    self.values[t] = self.values[t_start] * ratio ** (
+                        days_elapsed / days_total
+                    )
                     if verbose:
-                        warnings.warn(f"{self.name}: no value for {t}, filled by interpolation.")
+                        warnings.warn(
+                            f"{self.name}: no value for {t}, filled by interpolation."
+                        )
                 t = self.index.get_maturity(t)
 
     def add_value(self, t: date, value: float):
         self.values[t] = value
         self._check_for_gaps()
 
-    def get_accrued_interest(self, notional: float, start_date: date, end_date: date) -> float:
+    def get_accrued_interest(
+        self, notional: float, start_date: date, end_date: date
+    ) -> float:
         return notional * (self.values[end_date] / self.values[start_date] - 1.0)
 
     def spot_overnight_rate(self, t: date) -> Rate:
@@ -352,6 +381,8 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
         prev, last = known[-2], known[-1]
         wf = self.values[last] / self.values[prev]
         rc = self.index.rate_convention
-        year_fraction = rc.day_count_convention.get_time_fraction(prev, last, rc.time_fraction_base)
+        year_fraction = rc.day_count_convention.get_time_fraction(
+            prev, last, rc.time_fraction_base
+        )
         rate_value = float(rc.interest_convention.get_rate_from_wf(wf, year_fraction))
         return Rate(rc.copy(), rate_value)

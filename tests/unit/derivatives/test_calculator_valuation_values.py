@@ -49,7 +49,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 CLP, USD, CLF = Currency.CLP, Currency.USD, Currency.CLF
 
 
@@ -63,7 +62,11 @@ T = VAL_DATE
 
 
 def _df(key, d: date) -> float:
-    curve = MARKET.get_discount_curve(key) if isinstance(key, Currency) else MARKET.get_index_curve(key)
+    curve = (
+        MARKET.get_discount_curve(key)
+        if isinstance(key, Currency)
+        else MARKET.get_index_curve(key)
+    )
     return curve.get_df(d)
 
 
@@ -154,12 +157,18 @@ def _hand_leg_pv_clp(swap: Swap, leg) -> float:
         if c.payment_date <= T:
             continue
         fx = _fx(leg.currency, settle, leg.fx_fixing_dates[i])
-        pv += _flow(leg, i) * fx * _discount(settle, c.payment_date, swap.collateral_index)
+        pv += (
+            _flow(leg, i)
+            * fx
+            * _discount(settle, c.payment_date, swap.collateral_index)
+        )
     return pv * (1.0 if settle == CLP else FX_TO_CLP[Ccy.USD])
 
 
 def _hand_swap_mtm_clp(swap: Swap) -> float:
-    return _hand_leg_pv_clp(swap, swap.receive_leg) - _hand_leg_pv_clp(swap, swap.pay_leg)
+    return _hand_leg_pv_clp(swap, swap.receive_leg) - _hand_leg_pv_clp(
+        swap, swap.pay_leg
+    )
 
 
 @pytest.mark.parametrize("case", swap_case_params())
@@ -167,7 +176,9 @@ def test_every_swap_matches_the_independent_repricer(case: SwapCase):
     swap = build_swap(case)
     expected = _hand_swap_mtm_clp(swap)
     scale = 1_000_000_000.0  # ~ the CLP notionals: 1e-9 relative
-    assert swap.valuate(MARKET, CLP) == pytest.approx(expected, rel=1e-9, abs=1e-9 * scale)
+    assert swap.valuate(MARKET, CLP) == pytest.approx(
+        expected, rel=1e-9, abs=1e-9 * scale
+    )
 
 
 N = 1_000_000.0
@@ -176,9 +187,12 @@ N = 1_000_000.0
 def _float_leg(index, status=SwapStatus.NOT_STARTED, spread=None):
     ccy = Ccy.USD if index.currency == USD else Ccy.CLP
     kw = dict(
-        notional=N, start_date=START_DATES[status],
+        notional=N,
+        start_date=START_DATES[status],
         term=Term(SWAP_TERM_YEARS, TermUnit.Y, adj_convention(ccy)),
-        frequency="QUARTERLY", adj_convention=adj_convention(ccy), index=index,
+        frequency="QUARTERLY",
+        adj_convention=adj_convention(ccy),
+        index=index,
     )
     if spread is not None:
         kw["spread"] = spread
@@ -187,7 +201,9 @@ def _float_leg(index, status=SwapStatus.NOT_STARTED, spread=None):
     return builders.overnight_leg(**kw)
 
 
-@pytest.mark.parametrize("index", [ICP, CAMARA, SOFR, TAB_3M, TERM_SOFR_3M], ids=lambda i: i.name)
+@pytest.mark.parametrize(
+    "index", [ICP, CAMARA, SOFR, TAB_3M, TERM_SOFR_3M], ids=lambda i: i.name
+)
 def test_floating_leg_on_its_own_curve_is_worth_notional_at_start(index):
     # sum N (P(s)/P(e) - 1) P(e) + N P(e_n) telescopes to N P(s_0).
     leg = _float_leg(index)
@@ -202,7 +218,9 @@ def test_spread_adds_its_annuity():
         N * SPREAD.rate * _yf360(c.start_date, c.end_date) * _df(CAMARA, c.payment_date)
         for c in spread.coupons
     )
-    diff = Calculator._leg_pv(spread, CAMARA, MARKET) - Calculator._leg_pv(plain, CAMARA, MARKET)
+    diff = Calculator._leg_pv(spread, CAMARA, MARKET) - Calculator._leg_pv(
+        plain, CAMARA, MARKET
+    )
     assert diff == pytest.approx(annuity, rel=1e-12)
 
 
@@ -218,7 +236,9 @@ def test_started_overnight_leg_is_worth_notional_grown_by_realised_fixings(index
     else:
         growth = _compounded(CAMARA, running.start_date, T)
     assert growth > 1
-    assert Calculator._leg_pv(leg, index, MARKET) == pytest.approx(N * growth, rel=1e-12)
+    assert Calculator._leg_pv(leg, index, MARKET) == pytest.approx(
+        N * growth, rel=1e-12
+    )
 
 
 def test_started_term_leg_is_worth_its_fixed_coupons_plus_notional_at_the_last_fixed_end():
@@ -230,19 +250,31 @@ def test_started_term_leg_is_worth_its_fixed_coupons_plus_notional_at_the_last_f
     ]
     assert len(fixed) == 2 and leg.fixing_dates[leg.coupons.index(fixed[1])] == T
     r = FLAT_RATES[TAB_3M]
-    expected = sum(N * r * _yf360(c.start_date, c.end_date) * _df(TAB_3M, c.payment_date) for c in fixed)
+    expected = sum(
+        N * r * _yf360(c.start_date, c.end_date) * _df(TAB_3M, c.payment_date)
+        for c in fixed
+    )
     expected += N * _df(TAB_3M, fixed[-1].end_date)
     assert Calculator._leg_pv(leg, TAB_3M, MARKET) == pytest.approx(expected, rel=1e-12)
 
 
 def test_par_swap_is_worth_zero():
     float_leg = _float_leg(ICP)
-    annuity = sum(_yf360(c.start_date, c.end_date) * _df(ICP, c.payment_date) for c in float_leg.coupons)
-    par = (_df(ICP, float_leg.start_dates[0]) - _df(ICP, float_leg.end_dates[-1])) / annuity
+    annuity = sum(
+        _yf360(c.start_date, c.end_date) * _df(ICP, c.payment_date)
+        for c in float_leg.coupons
+    )
+    par = (
+        _df(ICP, float_leg.start_dates[0]) - _df(ICP, float_leg.end_dates[-1])
+    ) / annuity
     fixed = builders.fixed_leg(
-        notional=N, start_date=START_DATES[SwapStatus.NOT_STARTED],
-        term=Term(SWAP_TERM_YEARS, TermUnit.Y, adj_convention(Ccy.CLP)), frequency="QUARTERLY",
-        adj_convention=adj_convention(Ccy.CLP), rate=_rate(par), currency=CLP,
+        notional=N,
+        start_date=START_DATES[SwapStatus.NOT_STARTED],
+        term=Term(SWAP_TERM_YEARS, TermUnit.Y, adj_convention(Ccy.CLP)),
+        frequency="QUARTERLY",
+        adj_convention=adj_convention(Ccy.CLP),
+        rate=_rate(par),
+        currency=CLP,
     )
     swap = Swap(receive_leg=fixed, pay_leg=float_leg, payment_currency=CLP)
     assert swap.valuate(MARKET, CLP) == pytest.approx(0.0, abs=1e-6)
@@ -252,21 +284,33 @@ def _ccs_twins():
     by_key = {}
     for case in swap_cases():
         if case.swap_type == "ccs":
-            key = (case.receive, case.pay, case.status, case.with_spread, case.collateral)
+            key = (
+                case.receive,
+                case.pay,
+                case.status,
+                case.with_spread,
+                case.collateral,
+            )
             by_key.setdefault(key, {})[case.deliverable] = case
     return [pytest.param(v[True], v[False], id=v[True].id) for v in by_key.values()]
 
 
 @pytest.mark.parametrize("deliverable, non_deliverable", _ccs_twins())
-def test_non_deliverable_fixing_on_payment_equals_deliverable(deliverable, non_deliverable):
+def test_non_deliverable_fixing_on_payment_equals_deliverable(
+    deliverable, non_deliverable
+):
     # spot * F_usd(p) / F_clp(p) converted, then discounted on F_clp(p) * C(p) / F_c(p),
     # is spot * F_usd(p) * C(p) / F_c(p): the deliverable USD discounting at spot.
     # Holds for any collateral while every unpaid flow fixes in the future.
     a, b = build_swap(deliverable), build_swap(non_deliverable)
-    assert a.valuate(MARKET, CLP) == pytest.approx(b.valuate(MARKET, CLP), rel=1e-12, abs=1e-6)
+    assert a.valuate(MARKET, CLP) == pytest.approx(
+        b.valuate(MARKET, CLP), rel=1e-12, abs=1e-6
+    )
 
 
-@pytest.mark.parametrize("case", [c for c in swap_case_params() if "usd" in c.id.lower()][:40])
+@pytest.mark.parametrize(
+    "case", [c for c in swap_case_params() if "usd" in c.id.lower()][:40]
+)
 def test_reporting_currency_is_a_spot_conversion(case):
     swap = build_swap(case)
     clp, usd = swap.valuate(MARKET, CLP), swap.valuate(MARKET, USD)
@@ -283,7 +327,9 @@ def test_forward_matches_its_hand_formula_and_reports_in_any_currency():
     fwd = Forward(N, 940.0, PAY, is_buy=True, currency_pair=USDCLP)
     expected = N * (SPOT * _funding_df(USD, PAY) - 940.0 * _funding_df(CLP, PAY))
     assert Calculator.valuate(fwd, MARKET, CLP) == pytest.approx(expected, rel=1e-12)
-    assert Calculator.valuate(fwd, MARKET, USD) == pytest.approx(expected / SPOT, rel=1e-12)
+    assert Calculator.valuate(fwd, MARKET, USD) == pytest.approx(
+        expected / SPOT, rel=1e-12
+    )
     sell = Forward(N, 940.0, PAY, is_buy=False, currency_pair=USDCLP)
     assert Calculator.valuate(sell, MARKET, CLP) == pytest.approx(-expected, rel=1e-12)
 
@@ -297,7 +343,14 @@ def test_forward_at_the_covered_parity_strike_is_worth_zero():
 @pytest.mark.parametrize("pay", [T - timedelta(days=7), T], ids=["past", "today"])
 def test_settled_forwards_are_worth_zero(pay):
     fwd = Forward(N, 940.0, pay, is_buy=True, currency_pair=USDCLP)
-    ndf = NDF(N, 940.0, pay, is_buy=True, currency_pair=USDCLP, fixing_date=pay - timedelta(days=2))
+    ndf = NDF(
+        N,
+        940.0,
+        pay,
+        is_buy=True,
+        currency_pair=USDCLP,
+        fixing_date=pay - timedelta(days=2),
+    )
     assert Calculator.valuate(fwd, MARKET, CLP) == 0.0
     assert Calculator.valuate(ndf, MARKET, CLP) == 0.0
 
@@ -305,7 +358,12 @@ def test_settled_forwards_are_worth_zero(pay):
 @pytest.mark.parametrize(
     "fixing, fx",
     [
-        (date(2025, 6, 27), SPOT * _funding_df(USD, date(2025, 6, 27)) / _funding_df(CLP, date(2025, 6, 27))),
+        (
+            date(2025, 6, 27),
+            SPOT
+            * _funding_df(USD, date(2025, 6, 27))
+            / _funding_df(CLP, date(2025, 6, 27)),
+        ),
         (T, SPOT),  # fixes today: spot
         (T - timedelta(days=3), SPOT * PAST_FX_FACTOR),  # fixed, not yet paid: realised
     ],
@@ -315,13 +373,19 @@ def test_ndf_matches_its_hand_formula(fixing, fx):
     ndf = NDF(N, 940.0, PAY, is_buy=True, currency_pair=USDCLP, fixing_date=fixing)
     expected = N * (fx - 940.0) * _funding_df(CLP, PAY)
     assert Calculator.valuate(ndf, MARKET, CLP) == pytest.approx(expected, rel=1e-12)
-    assert Calculator.valuate(ndf, MARKET, USD) == pytest.approx(expected / SPOT, rel=1e-12)
+    assert Calculator.valuate(ndf, MARKET, USD) == pytest.approx(
+        expected / SPOT, rel=1e-12
+    )
 
 
-@pytest.mark.parametrize("fixing", [UF_KNOWN_UNTIL - timedelta(days=5), UF_KNOWN_UNTIL + timedelta(days=40)])
+@pytest.mark.parametrize(
+    "fixing", [UF_KNOWN_UNTIL - timedelta(days=5), UF_KNOWN_UNTIL + timedelta(days=40)]
+)
 def test_uf_ndf_matches_its_hand_formula(fixing):
     pair = CurrencyPair(CLF, CLP)
     pay = fixing + timedelta(days=1)
-    ndf = NDF(1_000.0, 37_000.0, pay, is_buy=False, currency_pair=pair, fixing_date=fixing)
+    ndf = NDF(
+        1_000.0, 37_000.0, pay, is_buy=False, currency_pair=pair, fixing_date=fixing
+    )
     expected = -1_000.0 * (_fx(CLF, CLP, fixing) - 37_000.0) * _funding_df(CLP, pay)
     assert Calculator.valuate(ndf, MARKET, CLP) == pytest.approx(expected, rel=1e-12)

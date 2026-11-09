@@ -6,7 +6,6 @@ from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.rates import DiscountCurve, IndexCurve
 
 
-
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
 
 
@@ -33,18 +32,28 @@ def uf_level(d: date) -> float:
     return UF_T * 1.0001 ** (d - T).days
 
 
-def _flat_curve(rate: float, currency: Currency | None = None) -> IndexCurve | DiscountCurve:
+def _flat_curve(
+    rate: float, currency: Currency | None = None
+) -> IndexCurve | DiscountCurve:
     """Flat continuous zero rate: the risk-free index curve, or `currency`'s discount curve."""
     if currency is None:
         return IndexCurve(T, RISKLESS, [T, T + timedelta(days=1825)], [rate])
     pillars = [T + timedelta(days=d) for d in (1, 7, 30, 91, 365, 730, 1825)]
-    return DiscountCurve(T, currency, RISKLESS, pillars, [math.exp(-rate * (d - T).days / 365) for d in pillars])
+    return DiscountCurve(
+        T,
+        currency,
+        RISKLESS,
+        pillars,
+        [math.exp(-rate * (d - T).days / 365) for d in pillars],
+    )
 
 
 def _market() -> Market:
     # Load only what is published as of T: up to KNOWN_UNTIL.
     assert uf.last_published_date(T) == KNOWN_UNTIL
-    levels = {T + timedelta(days=i): uf_level(T + timedelta(days=i)) for i in range(-60, 6)}
+    levels = {
+        T + timedelta(days=i): uf_level(T + timedelta(days=i)) for i in range(-60, 6)
+    }
     return Market(
         t=T,
         risk_free_index=RISKLESS,

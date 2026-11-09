@@ -3,7 +3,6 @@ import pytest
 from fintoolsom.market import uf
 
 
-
 @pytest.mark.parametrize(
     "today, expected",
     [(date(2024, 8, 4), date(2024, 8, 9)), (date(2024, 8, 8), date(2024, 9, 9))],

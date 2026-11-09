@@ -9,14 +9,15 @@ from fintoolsom.rates import IndexCurve, Rate, RateConvention, LinearInterestCon
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
 
 
 ZERO_SPREAD = Rate(RateConvention(), 0.0)
 
 
-FIXED_RATE = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 360), 0.03)
+FIXED_RATE = Rate(
+    RateConvention(LinearInterestConvention, ActualDayCountConvention, 360), 0.03
+)
 
 
 def _sofr_market(curve_date, sample_zero_coupon_curve) -> Market:
@@ -86,6 +87,8 @@ def test_swap_mtm_discounts_projected_floating_leg_against_fixed_leg(
     fixed_pv = fixed_coupon.flow * sample_zero_coupon_curve.get_df(end_date)
     wf_fwd = sample_zero_coupon_curve.get_wf_fwd(start_date, end_date)
     floating_pv = (
-        overnight_coupon.residual * (wf_fwd - 1) * sample_zero_coupon_curve.get_df(end_date)
+        overnight_coupon.residual
+        * (wf_fwd - 1)
+        * sample_zero_coupon_curve.get_df(end_date)
     )
     assert mtm == pytest.approx(fixed_pv - floating_pv)

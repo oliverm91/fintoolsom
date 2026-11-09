@@ -15,7 +15,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 @pytest.fixture(scope="module")
 def swap_market() -> Market:
     return build_market()

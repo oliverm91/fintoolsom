@@ -66,8 +66,13 @@ class Swap(SwapBase):
             and self.payment_currency is None
             and self.receive_leg.currency != self.pay_leg.currency  # type: ignore[attr-defined]
         ):
-            raise ValueError("A non-deliverable cross-currency swap needs a payment_currency.")
-        if self.payment_currency is not None and not self.payment_currency.is_deliverable:
+            raise ValueError(
+                "A non-deliverable cross-currency swap needs a payment_currency."
+            )
+        if (
+            self.payment_currency is not None
+            and not self.payment_currency.is_deliverable
+        ):
             raise ValueError(
                 f"payment_currency {self.payment_currency} cannot be delivered; use "
                 f"{self.payment_currency.settlement_currency}."
@@ -115,4 +120,5 @@ class Swap(SwapBase):
         float
         """
         from ..calculator import Calculator
+
         return Calculator.get_swap_mtm(self, market, currency)

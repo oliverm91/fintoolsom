@@ -4,7 +4,6 @@ from fintoolsom.dates import (
 )
 
 
-
 def test_calendar_is_holiday_for_custom_holiday_and_weekend():
     cal = Calendar(custom_holidays=[date(2024, 7, 4)])  # Thursday
     assert cal.is_holiday(date(2024, 7, 4)) is True
@@ -40,11 +39,16 @@ def test_calendar_adds_custom_holidays_after_construction():
 
 
 def test_calendars_add_with_plus():
-    combined = Calendar(custom_holidays=[date(2024, 1, 3)]) + Calendar(custom_holidays=[date(2024, 1, 4)])
-    assert combined.is_holiday(date(2024, 1, 3)) and combined.is_holiday(date(2024, 1, 4))
+    combined = Calendar(custom_holidays=[date(2024, 1, 3)]) + Calendar(
+        custom_holidays=[date(2024, 1, 4)]
+    )
+    assert combined.is_holiday(date(2024, 1, 3)) and combined.is_holiday(
+        date(2024, 1, 4)
+    )
 
 
 # ── Shared per-country calendars ────────────────────────────────────────────
+
 
 def test_get_calendar_returns_one_shared_instance_per_country():
     from fintoolsom.dates import get_calendar
@@ -64,7 +68,12 @@ def test_adjustment_conventions_resolve_a_country_code_to_the_shared_calendar():
         get_calendar,
     )
 
-    for convention in (FollowingConvention, PrecedingConvention, ModifiedFollowingConvention, ModifiedPrecedingConvention):
+    for convention in (
+        FollowingConvention,
+        PrecedingConvention,
+        ModifiedFollowingConvention,
+        ModifiedPrecedingConvention,
+    ):
         assert convention("CL").calendar is get_calendar("CL")
     assert ModifiedFollowingConvention("CL")._fc.calendar is get_calendar("CL")
     assert ModifiedFollowingConvention().calendar is get_calendar()
@@ -82,6 +91,8 @@ def test_a_holiday_added_to_a_shared_calendar_reaches_every_consumer():
     get_calendar("CL").add_custom_holiday(extra)
     try:
         assert convention.adjust(extra) == date(2031, 3, 5)
-        assert not Calendar(country="CL").is_holiday(extra)  # an own calendar is independent
+        assert not Calendar(country="CL").is_holiday(
+            extra
+        )  # an own calendar is independent
     finally:
         get_calendar("CL")._calendar.pop(extra)

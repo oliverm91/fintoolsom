@@ -3,6 +3,7 @@
 The seeds only need to be close (the solve reprices exactly); good seeds keep the
 root solves short and in the region where valuation is well behaved.
 """
+
 from __future__ import annotations
 
 import math
@@ -43,15 +44,23 @@ class _IndexFixed:
     def knot_dfs(self, t: date, index: Index) -> list[tuple[date, float]]:
         """``(knot, df)`` of the fixed knots after `t`."""
         if len(self.knots) >= 2:
-            dfs = IndexCurve(t, index, self.knots, self.forwards, self.spot_rate).get_dfs(self.knots)
+            dfs = IndexCurve(
+                t, index, self.knots, self.forwards, self.spot_rate
+            ).get_dfs(self.knots)
             return [(k, float(df)) for k, df in zip(self.knots, dfs) if k > t]
         eff = self.knots[0]
         if eff <= t:
             return []
-        df = 1.0 if self.spot_rate is None else float(self.spot_rate.get_discount_factor(t, eff))
+        df = (
+            1.0
+            if self.spot_rate is None
+            else float(self.spot_rate.get_discount_factor(t, eff))
+        )
         return [(eff, df)]
 
-    def forwards_to(self, t: date, index: Index, dates: list[date], dfs: list[float]) -> list[float]:
+    def forwards_to(
+        self, t: date, index: Index, dates: list[date], dfs: list[float]
+    ) -> list[float]:
         """Segment forwards, from the last fixed knot through `dates`, matching `dfs`."""
         points = self.knot_dfs(t, index)
         prev_d, prev_log = self.knots[-1], math.log(points[-1][1]) if points else 0.0
@@ -124,30 +133,44 @@ class _Seeder:
 
         def pinned_free_date(curve, instr) -> date | None:
             m = _get_maturity(curve, instr, self.risk_free_index)
-            return m if m is not None and m in free_dates[curve] and m not in implied[curve] else None
+            return (
+                m
+                if m is not None and m in free_dates[curve] and m not in implied[curve]
+                else None
+            )
 
         # 1. Fixed legs.
         for instr in instruments:
             if not isinstance(instr, Swap):
                 continue
             for leg in (instr.receive_leg, instr.pay_leg):
-                if not isinstance(leg, FixedLeg) or (z := self.fixed_leg_zero(leg)) is None:
+                if (
+                    not isinstance(leg, FixedLeg)
+                    or (z := self.fixed_leg_zero(leg)) is None
+                ):
                     continue
                 for curve in free_dates:
-                    if _curve_currency(curve) == leg.currency and (m := pinned_free_date(curve, instr)):
+                    if _curve_currency(curve) == leg.currency and (
+                        m := pinned_free_date(curve, instr)
+                    ):
                         implied[curve][m] = z
 
         # 2. FX forwards, against the other currency's known curve.
         for instr in instruments:
             if isinstance(instr, Forward):
-                self.forward_zero(instr, implied, fixed_pillars, free_dates, pinned_free_date)
+                self.forward_zero(
+                    instr, implied, fixed_pillars, free_dates, pinned_free_date
+                )
 
         # 3. Float-float (basis) swaps, against the other curves' known rates.
         for instr in instruments:
             if isinstance(instr, Swap) and all(
-                isinstance(leg, FloatingLeg) for leg in (instr.receive_leg, instr.pay_leg)
+                isinstance(leg, FloatingLeg)
+                for leg in (instr.receive_leg, instr.pay_leg)
             ):
-                self.basis_zero(instr, implied, fixed_pillars, free_dates, pinned_free_date)
+                self.basis_zero(
+                    instr, implied, fixed_pillars, free_dates, pinned_free_date
+                )
 
         # 4. Fill the rest.
         seeds: dict[CurveKey, list[float]] = {}
@@ -162,7 +185,9 @@ class _Seeder:
                     df = built.get_df(d)
                 elif points:
                     taus, zs = zip(*points)
-                    df = math.exp(-float(np.interp(self.tau(d), taus, zs)) * self.tau(d))
+                    df = math.exp(
+                        -float(np.interp(self.tau(d), taus, zs)) * self.tau(d)
+                    )
                 else:
                     df = self.seed_df(flat_guess[curve], d)
                 dfs.append(df)
@@ -180,13 +205,17 @@ class _Seeder:
             return None
         wf = 1.0
         if coupons[0].start_date > self.t:
-            wf *= float(coupons[0].rate.get_wealth_factor(self.t, coupons[0].start_date))
+            wf *= float(
+                coupons[0].rate.get_wealth_factor(self.t, coupons[0].start_date)
+            )
         for c in coupons:
             wf *= float(c.rate.get_wealth_factor(max(c.start_date, self.t), c.end_date))
         tau = self.tau(coupons[-1].end_date)
         return math.log(wf) / tau if wf > 0 and math.isfinite(wf) and tau > 0 else None
 
-    def forward_zero(self, fwd: Forward, implied, fixed_pillars, free_dates, pinned_free_date) -> None:
+    def forward_zero(
+        self, fwd: Forward, implied, fixed_pillars, free_dates, pinned_free_date
+    ) -> None:
         """Seed one funding curve of `fwd` by covered interest parity.
 
         With ``L`` the date the pair's FX is known until and ``T`` the pinned date,
@@ -208,7 +237,9 @@ class _Seeder:
             if unknown not in free_dates or not (m := pinned_free_date(unknown, fwd)):
                 continue
             span = self.tau(m) - self.tau(known_until)
-            log_known = self.log_df_change(known, known_until, m, implied, fixed_pillars, free_dates)
+            log_known = self.log_df_change(
+                known, known_until, m, implied, fixed_pillars, free_dates
+            )
             if span <= 0 or log_known is None or fwd.strike <= 0:
                 continue
             log_ratio = math.log(fwd.strike / fx_known)
@@ -216,7 +247,9 @@ class _Seeder:
             implied[unknown][m] = -(sign * log_ratio + log_known) / span
             return
 
-    def basis_zero(self, swap: Swap, implied, fixed_pillars, free_dates, pinned_free_date) -> None:
+    def basis_zero(
+        self, swap: Swap, implied, fixed_pillars, free_dates, pinned_free_date
+    ) -> None:
         """Seed one curve of a float-float swap from its spreads.
 
         At the pinned date, ``z_I_r + s_r - z_D_r = z_I_p + s_p - z_D_p`` (index
@@ -224,11 +257,15 @@ class _Seeder:
         free curve in it. Collateral is ignored: it only shifts the seed. Skipped
         when there is not exactly one unknown or another curve is not known.
         """
-        coef: dict[CurveKey, float] = defaultdict(float)  # coefficient of each zero rate
+        coef: dict[CurveKey, float] = defaultdict(
+            float
+        )  # coefficient of each zero rate
         spreads = 0.0
         for leg, side in ((swap.receive_leg, 1.0), (swap.pay_leg, -1.0)):
             coef[leg.index] += side
-            coef[_funding_key(self.risk_free_index, swap.leg_settlement_currency(leg))] -= side
+            coef[
+                _funding_key(self.risk_free_index, swap.leg_settlement_currency(leg))
+            ] -= side
             spreads += side * getattr(leg.spread, "rate", 0.0)
         unknowns = [
             (curve, m)
@@ -243,21 +280,29 @@ class _Seeder:
         for curve, k in coef.items():
             if curve == unknown or k == 0:
                 continue
-            log_df = self.log_df_change(curve, self.t, m, implied, fixed_pillars, free_dates)
+            log_df = self.log_df_change(
+                curve, self.t, m, implied, fixed_pillars, free_dates
+            )
             if log_df is None:
                 return
             total += k * (-log_df / tau)
         implied[unknown][m] = -total / coef[unknown]
 
-    def log_df_change(self, curve, start, end, implied, fixed_pillars, free_dates) -> float | None:
+    def log_df_change(
+        self, curve, start, end, implied, fixed_pillars, free_dates
+    ) -> float | None:
         """``log(df(end) / df(start))`` on a curve already known, else None."""
         built = _built(self.market, curve)
         if built is not None and curve not in free_dates:
             return math.log(built.get_df(end)) - math.log(built.get_df(start))
-        if curve in free_dates and implied[curve]:  # being solved: use its step-1 seeds.
+        if (
+            curve in free_dates and implied[curve]
+        ):  # being solved: use its step-1 seeds.
             taus, zs = zip(*self.zero_points(curve, implied, fixed_pillars))
+
             def log_df(d: date) -> float:
                 return -float(np.interp(self.tau(d), taus, zs)) * self.tau(d)
+
             return log_df(end) - log_df(start)
         if built is not None:  # extended curve with nothing implied: extrapolate.
             return math.log(built.get_df(end)) - math.log(built.get_df(start))
@@ -301,7 +346,9 @@ class _Seeder:
             annual.convert_rate_convention(RateConvention(), self.t, effective)
             return _IndexFixed([effective], [], spot), annual.rate
         if hasattr(history, "get_rate"):
-            effective = index.calendar.add_business_days(self.t, getattr(index, "spot_lag", 0))
+            effective = index.calendar.add_business_days(
+                self.t, getattr(index, "spot_lag", 0)
+            )
             end = index.get_maturity(effective)
             wf = history.get_rate(self.t).get_wealth_factor(effective, end)  # type: ignore[union-attr]
             forward = math.log(wf) / ((end - effective).days / _DAY_BASE)

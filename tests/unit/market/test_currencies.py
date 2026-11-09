@@ -1,7 +1,6 @@
 from fintoolsom.market import Currency
 
 
-
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
 
 

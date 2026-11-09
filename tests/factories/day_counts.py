@@ -1,4 +1,5 @@
 """Helpers for day-count tables."""
+
 from datetime import date
 
 D = date

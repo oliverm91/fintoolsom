@@ -20,6 +20,7 @@ UF note: UF legs are in ``Currency.CLF``, a unit of account settled in CLP. CLF/
 rates are loaded as FX like any currency, up to ``UF_KNOWN_UNTIL`` (the 9th of next
 month, CPI being out on VAL_DATE), so later UF fixings are projected from it.
 """
+
 from __future__ import annotations
 
 import math
@@ -47,7 +48,13 @@ from fintoolsom.market import (
     TermRateIndex,
 )
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
-from fintoolsom.rates import DiscountCurve, IndexCurve, LinearInterestConvention, Rate, RateConvention
+from fintoolsom.rates import (
+    DiscountCurve,
+    IndexCurve,
+    LinearInterestConvention,
+    Rate,
+    RateConvention,
+)
 
 # ── Dates ──────────────────────────────────────────────────────────────────
 
@@ -104,7 +111,11 @@ def adj_convention(ccy: Ccy) -> ModifiedFollowingConvention:
     return ModifiedFollowingConvention(currency_of(ccy).locality.value)
 
 
-NOTIONALS: dict[Ccy, float] = {Ccy.CLP: 950_000_000.0, Ccy.USD: 1_000_000.0, Ccy.UF: 25_000.0}
+NOTIONALS: dict[Ccy, float] = {
+    Ccy.CLP: 950_000_000.0,
+    Ccy.USD: 1_000_000.0,
+    Ccy.UF: 25_000.0,
+}
 FIXED_RATES: dict[Ccy, float] = {Ccy.CLP: 0.055, Ccy.USD: 0.045, Ccy.UF: 0.025}
 FX_TO_CLP: dict[Ccy, float] = {Ccy.CLP: 1.0, Ccy.USD: 950.0, Ccy.UF: 37_500.0}
 # Realised FX fixings before VAL_DATE: off spot, so tests can tell them apart.
@@ -119,9 +130,10 @@ def uf_level(d: date) -> float:
     """Synthetic UF level: FX_TO_CLP[UF] on VAL_DATE, growing 0.3% per 30 days."""
     return FX_TO_CLP[Ccy.UF] * (1 + UF_MONTHLY_GROWTH) ** ((d - VAL_DATE).days / 30)
 
+
 # ── Indexes ────────────────────────────────────────────────────────────────
 
-SOFR =OvernightRateIndex("SOFR", currency=Currency.USD)
+SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
 TERM_SOFR_3M = TermRateIndex(
     "TSOFR3M", currency=Currency.USD, term=Term(3, TermUnit.M, adj_convention(Ccy.USD))
 )
@@ -217,7 +229,11 @@ class SwapCase:
         spread = "spread" if self.with_spread else "nospread"
         if not (self.receive.is_floating or self.pay.is_floating):
             spread = "nofloat"
-        settlement = "" if self.swap_type == "irs" else ("-deliv" if self.deliverable else "-nondeliv")
+        settlement = (
+            ""
+            if self.swap_type == "irs"
+            else ("-deliv" if self.deliverable else "-nondeliv")
+        )
         return (
             f"{self.swap_type}-{self.receive}-vs-{self.pay}"
             f"-{self.status.value}-{spread}-{self.collateral}{settlement}"
@@ -246,7 +262,17 @@ def swap_cases() -> list[SwapCase]:
         for status, with_spread, collateral, deliverable in product(
             SwapStatus, spreads, COLLATERAL_INDEXES, settlements
         ):
-            cases.append(SwapCase(swap_type, receive, pay, status, with_spread, collateral, deliverable))
+            cases.append(
+                SwapCase(
+                    swap_type,
+                    receive,
+                    pay,
+                    status,
+                    with_spread,
+                    collateral,
+                    deliverable,
+                )
+            )
     return cases
 
 
@@ -268,13 +294,17 @@ def build_leg(leg: LegCase, status: SwapStatus, with_spread: bool) -> SwapLeg:
         adj_convention=adj_convention(leg.ccy),
     )
     if leg.kind is LegKind.FIXED:
-        return builders.fixed_leg(rate=_rate(FIXED_RATES[leg.ccy]), currency=currency, **common)
+        return builders.fixed_leg(
+            rate=_rate(FIXED_RATES[leg.ccy]), currency=currency, **common
+        )
 
     index = FLOAT_INDEXES[(leg.ccy, leg.kind)]
     # "No spread" deliberately uses the builder default, as a caller would.
     spread_kw = {"spread": SPREAD} if with_spread else {}
     if leg.kind is LegKind.TERM:
-        return builders.term_rate_leg(index=index, fixing_lag=index.spot_lag, **common, **spread_kw)
+        return builders.term_rate_leg(
+            index=index, fixing_lag=index.spot_lag, **common, **spread_kw
+        )
     return builders.overnight_leg(index=index, **common, **spread_kw)
 
 
@@ -296,7 +326,10 @@ def build_swap(case: SwapCase) -> Swap:
 # ── Market ─────────────────────────────────────────────────────────────────
 
 
-_PILLARS = [VAL_DATE + timedelta(days=d) for d in (1, 7, 30, 91, 182, 365, 730, 1095, 1825, 3650)]
+_PILLARS = [
+    VAL_DATE + timedelta(days=d)
+    for d in (1, 7, 30, 91, 182, 365, 730, 1095, 1825, 3650)
+]
 
 
 def _flat_index_curve(index, rate: float) -> IndexCurve:
@@ -325,7 +358,10 @@ def build_market() -> Market:
 
     # One curve per index (floating and collateral indexes; ICP doubles as CLP funding),
     # plus one cross-currency curve per non-riskless currency. Nothing is stored twice.
-    indexes = {*FLOAT_INDEXES.values(), *(c for c in COLLATERAL_INDEXES.values() if c is not None)}
+    indexes = {
+        *FLOAT_INDEXES.values(),
+        *(c for c in COLLATERAL_INDEXES.values() if c is not None),
+    }
     curves = [_flat_index_curve(index, FLAT_RATES[index]) for index in indexes]
     curves += [_flat_discount_curve(ccy, r) for ccy, r in CURRENCY_CURVE_RATES.items()]
 
@@ -346,7 +382,9 @@ def build_market() -> Market:
     histories = {
         SOFR.name: OvernightRateHistory(SOFR, dict(interest_rates[SOFR.name])),
         CAMARA.name: OvernightRateHistory(CAMARA, dict(interest_rates[CAMARA.name])),
-        TERM_SOFR_3M.name: TermRateHistory(TERM_SOFR_3M, dict(interest_rates[TERM_SOFR_3M.name])),
+        TERM_SOFR_3M.name: TermRateHistory(
+            TERM_SOFR_3M, dict(interest_rates[TERM_SOFR_3M.name])
+        ),
         TAB_3M.name: TermRateHistory(TAB_3M, dict(interest_rates[TAB_3M.name])),
         ICP.name: OvernightInterestPriceHistory(ICP, icp_levels),
     }
@@ -364,9 +402,14 @@ def build_market() -> Market:
             continue
         if ccy is Ccy.UF:  # realised and already-published UF levels
             for d in days + _days_between(VAL_DATE, UF_KNOWN_UNTIL):
-                market.add_fx_rate(d, FX_Rate(CurrencyPair(UF_CURRENCY, REPORTING_CURRENCY), uf_level(d)))
+                market.add_fx_rate(
+                    d,
+                    FX_Rate(CurrencyPair(UF_CURRENCY, REPORTING_CURRENCY), uf_level(d)),
+                )
             continue
         pair = CurrencyPair(currency_of(ccy), REPORTING_CURRENCY)
         for d in days:
-            market.add_fx_rate(d, FX_Rate(pair, fx if d == VAL_DATE else fx * PAST_FX_FACTOR))
+            market.add_fx_rate(
+                d, FX_Rate(pair, fx if d == VAL_DATE else fx * PAST_FX_FACTOR)
+            )
     return market

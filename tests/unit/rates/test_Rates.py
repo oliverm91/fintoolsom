@@ -9,7 +9,6 @@ from fintoolsom.rates import (
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 def test_get_rate_from_df_linear_convention():
     days = 70
     df = 0.99

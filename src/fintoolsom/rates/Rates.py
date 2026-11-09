@@ -121,8 +121,10 @@ class RateConvention:
     def __str__(self) -> str:
         # The conventions are classes: str() of a class ignores its __str__ classmethod.
         return (
-            self.interest_convention.__str__() + "/"
-            + self.day_count_convention.__str__() + "/"
+            self.interest_convention.__str__()
+            + "/"
+            + self.day_count_convention.__str__()
+            + "/"
             + str(self.time_fraction_base)
         )
 
@@ -166,7 +168,9 @@ class Rate:
         if rate_value is not None:
             _warn_rate_value()
             if rate is not None:
-                raise TypeError("Pass either rate or rate_value (deprecated), not both.")
+                raise TypeError(
+                    "Pass either rate or rate_value (deprecated), not both."
+                )
             rate = rate_value
         if rate is None:
             raise TypeError("Rate() missing required argument: 'rate'.")

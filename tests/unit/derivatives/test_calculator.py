@@ -7,7 +7,6 @@ from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.rates import DiscountCurve, IndexCurve
 
 
-
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 
@@ -21,8 +20,12 @@ def _market_with_fx_forward_setup(curve_date, zero_coupon_curve, spot: float) ->
         t=curve_date,
         risk_free_index=RISKLESS,
         curves=[
-            IndexCurve.from_zero_coupon_curve(zero_coupon_curve, RISKLESS),  # CLP: the riskless index's own curve
-            DiscountCurve.from_zero_coupon_curve(zero_coupon_curve, Currency.USD, RISKLESS),  # USD: uncollateralised
+            IndexCurve.from_zero_coupon_curve(
+                zero_coupon_curve, RISKLESS
+            ),  # CLP: the riskless index's own curve
+            DiscountCurve.from_zero_coupon_curve(
+                zero_coupon_curve, Currency.USD, RISKLESS
+            ),  # USD: uncollateralised
         ],
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))

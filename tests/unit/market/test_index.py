@@ -6,7 +6,6 @@ from fintoolsom.market import (
 )
 
 
-
 SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
 
 

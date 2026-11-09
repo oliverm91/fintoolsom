@@ -70,7 +70,9 @@ class FixedCoupon(SwapCoupon):
 
     def __post_init__(self):
         super().__post_init__()
-        interest = self.rate.get_accrued_interest(self.residual, self.start_date, self.end_date)
+        interest = self.rate.get_accrued_interest(
+            self.residual, self.start_date, self.end_date
+        )
         self.flow = float(interest) + self.amortization
 
 

@@ -13,7 +13,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 ADJ_CLP = adj_convention(Ccy.CLP)
 
 
@@ -40,8 +39,13 @@ def test_term_leg_fixes_spot_lag_business_days_before_each_start():
     leg = _leg(builders.term_rate_leg, TAB_3M)
     calendar = ADJ_CLP.calendar
     assert TAB_3M.spot_lag == 2
-    assert leg.fixing_dates == [calendar.add_business_days(s, -2) for s in leg.start_dates]
-    assert _leg(builders.term_rate_leg, TAB_3M, fixing_lag=0).fixing_dates == leg.start_dates
+    assert leg.fixing_dates == [
+        calendar.add_business_days(s, -2) for s in leg.start_dates
+    ]
+    assert (
+        _leg(builders.term_rate_leg, TAB_3M, fixing_lag=0).fixing_dates
+        == leg.start_dates
+    )
 
 
 @pytest.mark.parametrize(
@@ -54,6 +58,10 @@ def test_term_leg_fixes_spot_lag_business_days_before_each_start():
         (TAB_3M, True, TermRateLeg),  # a term index never compounds daily
     ],
 )
-def test_floating_leg_builds_the_kind_the_index_calls_for(index, cross_currency, expected):
-    leg = _leg(builders.floating_leg, index, cross_currency=cross_currency, spread=SPREAD)
+def test_floating_leg_builds_the_kind_the_index_calls_for(
+    index, cross_currency, expected
+):
+    leg = _leg(
+        builders.floating_leg, index, cross_currency=cross_currency, spread=SPREAD
+    )
     assert type(leg) is expected

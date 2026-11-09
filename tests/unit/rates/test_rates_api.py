@@ -1,4 +1,5 @@
 """Rates and the legacy ZeroCouponCurve: accessors, conversions and validation."""
+
 from copy import copy
 from datetime import timedelta
 
@@ -14,7 +15,11 @@ from fintoolsom.rates import (
     ZeroCouponCurve,
     ZeroCouponCurvePoint,
 )
-from tests.factories.curve_factory import SAMPLE_CURVE_DATE, flat_zero_coupon_curve, sample_zero_coupon_curve
+from tests.factories.curve_factory import (
+    SAMPLE_CURVE_DATE,
+    flat_zero_coupon_curve,
+    sample_zero_coupon_curve,
+)
 from tests.factories.rate_factory import exp_act365, lin_act360, rate
 
 T = SAMPLE_CURVE_DATE
@@ -22,9 +27,14 @@ T = SAMPLE_CURVE_DATE
 
 # ── Rate and conventions ────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "convention, name",
-    [(LinearInterestConvention, "lin"), (CompoundedInterestConvention, "comp"), (ExponentialInterestConvention, "exp")],
+    [
+        (LinearInterestConvention, "lin"),
+        (CompoundedInterestConvention, "comp"),
+        (ExponentialInterestConvention, "exp"),
+    ],
 )
 def test_interest_conventions_have_short_names(convention, name):
     assert convention.__str__() == name
@@ -38,7 +48,9 @@ def test_rate_convention_str_and_copy():
 
 
 def test_rate_value_deprecation_message_names_the_old_attribute():
-    with pytest.warns(DeprecationWarning, match=r"Rate\.rate_value is deprecated; use Rate\.rate"):
+    with pytest.warns(
+        DeprecationWarning, match=r"Rate\.rate_value is deprecated; use Rate\.rate"
+    ):
         _ = Rate(lin_act360(), 0.05).rate_value
 
 
@@ -57,6 +69,7 @@ def test_rate_vectorised_discount_factors():
 
 # ── ZeroCouponCurve ─────────────────────────────────────────────────────────
 
+
 def test_curve_point_copy_and_str():
     point = ZeroCouponCurvePoint(T + timedelta(days=30), rate(0.05))
     duplicate = copy(point)
@@ -68,7 +81,11 @@ def test_curve_needs_points_or_dfs_and_a_valid_method():
     with pytest.raises(ValueError):
         ZeroCouponCurve(T)
     with pytest.raises(TypeError):
-        ZeroCouponCurve(T, date_dfs=[(T + timedelta(days=30), 0.99)], df_interpolation_method="linear")
+        ZeroCouponCurve(
+            T,
+            date_dfs=[(T + timedelta(days=30), 0.99)],
+            df_interpolation_method="linear",
+        )
 
 
 def test_add_point_replaces_a_pillar_and_rejects_past_dates():
@@ -108,10 +125,17 @@ def test_forward_rate_values_scalar_and_vector():
 def test_zero_rates_in_their_own_and_another_convention():
     curve = flat_zero_coupon_curve(T, 0.05)
     own = curve.get_zero_rates(curve.curve_points[0].rate.rate_convention)
-    assert [r.rate for r in own] == pytest.approx([cp.rate.rate for cp in curve.curve_points])
+    assert [r.rate for r in own] == pytest.approx(
+        [cp.rate.rate for cp in curve.curve_points]
+    )
     continuous = curve.get_zero_rates(exp_act365())
-    assert [r.rate for r in continuous] == pytest.approx([0.05] * len(curve.curve_points), rel=1e-9)
-    assert curve.get_zero_rate(T + timedelta(days=500)).rate_convention == curve.curve_points[0].rate.rate_convention
+    assert [r.rate for r in continuous] == pytest.approx(
+        [0.05] * len(curve.curve_points), rel=1e-9
+    )
+    assert (
+        curve.get_zero_rate(T + timedelta(days=500)).rate_convention
+        == curve.curve_points[0].rate.rate_convention
+    )
 
 
 def test_aged_curve_must_lie_inside_the_curve():
@@ -124,10 +148,15 @@ def test_aged_curve_must_lie_inside_the_curve():
 
 def test_curve_str_lists_its_pillars():
     text = str(flat_zero_coupon_curve(T, 0.05, years=2))
-    assert text.startswith(f"ZeroCouponCurve class. Curve date {T}.") and text.count("|") == 3
+    assert (
+        text.startswith(f"ZeroCouponCurve class. Curve date {T}.")
+        and text.count("|") == 3
+    )
 
 
-@pytest.mark.parametrize("method", [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline])
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline]
+)
 def test_every_interpolation_reprices_its_pillars(method):
     curve = sample_zero_coupon_curve(method)
     for t_i, df in [(d, df) for d, df in curve.date_dfs]:

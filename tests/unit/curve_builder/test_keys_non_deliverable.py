@@ -4,7 +4,11 @@ from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import Currency
-from fintoolsom.market.conventions import FixedLegSpec, FloatingLegSpec, PaymentFrequency
+from fintoolsom.market.conventions import (
+    FixedLegSpec,
+    FloatingLegSpec,
+    PaymentFrequency,
+)
 from fintoolsom.market.quotes import (
     CrossCurrencyFixedFloatQuote,
     QuotedSide,
@@ -19,7 +23,6 @@ from tests.factories.swap_factory import (
     adj_convention,
     build_market,
 )
-
 
 
 CLP, USD = Currency.CLP, Currency.USD
@@ -65,7 +68,11 @@ def test_non_deliverable_quote_pins_usd_funding_up_to_its_last_fx_fixing():
     nd = _fixed_float_quote(is_deliverable=False, payment_currency=CLP, fx_fixing_lag=2)
     dl = _fixed_float_quote()
     # SOFR is not a collateral here: projection-only, pinned as its own forward curve.
-    assert _curves_needed(nd, RISKLESS) == _curves_needed(dl, RISKLESS) == frozenset({RISKLESS, USD, SOFR})
+    assert (
+        _curves_needed(nd, RISKLESS)
+        == _curves_needed(dl, RISKLESS)
+        == frozenset({RISKLESS, USD, SOFR})
+    )
 
     nd_swap, dl_swap = nd.get_instrument(), dl.get_instrument()
     usd_leg = nd_swap.pay_leg
@@ -76,9 +83,11 @@ def test_non_deliverable_quote_pins_usd_funding_up_to_its_last_fx_fixing():
 
 def test_non_deliverable_quote_values_through_the_settlement_path():
     market = build_market()
-    swap = _fixed_float_quote(is_deliverable=False, payment_currency=CLP, fx_fixing_lag=2).get_instrument()
+    swap = _fixed_float_quote(
+        is_deliverable=False, payment_currency=CLP, fx_fixing_lag=2
+    ).get_instrument()
     usd = swap.pay_leg
-    expected = Calculator._leg_pv(swap.receive_leg, None, market) - Calculator._leg_pv_non_deliverable(
-        usd, None, market, CLP
-    )
+    expected = Calculator._leg_pv(
+        swap.receive_leg, None, market
+    ) - Calculator._leg_pv_non_deliverable(usd, None, market, CLP)
     assert swap.valuate(market, CLP) == pytest.approx(expected, rel=1e-12)

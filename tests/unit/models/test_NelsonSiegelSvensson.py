@@ -13,7 +13,6 @@ from fintoolsom.rates import (
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 def _zero_coupon_bond(
     calibration_date: date, years: int, notional: float = 1_000_000
 ) -> CLBond:
@@ -119,7 +118,10 @@ def test_zero_rate_is_linear_in_the_betas_with_finite_limits_at_zero():
     # t=0 limits: short rate b0 + b1 and df = 1, no 0/0.
     assert model.get_rate(0.0) == pytest.approx(params[0] + params[1], abs=1e-15)
     assert model.get_df(0.0) == 1.0
-    assert model.get_df(t[1:]) == pytest.approx(np.exp(-model.get_rate(t[1:]) * t[1:]), rel=1e-15)
+    assert model.get_df(t[1:]) == pytest.approx(
+        np.exp(-model.get_rate(t[1:]) * t[1:]), rel=1e-15
+    )
+
 
 def test_design_matrix_is_finite_at_calibration_bounds():
     t = np.array([0.25, 1, 5, 10, 20])

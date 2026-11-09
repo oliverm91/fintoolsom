@@ -1,4 +1,5 @@
 """Rates and rate conventions used across the tests."""
+
 from fintoolsom.dates import ActualDayCountConvention, Days30EDayCountConvention
 from fintoolsom.rates import (
     CompoundedInterestConvention,

@@ -19,7 +19,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 USD, CLP = Currency.USD, Currency.CLP
 
 
@@ -33,13 +32,20 @@ def _common(ccy: Ccy, status: SwapStatus) -> dict:
     )
 
 
-def _xccy_usd(status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0) -> Any:
+def _xccy_usd(
+    status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0
+) -> Any:
     return builders.xccy_floating_leg(
-        index=SOFR, spread=SPREAD, fx_fixing_lag=fx_fixing_lag, **_common(Ccy.USD, status)
+        index=SOFR,
+        spread=SPREAD,
+        fx_fixing_lag=fx_fixing_lag,
+        **_common(Ccy.USD, status),
     )
 
 
-def _fixed(ccy: Ccy, status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0) -> Any:
+def _fixed(
+    ccy: Ccy, status: SwapStatus = SwapStatus.NOT_STARTED, fx_fixing_lag: int = 0
+) -> Any:
     return builders.fixed_leg(
         rate=_rate(FIXED_RATES[ccy]),
         currency=USD if ccy is Ccy.USD else CLP,
@@ -54,6 +60,12 @@ def test_settlement_currency_validation():
         Swap(receive_leg=usd, pay_leg=clp)  # non-deliverable XCCY needs one
     with pytest.raises(ValueError, match="payment_currency"):
         Swap(receive_leg=usd, pay_leg=clp, is_deliverable=True, payment_currency=CLP)
-    assert Swap(receive_leg=usd, pay_leg=clp, is_deliverable=True).settlement_currency is None
-    assert Swap(receive_leg=usd, pay_leg=clp, payment_currency=CLP).settlement_currency == CLP
+    assert (
+        Swap(receive_leg=usd, pay_leg=clp, is_deliverable=True).settlement_currency
+        is None
+    )
+    assert (
+        Swap(receive_leg=usd, pay_leg=clp, payment_currency=CLP).settlement_currency
+        == CLP
+    )
     Swap(receive_leg=clp, pay_leg=_fixed(Ccy.CLP))  # single currency: nothing to settle

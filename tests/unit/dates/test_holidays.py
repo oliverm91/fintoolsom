@@ -1,4 +1,5 @@
 """Holiday rules, checked against published holiday dates."""
+
 from copy import copy
 from datetime import date
 
@@ -19,7 +20,12 @@ MON, THU = 0, 3
 
 @pytest.mark.parametrize(
     "year, easter",
-    [(2000, date(2000, 4, 23)), (2019, date(2019, 4, 21)), (2024, date(2024, 3, 31)), (2025, date(2025, 4, 20))],
+    [
+        (2000, date(2000, 4, 23)),
+        (2019, date(2019, 4, 21)),
+        (2024, date(2024, 3, 31)),
+        (2025, date(2025, 4, 20)),
+    ],
 )
 def test_easter_sunday(year, easter):
     assert _easter_sunday(year) == easter
@@ -58,7 +64,9 @@ def test_month_day_rule_is_fixed_by_default():
         (2020, date(2020, 6, 29)),  # Monday: not moved
     ],
 )
-def test_month_day_rule_moves_to_monday_like_chilean_san_pedro_y_san_pablo(year, observed):
+def test_month_day_rule_moves_to_monday_like_chilean_san_pedro_y_san_pablo(
+    year, observed
+):
     # Chilean Law 19.668; observed dates as published in the Chilean holiday calendar.
     assert MonthDayRule(6, 29, monday_adjustable=True).get_date(year) == observed
 
@@ -90,4 +98,6 @@ def test_sandwich_rule_needs_two_rules():
 def test_copies_are_new_objects_giving_the_same_dates(rule):
     duplicate = copy(rule)
     assert duplicate is not rule and type(duplicate) is type(rule)
-    assert [duplicate.get_date(y) for y in range(2018, 2026)] == [rule.get_date(y) for y in range(2018, 2026)]
+    assert [duplicate.get_date(y) for y in range(2018, 2026)] == [
+        rule.get_date(y) for y in range(2018, 2026)
+    ]

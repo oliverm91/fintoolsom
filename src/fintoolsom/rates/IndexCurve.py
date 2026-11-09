@@ -1,4 +1,5 @@
 """Curve of an interest index, stored as forward rates."""
+
 from __future__ import annotations
 
 import math
@@ -46,7 +47,9 @@ class IndexCurve(Curve):
         Forward-space methods only; ``PiecewiseConstant`` by default.
     """
 
-    allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset({InterpolationMethod.PiecewiseConstant})
+    allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset(
+        {InterpolationMethod.PiecewiseConstant}
+    )
 
     curve_date: date
     index: "Index"
@@ -64,24 +67,40 @@ class IndexCurve(Curve):
         self.knot_dates = list(self.knot_dates)
         self.forward_rates = np.asarray(self.forward_rates, dtype=float)
         if len(self.knot_dates) < 2:
-            raise ValueError(f"An IndexCurve needs at least 2 knots (one segment); got {len(self.knot_dates)}.")
+            raise ValueError(
+                f"An IndexCurve needs at least 2 knots (one segment); got {len(self.knot_dates)}."
+            )
         if len(self.forward_rates) != len(self.knot_dates) - 1:
             raise ValueError(
                 f"forward_rates must have one entry per segment: expected {len(self.knot_dates) - 1}, "
                 f"got {len(self.forward_rates)}."
             )
         if any(b <= a for a, b in zip(self.knot_dates, self.knot_dates[1:])):
-            raise ValueError(f"knot_dates must be strictly increasing; got {self.knot_dates}.")
+            raise ValueError(
+                f"knot_dates must be strictly increasing; got {self.knot_dates}."
+            )
         if self.knot_dates[0] < self.curve_date:
-            raise ValueError(f"The effective date {self.knot_dates[0]} is before the curve date {self.curve_date}.")
+            raise ValueError(
+                f"The effective date {self.knot_dates[0]} is before the curve date {self.curve_date}."
+            )
         self._knot_tau = year_fractions(self.curve_date, self.knot_dates)
-        self._cum = np.concatenate(([0.0], np.cumsum(self.forward_rates * np.diff(self._knot_tau))))
+        self._cum = np.concatenate(
+            ([0.0], np.cumsum(self.forward_rates * np.diff(self._knot_tau)))
+        )
         if self.knot_dates[0] == self.curve_date:
             self._log_df_effective = 0.0
         elif self.spot_rate is not None:
-            self._log_df_effective = math.log(float(self.spot_rate.get_discount_factor(self.curve_date, self.knot_dates[0])))
+            self._log_df_effective = math.log(
+                float(
+                    self.spot_rate.get_discount_factor(
+                        self.curve_date, self.knot_dates[0]
+                    )
+                )
+            )
         else:
-            self._log_df_effective = -float(self.forward_rates[0]) * float(self._knot_tau[0])
+            self._log_df_effective = -float(self.forward_rates[0]) * float(
+                self._knot_tau[0]
+            )
 
     @classmethod
     def from_zero_coupon_curve(cls, zcc, index: "Index") -> IndexCurve:
@@ -114,13 +133,21 @@ class IndexCurve(Curve):
         tau = year_fractions(self.curve_date, dates)
         # Segment of each date: the first forward before the effective date, the last
         # one past the last knot.
-        idx = np.clip(np.searchsorted(self._knot_tau, tau, side="right") - 1, 0, len(self.forward_rates) - 1)
-        integral = self._cum[idx] + self.forward_rates[idx] * (tau - self._knot_tau[idx])
+        idx = np.clip(
+            np.searchsorted(self._knot_tau, tau, side="right") - 1,
+            0,
+            len(self.forward_rates) - 1,
+        )
+        integral = self._cum[idx] + self.forward_rates[idx] * (
+            tau - self._knot_tau[idx]
+        )
         dfs = np.exp(self._log_df_effective - integral)
         if self.spot_rate is not None and self.knot_dates[0] > self.curve_date:
             spot = tau < self._knot_tau[0]
             if spot.any():
-                dfs[spot] = self.spot_rate.get_discount_factor(self.curve_date, [d for d, s in zip(dates, spot) if s])
+                dfs[spot] = self.spot_rate.get_discount_factor(
+                    self.curve_date, [d for d, s in zip(dates, spot) if s]
+                )
         return dfs
 
     def parallel_bump_bps(self, bps: float) -> IndexCurve:
@@ -134,17 +161,29 @@ class IndexCurve(Curve):
         if spot is not None and self.knot_dates[0] > self.curve_date:
             rc = spot.rate_convention
             df = math.exp(self._log_df_effective - shift * float(self._knot_tau[0]))
-            yf = rc.day_count_convention.get_time_fraction(self.curve_date, self.knot_dates[0], rc.time_fraction_base)
-            spot = Rate(rc.copy(), float(rc.interest_convention.get_rate_from_df(df, yf)))
+            yf = rc.day_count_convention.get_time_fraction(
+                self.curve_date, self.knot_dates[0], rc.time_fraction_base
+            )
+            spot = Rate(
+                rc.copy(), float(rc.interest_convention.get_rate_from_df(df, yf))
+            )
         return IndexCurve(
-            self.curve_date, self.index, list(self.knot_dates), self.forward_rates + shift,
-            spot, self.interpolation_method,
+            self.curve_date,
+            self.index,
+            list(self.knot_dates),
+            self.forward_rates + shift,
+            spot,
+            self.interpolation_method,
         )
 
     def copy(self) -> IndexCurve:
         return IndexCurve(
-            self.curve_date, self.index, list(self.knot_dates), self.forward_rates.copy(),
-            None if self.spot_rate is None else self.spot_rate.copy(), self.interpolation_method,
+            self.curve_date,
+            self.index,
+            list(self.knot_dates),
+            self.forward_rates.copy(),
+            None if self.spot_rate is None else self.spot_rate.copy(),
+            self.interpolation_method,
         )
 
     # ── Projection ───────────────────────────────────────────────────────────
@@ -154,7 +193,9 @@ class IndexCurve(Curve):
         return self.get_wealth_factor(start, end) - 1
 
     def __str__(self) -> str:
-        points = ", ".join(f"({d}|{f:.6f})" for d, f in zip(self.knot_dates[1:], self.forward_rates))
+        points = ", ".join(
+            f"({d}|{f:.6f})" for d, f in zip(self.knot_dates[1:], self.forward_rates)
+        )
         return (
             f"IndexCurve {self.index.name} ({self.interpolation_method.name}) date {self.curve_date} "
             f"effective {self.effective_date} [{points}]"

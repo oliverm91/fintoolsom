@@ -17,9 +17,7 @@ from fintoolsom.rates import (
 )
 
 
-
 T0 = date(2024, 7, 8)
-
 
 
 COMPOUNDED = RateConvention(CompoundedInterestConvention, ActualDayCountConvention, 365)
@@ -28,10 +26,14 @@ COMPOUNDED = RateConvention(CompoundedInterestConvention, ActualDayCountConventi
 LINEAR_360 = RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
 
 
-CONTINUOUS = RateConvention(ExponentialInterestConvention, ActualDayCountConvention, 365)
+CONTINUOUS = RateConvention(
+    ExponentialInterestConvention, ActualDayCountConvention, 365
+)
 
 
-D = [T0 + timedelta(days=n) for n in (10, 95, 400, 1100, 2500)]  # inside the pillar range
+D = [
+    T0 + timedelta(days=n) for n in (10, 95, 400, 1100, 2500)
+]  # inside the pillar range
 
 
 STARTS, ENDS = D[:-1], D[1:]
@@ -58,11 +60,23 @@ def curve(request) -> LegacyCurve:
 
 
 EXPECTED_INTERFACE = {
-    "get_df", "get_dfs", "get_df_fwd", "get_dfs_fwds",
-    "get_wf", "get_wfs", "get_wf_fwd", "get_wfs_fwds",
-    "get_zero_rate", "get_forward_rates", "get_forward_rates_values",
-    "get_accrued_interest", "get_accrued_interests",
-    "parallel_bump_rates_bps", "get_aged_curve", "copy", "__copy__",
+    "get_df",
+    "get_dfs",
+    "get_df_fwd",
+    "get_dfs_fwds",
+    "get_wf",
+    "get_wfs",
+    "get_wf_fwd",
+    "get_wfs_fwds",
+    "get_zero_rate",
+    "get_forward_rates",
+    "get_forward_rates_values",
+    "get_accrued_interest",
+    "get_accrued_interests",
+    "parallel_bump_rates_bps",
+    "get_aged_curve",
+    "copy",
+    "__copy__",
 }
 
 
@@ -71,14 +85,19 @@ def test_every_curve_query_is_abstract():
 
 
 def test_backend_missing_a_method_cannot_be_instantiated():
-    namespace = {name: (lambda self, *a, **k: None) for name in EXPECTED_INTERFACE - {"get_aged_curve"}}
+    namespace = {
+        name: (lambda self, *a, **k: None)
+        for name in EXPECTED_INTERFACE - {"get_aged_curve"}
+    }
     Incomplete = type("Incomplete", (LegacyCurve,), namespace)
     with pytest.raises(TypeError, match="get_aged_curve"):
         Incomplete()
 
 
 def test_zero_coupon_curve_implements_the_whole_interface():
-    assert issubclass(ZeroCouponCurve, LegacyCurve) and not inspect.isabstract(ZeroCouponCurve)
+    assert issubclass(ZeroCouponCurve, LegacyCurve) and not inspect.isabstract(
+        ZeroCouponCurve
+    )
 
 
 def test_scalar_and_vector_queries_agree(curve):
@@ -94,18 +113,26 @@ def test_forward_factors_are_ratios_of_spot_factors(curve):
     assert curve.get_dfs_fwds(STARTS, ENDS) == pytest.approx(ratio, abs=1e-15)
     assert curve.get_wfs_fwds(STARTS, ENDS) == pytest.approx(1 / ratio, abs=1e-12)
     assert curve.get_df_fwd(STARTS[0], ENDS[0]) == pytest.approx(ratio[0], abs=1e-15)
-    assert curve.get_wf_fwd(STARTS[0], ENDS[0]) == pytest.approx(1 / ratio[0], abs=1e-12)
+    assert curve.get_wf_fwd(STARTS[0], ENDS[0]) == pytest.approx(
+        1 / ratio[0], abs=1e-12
+    )
     with pytest.raises(ValueError):
         curve.get_dfs_fwds(STARTS, ENDS[:-1])
 
 
 def test_accrued_interest_is_notional_times_forward_accrual(curve):
     wf = curve.get_wfs_fwds(STARTS, ENDS)
-    assert curve.get_accrued_interests(np.full(len(STARTS), 100.0), STARTS, ENDS) == pytest.approx(100 * (wf - 1))
-    assert curve.get_accrued_interest(100.0, STARTS[0], ENDS[0]) == pytest.approx(100 * (wf[0] - 1))
+    assert curve.get_accrued_interests(
+        np.full(len(STARTS), 100.0), STARTS, ENDS
+    ) == pytest.approx(100 * (wf - 1))
+    assert curve.get_accrued_interest(100.0, STARTS[0], ENDS[0]) == pytest.approx(
+        100 * (wf[0] - 1)
+    )
 
 
-@pytest.mark.parametrize("convention", [COMPOUNDED, LINEAR_360, CONTINUOUS], ids=["comp", "lin360", "cont"])
+@pytest.mark.parametrize(
+    "convention", [COMPOUNDED, LINEAR_360, CONTINUOUS], ids=["comp", "lin360", "cont"]
+)
 def test_forward_rates_reproduce_forward_wealth_factors(curve, convention):
     rates = curve.get_forward_rates(STARTS, ENDS, convention)
     assert isinstance(rates, list) and all(isinstance(r, Rate) for r in rates)
@@ -119,11 +146,15 @@ def test_forward_rates_reproduce_forward_wealth_factors(curve, convention):
     assert values == pytest.approx([r.rate for r in rates], abs=1e-14)
 
 
-@pytest.mark.parametrize("convention", [COMPOUNDED, LINEAR_360, CONTINUOUS], ids=["comp", "lin360", "cont"])
+@pytest.mark.parametrize(
+    "convention", [COMPOUNDED, LINEAR_360, CONTINUOUS], ids=["comp", "lin360", "cont"]
+)
 def test_zero_rate_reproduces_discount_factor(curve, convention):
     for d in D:
         rate = curve.get_zero_rate(d, convention)
-        assert rate.get_discount_factor(T0, d) == pytest.approx(curve.get_df(d), abs=1e-12)
+        assert rate.get_discount_factor(T0, d) == pytest.approx(
+            curve.get_df(d), abs=1e-12
+        )
 
 
 def test_aged_curve_discounts_with_forward_factors(curve):
@@ -131,7 +162,9 @@ def test_aged_curve_discounts_with_forward_factors(curve):
     aged = curve.get_aged_curve(age)
     assert aged.curve_date == age
     later = D[2:]
-    assert aged.get_dfs(later) == pytest.approx(curve.get_dfs_fwds([age] * len(later), later), abs=1e-10)
+    assert aged.get_dfs(later) == pytest.approx(
+        curve.get_dfs_fwds([age] * len(later), later), abs=1e-10
+    )
     assert curve.curve_date == T0  # original untouched
     with pytest.raises(ValueError):
         curve.get_aged_curve(T0)

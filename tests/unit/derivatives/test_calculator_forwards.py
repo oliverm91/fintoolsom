@@ -6,7 +6,6 @@ from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.rates import DiscountCurve, IndexCurve
 
 
-
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 
@@ -20,8 +19,12 @@ def _market(curve_date, zero_coupon_curve, spot: float) -> Market:
         t=curve_date,
         risk_free_index=RISKLESS,
         curves=[
-            IndexCurve.from_zero_coupon_curve(zero_coupon_curve, RISKLESS),  # CLP: the riskless index's own curve
-            DiscountCurve.from_zero_coupon_curve(zero_coupon_curve, Currency.USD, RISKLESS),  # USD: uncollateralised
+            IndexCurve.from_zero_coupon_curve(
+                zero_coupon_curve, RISKLESS
+            ),  # CLP: the riskless index's own curve
+            DiscountCurve.from_zero_coupon_curve(
+                zero_coupon_curve, Currency.USD, RISKLESS
+            ),  # USD: uncollateralised
         ],
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))
@@ -62,7 +65,9 @@ def test_forward_mtm_sign_flips_with_is_buy(sample_zero_coupon_curve, curve_date
     assert buy_mtm > 0  # spot > strike, buying is in the money
 
 
-def test_ndf_mtm_matches_forward_when_fixing_equals_payment(sample_zero_coupon_curve, curve_date):
+def test_ndf_mtm_matches_forward_when_fixing_equals_payment(
+    sample_zero_coupon_curve, curve_date
+):
     spot = 900.0
     strike = 800.0
     payment_date = date(2025, 1, 10)

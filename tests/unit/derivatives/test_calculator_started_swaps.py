@@ -33,7 +33,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 RUNNING = 1  # coupon index: the 1st coupon is paid, the 2nd is accruing at VAL_DATE
 
 
@@ -106,7 +105,9 @@ def test_valuation_date_sits_inside_the_running_coupon():
 @pytest.mark.parametrize("case", ALL_CASES, ids=_ids(ALL_CASES))
 def test_paid_coupon_is_dropped(case, market):
     leg = _started_leg(case)
-    assert _pv(leg, market) == pytest.approx(_pv(_sub_leg(leg, RUNNING), market), rel=1e-14)
+    assert _pv(leg, market) == pytest.approx(
+        _pv(_sub_leg(leg, RUNNING), market), rel=1e-14
+    )
 
 
 @pytest.mark.parametrize("case", FIXED_CASES, ids=_ids(FIXED_CASES))
@@ -145,4 +146,6 @@ def test_running_floating_coupon_combines_realised_and_projected(case, market):
         interest = notional * (realised_wf * projected_wf - 1)
 
     expected = (interest + _spread_flow(notional, c.start_date, c.end_date)) * df
-    assert _pv(_sub_leg(leg, RUNNING, RUNNING + 1), market) == pytest.approx(expected, rel=1e-12)
+    assert _pv(_sub_leg(leg, RUNNING, RUNNING + 1), market) == pytest.approx(
+        expected, rel=1e-12
+    )

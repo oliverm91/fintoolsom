@@ -10,7 +10,6 @@ from fintoolsom.dates.adjustments import (
 )
 
 
-
 def test_following_and_preceding_convention_adjust_on_holiday():
     cal = Calendar(custom_holidays=[date(2024, 7, 4)])  # Thursday
     following = FollowingConvention(cal)
@@ -40,4 +39,6 @@ def test_modified_preceding_rolls_forward_when_preceding_leaves_the_month():
     from fintoolsom.dates.adjustments import ModifiedPrecedingConvention
 
     # Saturday 1 June 2024: preceding would be Friday 31 May, so roll to Monday 3 June.
-    assert ModifiedPrecedingConvention(Calendar()).adjust(date(2024, 6, 1)) == date(2024, 6, 3)
+    assert ModifiedPrecedingConvention(Calendar()).adjust(date(2024, 6, 1)) == date(
+        2024, 6, 3
+    )

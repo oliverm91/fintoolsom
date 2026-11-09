@@ -13,6 +13,7 @@ to the 9th of next month (see :func:`last_published_date`).
 
 Levels are passed as ``dict[date, float]`` throughout.
 """
+
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -36,7 +37,9 @@ class UFConvention:
     """Stateless UF reajuste formulas."""
 
     @staticmethod
-    def reajuste(base_level: float, cpi: float, elapsed_days: int, period_days: int) -> float:
+    def reajuste(
+        base_level: float, cpi: float, elapsed_days: int, period_days: int
+    ) -> float:
         """UF level `elapsed_days` after the base 9th, rounded to 2 decimals.
 
         Parameters
@@ -142,7 +145,9 @@ def last_published_date(today: date, calendar: Calendar | None = None) -> date:
     """
     if calendar is None:
         calendar = get_calendar(Locality.CL.value)
-    publication_date = PrecedingConvention(calendar).adjust(date(today.year, today.month, 8))
+    publication_date = PrecedingConvention(calendar).adjust(
+        date(today.year, today.month, 8)
+    )
     if today < publication_date:
         year, month = today.year, today.month
     else:
@@ -172,6 +177,7 @@ def monthly_inflation(levels: dict[date, float], year: int, month: int) -> float
     ValueError
         If a boundary level is not loaded (the CPI is not published yet).
     """
+
     def boundary(k: int) -> float:
         d = date(*_shift_month(year, month, k), 9)
         if d not in levels:
@@ -235,7 +241,9 @@ def extend_with_cpi(
     d = base_date + timedelta(days=1)
     while d <= next_ninth:
         if d not in out:
-            out[d] = UFConvention.reajuste(base_uf, cpi, (d - base_date).days, period_days)
+            out[d] = UFConvention.reajuste(
+                base_uf, cpi, (d - base_date).days, period_days
+            )
         d += timedelta(days=1)
     return out
 

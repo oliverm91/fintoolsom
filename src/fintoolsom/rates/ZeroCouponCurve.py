@@ -16,7 +16,9 @@ _LEGACY_MESSAGE = (
     "ZeroCouponCurve is legacy, kept for CLBonds and Nelson-Siegel-Svensson fitting; "
     "pricing, Market and the curve builder use IndexCurve / DiscountCurve."
 )
-_ZCC_METHODS = frozenset({InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline})
+_ZCC_METHODS = frozenset(
+    {InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline}
+)
 
 
 def _quiet_copy(make):
@@ -47,6 +49,7 @@ class ZeroCouponCurve(LegacyCurve):
 
     Beyond the Curve interface it exposes pillar mechanics: add_point, delete_point,
     sort, len(), and get_zero_rates / get_zero_rates_values (the rates AT the pillars)."""
+
     curve_date: date
 
     curve_points: list[ZeroCouponCurvePoint] = field(default_factory=list)
@@ -312,19 +315,25 @@ class ZeroCouponCurve(LegacyCurve):
         fwd_dates = [cp.date for cp in self.curve_points if cp.date > date]
         fwd_dfs = self.get_dfs_fwds([date] * len(fwd_dates), fwd_dates)
         date_dfs = [(fwd_dates[i], fwd_dfs[i]) for i in range(len(fwd_dates))]
-        return _quiet_copy(lambda: ZeroCouponCurve(
-            date, date_dfs=date_dfs, df_interpolation_method=self.df_interpolation_method
-        ))
+        return _quiet_copy(
+            lambda: ZeroCouponCurve(
+                date,
+                date_dfs=date_dfs,
+                df_interpolation_method=self.df_interpolation_method,
+            )
+        )
 
     def __len__(self) -> int:
         return len(self.curve_points)
 
     def copy(self) -> Self:
-        return _quiet_copy(lambda: ZeroCouponCurve(
-            self.curve_date,
-            [zccp.copy() for zccp in self.curve_points],
-            df_interpolation_method=self.df_interpolation_method,
-        ))
+        return _quiet_copy(
+            lambda: ZeroCouponCurve(
+                self.curve_date,
+                [zccp.copy() for zccp in self.curve_points],
+                df_interpolation_method=self.df_interpolation_method,
+            )
+        )
 
     def __copy__(self) -> Self:
         return self.copy()

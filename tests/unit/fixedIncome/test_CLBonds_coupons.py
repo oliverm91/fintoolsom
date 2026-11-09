@@ -4,7 +4,6 @@ from fintoolsom.fixedIncome import Coupons
 from tests.factories import clbond_factory
 
 
-
 @pytest.fixture
 def sample_coupons() -> Coupons:
     return clbond_factory.two_coupon_coupons()

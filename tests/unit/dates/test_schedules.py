@@ -3,7 +3,10 @@ from datetime import date
 import pytest
 
 from fintoolsom.dates import Calendar, ScheduleGenerator, Tenor
-from fintoolsom.dates.adjustments import FollowingConvention, ModifiedFollowingConvention
+from fintoolsom.dates.adjustments import (
+    FollowingConvention,
+    ModifiedFollowingConvention,
+)
 
 ADJ = ModifiedFollowingConvention(Calendar())
 generate = ScheduleGenerator.generate_schedule
@@ -17,7 +20,9 @@ def test_schedule_generator_semiannual_schedule_over_one_year():
 @pytest.mark.parametrize("stub_first", [True, False])
 @pytest.mark.parametrize("long_stub", [True, False])
 def test_regular_schedule_has_no_stub_whatever_the_stub_options(stub_first, long_stub):
-    schedule = generate(date(2024, 1, 15), "1y", "6m", ADJ, stub_first=stub_first, long_stub=long_stub)
+    schedule = generate(
+        date(2024, 1, 15), "1y", "6m", ADJ, stub_first=stub_first, long_stub=long_stub
+    )
     assert schedule == [date(2024, 1, 15), date(2024, 7, 15), date(2025, 1, 15)]
 
 
@@ -32,13 +37,21 @@ def test_regular_schedule_has_no_stub_whatever_the_stub_options(stub_first, long
 )
 def test_stub_placement_and_length(stub_first, long_stub, expected_middle):
     start, end = date(2024, 1, 15), date(2025, 3, 15)
-    schedule = generate(start, "", "6m", ADJ, end_date=end, stub_first=stub_first, long_stub=long_stub)
+    schedule = generate(
+        start, "", "6m", ADJ, end_date=end, stub_first=stub_first, long_stub=long_stub
+    )
     assert schedule == [start, *expected_middle, end]
 
 
 def test_maturity_is_adjusted_with_its_own_convention():
     # 2024-06-15 + 1Y = Sunday 2025-06-15 -> Monday 2025-06-16.
-    schedule = generate(date(2024, 6, 15), "1y", "1y", ADJ, maturity_adj_conv=FollowingConvention(Calendar()))
+    schedule = generate(
+        date(2024, 6, 15),
+        "1y",
+        "1y",
+        ADJ,
+        maturity_adj_conv=FollowingConvention(Calendar()),
+    )
     assert schedule == [date(2024, 6, 15), date(2025, 6, 16)]
 
 
@@ -53,6 +66,7 @@ def test_zero_frequency_cannot_build_a_schedule():
 
 
 # ── Tenor ───────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "tenor, expected",
@@ -69,10 +83,14 @@ def test_tenor_unadjusted_maturity(tenor, expected):
 
 def test_tenor_backwards_and_adjusted():
     t = Tenor("1M", ADJ)
-    assert t.get_unadjusted_maturity(date(2024, 3, 15), forward=False) == date(2024, 2, 15)
+    assert t.get_unadjusted_maturity(date(2024, 3, 15), forward=False) == date(
+        2024, 2, 15
+    )
     # 2024-08-31 is a Saturday; modified following stays in August -> Friday 30.
     assert t.get_adjusted_maturity(date(2024, 7, 31)) == date(2024, 8, 30)
-    assert Tenor("1d").get_unadjusted_maturity(date(2024, 1, 15), forward=False) == date(2024, 1, 12)
+    assert Tenor("1d").get_unadjusted_maturity(
+        date(2024, 1, 15), forward=False
+    ) == date(2024, 1, 12)
 
 
 @pytest.mark.parametrize("bad", ["m", "3x"])

@@ -5,6 +5,7 @@ Pure functions of a quote or instrument (no solving): curve keys
 (:func:`_get_maturity`), its last read date (:func:`_last_date`) and the curves it
 may take its one pillar on (:func:`_primary_candidates`).
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -14,7 +15,11 @@ from ..derivatives.swaps import FloatingLeg, Swap
 from ..market.currencies import Currency
 from ..market.index import Index
 from ..market.market import Market
-from ..market.quotes import CrossCurrencyFloatFloatQuote, ForwardPointsQuote, InstrumentQuote
+from ..market.quotes import (
+    CrossCurrencyFloatFloatQuote,
+    ForwardPointsQuote,
+    InstrumentQuote,
+)
 
 # A curve the builder solves: an Index is that index's IndexCurve (it projects the
 # index and may discount); a Currency is its DiscountCurve under the market's
@@ -62,10 +67,16 @@ def _instrument_of(quote: InstrumentQuote, market: Market):
     -------
     Forward, NDF or Swap
     """
-    return quote.get_instrument(market) if isinstance(quote, _FX_DEPENDENT) else quote.get_instrument()
+    return (
+        quote.get_instrument(market)
+        if isinstance(quote, _FX_DEPENDENT)
+        else quote.get_instrument()
+    )
 
 
-def _curves_needed(quote: InstrumentQuote, risk_free_index: Index) -> frozenset[CurveKey]:
+def _curves_needed(
+    quote: InstrumentQuote, risk_free_index: Index
+) -> frozenset[CurveKey]:
     """Every curve `quote` reads to be valued; quotes are grouped by this set.
 
     Each leg discounts in its settlement currency (the swap payment currency for a
@@ -126,10 +137,14 @@ def _primary_candidates(quote: InstrumentQuote, pinned: frozenset) -> tuple:
     if not isinstance(instrument, Swap):
         return tuple(funding) or tuple(sorted(pinned, key=str))
     legs = (instrument.receive_leg, instrument.pay_leg)
-    currencies = {leg.currency for leg in legs} | {_settlement_currency(instrument, leg) for leg in legs}
+    currencies = {leg.currency for leg in legs} | {
+        _settlement_currency(instrument, leg) for leg in legs
+    }
     if len(currencies) > 1 and funding:
         collateral = getattr(quote, "collateral_index", None)
-        return tuple(sorted(funding, key=lambda k: k == getattr(collateral, "currency", None)))
+        return tuple(
+            sorted(funding, key=lambda k: k == getattr(collateral, "currency", None))
+        )
     floats = [leg.index for leg in legs if isinstance(leg, FloatingLeg)]
     return tuple(floats) or tuple(sorted(pinned, key=str))
 
@@ -147,7 +162,9 @@ def _curve_currency(curve_key: CurveKey) -> Currency:
     return curve_key if isinstance(curve_key, Currency) else curve_key.currency
 
 
-def _get_maturity(curve_key: CurveKey, instrument, risk_free_index: Index) -> date | None:
+def _get_maturity(
+    curve_key: CurveKey, instrument, risk_free_index: Index
+) -> date | None:
     """Pillar `instrument` pins on `curve_key`: its latest relevant date.
 
     Payment dates for the settlement-currency funding curve, FX fixing dates for
@@ -180,7 +197,10 @@ def _get_maturity(curve_key: CurveKey, instrument, risk_free_index: Index) -> da
             pay_ccy = _settlement_currency(instrument, leg)
             if _funding_key(risk_free_index, pay_ccy) == curve_key:
                 candidates.add(max(leg.payment_dates))
-            if pay_ccy != leg.currency and _funding_key(risk_free_index, leg.currency) == curve_key:
+            if (
+                pay_ccy != leg.currency
+                and _funding_key(risk_free_index, leg.currency) == curve_key
+            ):
                 candidates.add(max(leg.fx_fixing_dates))
             if isinstance(leg, FloatingLeg) and curve_key == leg.index:
                 candidates.add(max(leg.end_dates))
@@ -188,7 +208,11 @@ def _get_maturity(curve_key: CurveKey, instrument, risk_free_index: Index) -> da
         pair = instrument.currency_pair
         for currency in (pair.base_currency, pair.quote_currency):
             if _funding_key(risk_free_index, currency) == curve_key:
-                candidates.add(instrument.fixing_date if isinstance(instrument, NDF) else instrument.payment_date)
+                candidates.add(
+                    instrument.fixing_date
+                    if isinstance(instrument, NDF)
+                    else instrument.payment_date
+                )
     else:
         raise TypeError(
             f"_get_maturity only supports Swap and Forward instruments, got {type(instrument).__name__}."
@@ -199,7 +223,10 @@ def _get_maturity(curve_key: CurveKey, instrument, risk_free_index: Index) -> da
 def _last_date(instrument) -> date:
     """Last date `instrument` reads any curve on (payments, accrual ends, fixings)."""
     if isinstance(instrument, Forward):
-        return max(instrument.payment_date, getattr(instrument, "fixing_date", instrument.payment_date))
+        return max(
+            instrument.payment_date,
+            getattr(instrument, "fixing_date", instrument.payment_date),
+        )
     dates = []
     for leg in (instrument.receive_leg, instrument.pay_leg):
         dates += list(leg.payment_dates)

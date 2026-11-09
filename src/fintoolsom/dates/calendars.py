@@ -32,7 +32,9 @@ class Calendar:
                 self._calendar = country_holidays(self.country, subdiv=self.subdiv)
                 if self._extra_categories:
                     # Rebuild once with the extra categories, keeping the subdivision.
-                    categories = set(self._calendar.categories) | set(self._extra_categories)
+                    categories = set(self._calendar.categories) | set(
+                        self._extra_categories
+                    )
                     self._calendar = country_holidays(
                         self.country, subdiv=self.subdiv, categories=categories
                     )

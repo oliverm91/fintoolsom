@@ -26,7 +26,9 @@ def market():
     return build_market()
 
 
-def _swap(receive: LegKind, pay: LegKind, status=SwapStatus.NOT_STARTED, spread=False) -> Swap:
+def _swap(
+    receive: LegKind, pay: LegKind, status=SwapStatus.NOT_STARTED, spread=False
+) -> Swap:
     return Swap(
         receive_leg=build_leg(LegCase(Ccy.CLP, receive), status, spread),
         pay_leg=build_leg(LegCase(Ccy.CLP, pay), status, spread),
@@ -43,7 +45,9 @@ def test_fixed_leg_duration_is_the_pv_weighted_time_of_its_flows(market):
     taus = np.array([_tau(d) for d in leg.payment_dates])
     pvs = leg.flows * np.exp(-FLAT_RATES[ICP] * taus)  # flat continuous ICP curve
     expected = float(np.sum(taus * pvs) / np.sum(pvs))
-    assert Calculator.get_leg_duration(swap, leg, market) == pytest.approx(expected, rel=1e-6)
+    assert Calculator.get_leg_duration(swap, leg, market) == pytest.approx(
+        expected, rel=1e-6
+    )
     assert 1.8 < expected < 2.0  # a 2Y bullet-like leg
 
 
@@ -51,15 +55,17 @@ def test_unstarted_floating_leg_duration_is_its_start(market):
     # No spread: the floating-rate-note equivalent is the notional at the start date.
     swap = _swap(LegKind.FIXED, LegKind.PRICE)
     leg = swap.pay_leg
-    assert Calculator.get_leg_duration(swap, leg, market) == pytest.approx(_tau(leg.start_dates[0]), rel=1e-12)
+    assert Calculator.get_leg_duration(swap, leg, market) == pytest.approx(
+        _tau(leg.start_dates[0]), rel=1e-12
+    )
 
 
 def test_spread_lengthens_a_floating_leg_duration(market):
     plain = _swap(LegKind.FIXED, LegKind.OVERNIGHT)
     spread = _swap(LegKind.FIXED, LegKind.OVERNIGHT, spread=True)
-    assert Calculator.get_leg_duration(spread, spread.pay_leg, market) > Calculator.get_leg_duration(
-        plain, plain.pay_leg, market
-    )
+    assert Calculator.get_leg_duration(
+        spread, spread.pay_leg, market
+    ) > Calculator.get_leg_duration(plain, plain.pay_leg, market)
 
 
 @pytest.mark.parametrize("kind", [LegKind.TERM, LegKind.OVERNIGHT, LegKind.PRICE])

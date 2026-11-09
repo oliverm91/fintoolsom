@@ -9,7 +9,6 @@ from fintoolsom.dates import (
 )
 
 
-
 def test_actual_day_count_single_dates():
     t1 = date(2023, 10, 17)
     t2 = t1 + timedelta(days=7)
@@ -140,6 +139,7 @@ def test_30e_isda_matches_reference_maturity_column(start, end, days):
 
 # ── Input shapes ────────────────────────────────────────────────────────────
 
+
 def test_day_count_accepts_every_scalar_list_combination():
     s, e = [date(2024, 1, 1), date(2024, 2, 1)], [date(2024, 3, 1), date(2024, 4, 1)]
     assert list(ActualDayCountConvention.get_day_count(s, e[0])) == [60, 29]
@@ -148,7 +148,9 @@ def test_day_count_accepts_every_scalar_list_combination():
 
 def test_day_count_rejects_lists_of_different_lengths():
     with pytest.raises(ValueError):
-        ActualDayCountConvention.get_day_count([date(2024, 1, 1)], [date(2024, 2, 1), date(2024, 3, 1)])
+        ActualDayCountConvention.get_day_count(
+            [date(2024, 1, 1)], [date(2024, 2, 1), date(2024, 3, 1)]
+        )
 
 
 def test_day_count_rejects_unmapped_input_types():

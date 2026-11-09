@@ -1,10 +1,8 @@
-"""Calendar holiday categories: bank holidays only in CL and JP; subdivisions kept.
-"""
+"""Calendar holiday categories: bank holidays only in CL and JP; subdivisions kept."""
 
 from datetime import date
 import pytest
 from fintoolsom.dates import Calendar
-
 
 
 @pytest.mark.parametrize(

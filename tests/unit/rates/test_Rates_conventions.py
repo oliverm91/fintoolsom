@@ -10,7 +10,6 @@ from fintoolsom.rates import (
 from fintoolsom.dates import ActualDayCountConvention
 
 
-
 def _expected_converted_rate(
     rate_value, from_convention, to_convention, t_start, t_end
 ):

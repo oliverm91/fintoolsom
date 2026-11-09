@@ -13,7 +13,6 @@ from tests.factories.swap_factory import (
 )
 
 
-
 ADJ_CLP = adj_convention(Ccy.CLP)
 
 
@@ -32,9 +31,14 @@ def _leg(builder, index, start=date(2024, 7, 15), years=2, **kw):
 def test_fixed_term_coupon_keeps_its_notional_repayment():
     market = build_market()
     # 1Y leg: the last coupon (2024-04-12 → 2024-07-12) fixed before VAL_DATE, unpaid.
-    leg = _leg(builders.term_rate_leg, TAB_3M, start=date(2023, 7, 12), years=1, spread=SPREAD)
+    leg = _leg(
+        builders.term_rate_leg, TAB_3M, start=date(2023, 7, 12), years=1, spread=SPREAD
+    )
     last = leg.coupons[-1]
-    assert leg.fixing_dates[-1] < VAL_DATE < last.payment_date and last.amortization == 1_000.0
+    assert (
+        leg.fixing_dates[-1] < VAL_DATE < last.payment_date
+        and last.amortization == 1_000.0
+    )
 
     _, flows = Calculator._leg_flows(leg, market)
     rate = market.get_index(TAB_3M.name).get_rate(leg.fixing_dates[-1]).rate

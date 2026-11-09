@@ -1,12 +1,10 @@
-"""Chilean UF / CPI mechanics (:mod:`fintoolsom.market.uf`) on real SII data.
-"""
+"""Chilean UF / CPI mechanics (:mod:`fintoolsom.market.uf`) on real SII data."""
 
 import math
 from datetime import date
 import pytest
 from fintoolsom.market import Currency, Market, uf
 from fintoolsom.market.currencies import CurrencyPair
-
 
 
 # UF on the 9th of each month, CLP per UF (the reajuste boundaries).
@@ -25,10 +23,10 @@ UF_9 = {
 IPC_DEC_2025 = -0.002  # -0.2% (real deflation)
 
 
-IPC_MAR_2026 = 0.010   # +1.0%
+IPC_MAR_2026 = 0.010  # +1.0%
 
 
-IPC_APR_2026 = 0.013   # +1.3%
+IPC_APR_2026 = 0.013  # +1.3%
 
 
 # Real published daily UF over the 9-Apr -> 9-May 2026 reajuste period (IPC Mar = +1.0%).
@@ -154,11 +152,16 @@ UF_20_MAY_2026 = 40424.99
 
 def test_uf_convention_reajuste_matches_published_level():
     # round(UF(9-Apr) * 1.01^(4/30), 2) == real UF(13-Apr-2026).
-    assert uf.UFConvention.reajuste(UF_9[date(2026, 4, 9)], IPC_MAR_2026, 4, 30) == 39894.61
+    assert (
+        uf.UFConvention.reajuste(UF_9[date(2026, 4, 9)], IPC_MAR_2026, 4, 30)
+        == 39894.61
+    )
 
 
 def test_uf_convention_implied_monthly_cpi_full_period():
-    cpi = uf.UFConvention.implied_monthly_cpi(UF_9[date(2026, 4, 9)], UF_9[date(2026, 5, 9)])
+    cpi = uf.UFConvention.implied_monthly_cpi(
+        UF_9[date(2026, 4, 9)], UF_9[date(2026, 5, 9)]
+    )
     assert round(cpi, 3) == IPC_MAR_2026
 
 
@@ -182,7 +185,10 @@ def test_implied_cpi_between_full_period_equals_simple_ratio():
     # 9-Apr to 9-May is exactly one period: scaling exponent is 1, so it reduces
     # to end/start - 1.
     cpi = uf.UFConvention.implied_monthly_cpi_between(
-        date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 5, 9), UF_9[date(2026, 5, 9)]
+        date(2026, 4, 9),
+        UF_9[date(2026, 4, 9)],
+        date(2026, 5, 9),
+        UF_9[date(2026, 5, 9)],
     )
     assert math.isclose(
         cpi, UF_9[date(2026, 5, 9)] / UF_9[date(2026, 4, 9)] - 1.0, rel_tol=1e-12
@@ -200,7 +206,10 @@ def test_implied_cpi_between_raises_across_reajuste_boundary():
 def test_implied_cpi_between_requires_distinct_dates():
     with pytest.raises(ValueError):
         uf.UFConvention.implied_monthly_cpi_between(
-            date(2026, 4, 9), UF_9[date(2026, 4, 9)], date(2026, 4, 9), UF_9[date(2026, 4, 9)]
+            date(2026, 4, 9),
+            UF_9[date(2026, 4, 9)],
+            date(2026, 4, 9),
+            UF_9[date(2026, 4, 9)],
         )
 
 
@@ -219,12 +228,18 @@ def test_extend_with_cpi_returns_a_copy():
 
 def test_extend_with_cpi_missing_base_raises():
     with pytest.raises(KeyError):
-        uf.extend_with_cpi({date(2026, 3, 9): 1.0}, IPC_MAR_2026, base_date=date(2026, 4, 9))
+        uf.extend_with_cpi(
+            {date(2026, 3, 9): 1.0}, IPC_MAR_2026, base_date=date(2026, 4, 9)
+        )
 
 
 def test_uf_rate_data_loads_clf_like_any_currency():
     clfclp = CurrencyPair(Currency.CLF, Currency.CLP)
-    market = Market(t=date(2026, 4, 9), fx_history={clfclp: uf.uf_rate_data(UF_APR_MAY_2026)})
+    market = Market(
+        t=date(2026, 4, 9), fx_history={clfclp: uf.uf_rate_data(UF_APR_MAY_2026)}
+    )
     assert market.get_fx_rate(date(2026, 4, 13), clfclp).value == 39894.61
-    assert market.get_fx_rate(date(2026, 4, 13), clfclp.invert()).value == pytest.approx(1 / 39894.61)
+    assert market.get_fx_rate(
+        date(2026, 4, 13), clfclp.invert()
+    ).value == pytest.approx(1 / 39894.61)
     assert market.get_fx_known_until(clfclp) == date(2026, 5, 9)

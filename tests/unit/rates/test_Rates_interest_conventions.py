@@ -6,7 +6,6 @@ from fintoolsom.rates import (
 )
 
 
-
 def test_get_df_from_rate_linear_positive_rate():
     rate, t = 0.05, 0.5
     df = LinearInterestConvention.get_df_from_rate(rate, t)

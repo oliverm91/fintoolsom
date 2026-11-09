@@ -14,6 +14,7 @@ from ..dates import ActualDayCountConvention
 
 # ── NSS formulas ──
 
+
 def nss_factors(t: float | np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
     """Factor loadings [level, slope, curvature, 2nd curvature] at year fraction `t`.
 
@@ -64,7 +65,10 @@ def nss_df(
     mu_: float,
 ) -> float | np.ndarray:
     """Discount factor exp(-r(t)·t) at year fraction `t` (1 at t=0)."""
-    return np.exp(-nss_rate(t, beta0, beta1, beta2, beta3, lambda_, mu_) * np.asarray(t, dtype=float))
+    return np.exp(
+        -nss_rate(t, beta0, beta1, beta2, beta3, lambda_, mu_)
+        * np.asarray(t, dtype=float)
+    )
 
 
 @dataclass
@@ -105,7 +109,9 @@ class NelsonSiegelSvensson:
             DeprecationWarning,
             stacklevel=2,
         )
-        return self.calibrate_from_bonds(calibration_date, bonds_irr_list, initial_guess, method)
+        return self.calibrate_from_bonds(
+            calibration_date, bonds_irr_list, initial_guess, method
+        )
 
     def calibrate_from_bonds(
         self,
@@ -156,12 +162,9 @@ class NelsonSiegelSvensson:
             return sum((ns_pvs - mkt_pvs) ** 2)
 
         if initial_guess is None:
-            self.b0 = sum([irr.rate for _, irr in bonds_irr_list]) / len(
-                bonds_irr_list
-            )
+            self.b0 = sum([irr.rate for _, irr in bonds_irr_list]) / len(bonds_irr_list)
             short_term_yields = [
-                irr.rate
-                for _, irr in bonds_irr_list[: min(3, len(bonds_irr_list))]
+                irr.rate for _, irr in bonds_irr_list[: min(3, len(bonds_irr_list))]
             ]
             self.b1 = sum(short_term_yields) / len(short_term_yields) - self.b0
             self.b2 = 0
