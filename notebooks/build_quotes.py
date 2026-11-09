@@ -23,7 +23,6 @@ from fintoolsom.market import (
 )
 from fintoolsom.market.index import InterestPriceIndex, RateIndex, OvernightRateIndex
 from fintoolsom.market.localities import Locality
-from fintoolsom.dates import Term, TermUnit, ActualDayCountConvention
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention, CompoundedInterestConvention
 
 

@@ -74,18 +74,15 @@ def test_last_known_date_before_cpi_release():
     # 8-Jun-2026 is a business day (no Chilean holiday), so the release proxy is the
     # 8th. On the 3rd (before release) only levels up to the 9th of the current
     # month are known.
-    levels = {date(2026, 2, 9): UF_9[date(2026, 2, 9)]}
     assert uf.last_published_date(date(2026, 6, 3)) == date(2026, 6, 9)
 
 
 def test_last_known_date_after_cpi_release():
     # On/after the release, levels are known up to the 9th of next month.
-    levels = {date(2026, 2, 9): UF_9[date(2026, 2, 9)]}
     assert uf.last_published_date(date(2026, 6, 25)) == date(2026, 7, 9)
 
 
 def test_last_known_date_rolls_year_in_december():
-    levels = {date(2026, 2, 9): UF_9[date(2026, 2, 9)]}
     assert uf.last_published_date(date(2026, 12, 20)) == date(2027, 1, 9)
 
 
@@ -95,7 +92,6 @@ def test_last_known_date_uses_chilean_calendar():
     # we are already on/after release → horizon is next month. A weekends-only
     # calendar would place release on the 8th and keep us in the current month, so
     # this asserts the CL calendar (from CLP → Locality.CL) is in effect.
-    levels = {date(2026, 2, 9): UF_9[date(2026, 2, 9)]}
     assert uf.last_published_date(date(2026, 12, 7)) == date(2027, 1, 9)
 
 
