@@ -18,6 +18,7 @@ SOFRRATE   SOFR fixings
 
 Run ``run_valuation.py`` to use it.
 """
+
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -30,9 +31,23 @@ from fintoolsom.dates import schedules as _schedules
 from fintoolsom.dates.time_fractions import TF_Actual360
 from fintoolsom.derivatives.swaps import legs as _swap_legs
 from fintoolsom.market import (
-    Currency, CurrencyPair, CrossCurrencyFloatFloatQuote, FloatingLegSpec, FixedLegSpec, ForwardPointsQuote,
-    FX_Rate, IRSQuote, Market, OvernightInterestPriceHistory, OvernightInterestPriceIndex, OvernightRateHistory,
-    OvernightRateIndex, PaymentFrequency, QuotedSide, Term, TermUnit,
+    Currency,
+    CurrencyPair,
+    CrossCurrencyFloatFloatQuote,
+    FloatingLegSpec,
+    FixedLegSpec,
+    ForwardPointsQuote,
+    FX_Rate,
+    IRSQuote,
+    Market,
+    OvernightInterestPriceHistory,
+    OvernightInterestPriceIndex,
+    OvernightRateHistory,
+    OvernightRateIndex,
+    PaymentFrequency,
+    QuotedSide,
+    Term,
+    TermUnit,
 )
 from fintoolsom.rates import LinearInterestConvention, Rate, RateConvention
 
@@ -48,7 +63,9 @@ SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 
 SEMIANNUAL, ANNUAL = PaymentFrequency.SEMIANNUAL, PaymentFrequency.ANNUAL
-ZERO_COUPON = SimpleNamespace(value="ZERO")  # stands in for a PaymentFrequency, see _enable_zero_coupon_frequency
+ZERO_COUPON = SimpleNamespace(
+    value="ZERO"
+)  # stands in for a PaymentFrequency, see _enable_zero_coupon_frequency
 
 FIXINGS_MARGIN_DAYS = 7  # calendar days of fixings kept before the swap start (or the valuation date, if earlier)
 
@@ -73,14 +90,38 @@ def _enable_zero_coupon_frequency() -> None:
     _swap_legs._FREQ_TO_TENOR["ZERO"] = "0m"
     original = _schedules.ScheduleGenerator.generate_schedule
 
-    def generate_schedule(start_date, maturity_tenor, frequency_tenor, adj_conv, maturity_adj_conv=None,
-                          end_date=None, stub_first=True, long_stub=True):
+    def generate_schedule(
+        start_date,
+        maturity_tenor,
+        frequency_tenor,
+        adj_conv,
+        maturity_adj_conv=None,
+        end_date=None,
+        stub_first=True,
+        long_stub=True,
+    ):
         if str(frequency_tenor).lower() in ("0", "0m", "0y"):
             if end_date is not None:
                 return [start_date, end_date]
             adj = maturity_adj_conv or adj_conv
-            return [start_date, adj.adjust(_schedules.Tenor(maturity_tenor, adj).get_unadjusted_maturity(start_date))]
-        return original(start_date, maturity_tenor, frequency_tenor, adj_conv, maturity_adj_conv, end_date, stub_first, long_stub)
+            return [
+                start_date,
+                adj.adjust(
+                    _schedules.Tenor(maturity_tenor, adj).get_unadjusted_maturity(
+                        start_date
+                    )
+                ),
+            ]
+        return original(
+            start_date,
+            maturity_tenor,
+            frequency_tenor,
+            adj_conv,
+            maturity_adj_conv,
+            end_date,
+            stub_first,
+            long_stub,
+        )
 
     _schedules.ScheduleGenerator.generate_schedule = staticmethod(generate_schedule)
 
@@ -94,17 +135,25 @@ def _get_quotes_table(t: date) -> pd.DataFrame:
     raw = read_sql(
         """SELECT REPLACE(ticker,' Curncy','') AS ticker, field, value FROM financial_data
            WHERE date=:d AND (ticker LIKE 'CHSWP%' OR ticker LIKE 'USOSFR%' OR ticker LIKE 'CPXOSS%'
-                              OR ticker LIKE 'CHN%' OR ticker LIKE 'USDCLP%')""", d=t.isoformat())
+                              OR ticker LIKE 'CHN%' OR ticker LIKE 'USDCLP%')""",
+        d=t.isoformat(),
+    )
     if raw.empty:
-        raise ValueError(f"No quotes in the local snapshot for {t}. Re-run export_snapshot.py for that date.")
-    return raw.pivot_table(index="ticker", columns="field", values="value", aggfunc="first")
+        raise ValueError(
+            f"No quotes in the local snapshot for {t}. Re-run export_snapshot.py for that date."
+        )
+    return raw.pivot_table(
+        index="ticker", columns="field", values="value", aggfunc="first"
+    )
 
 
 def _get_fixings(start: date, t: date) -> pd.DataFrame:
     fixings = read_sql(
         """SELECT date, ticker, value FROM financial_data
            WHERE field='px_last' AND date BETWEEN :d0 AND :d1 AND (ticker LIKE 'CLICP%' OR ticker LIKE 'SOFRRATE%')""",
-        d0=start.isoformat(), d1=t.isoformat())
+        d0=start.isoformat(),
+        d1=t.isoformat(),
+    )
     fixings["date"] = pd.to_datetime(fixings["date"]).dt.date
     fixings["value"] = fixings["value"].astype(float)
     return fixings.sort_values("date")
@@ -139,8 +188,13 @@ class MarketAndQuotes:
     description: list[tuple[str, str]]  # (ticker, what it was built as)
 
 
-def get_market_and_quotes(t: date, fixings_from: date, collateral_cutoff_months: int = 18,
-                          drop_tickers: tuple[str, ...] = ("CHN2Y",), live: bool = False) -> MarketAndQuotes:
+def get_market_and_quotes(
+    t: date,
+    fixings_from: date,
+    collateral_cutoff_months: int = 18,
+    drop_tickers: tuple[str, ...] = ("CHN2Y",),
+    live: bool = False,
+) -> MarketAndQuotes:
     """Market (ICP and SOFR fixings, USDCLP spot, risk-free index ICP) and the quotes to build its curves on ``t``.
 
     Parameters
@@ -152,16 +206,25 @@ def get_market_and_quotes(t: date, fixings_from: date, collateral_cutoff_months:
     drop_tickers : quotes left out. CHN2Y shares its maturity with CPXOSS2, which owns that pillar.
     """
     if live:
-        from live_data import get_live_fixings, get_live_quotes_table  # imported only when asked for: needs PropTools and Bloomberg
+        from live_data import (
+            get_live_fixings,
+            get_live_quotes_table,
+        )  # imported only when asked for: needs PropTools and Bloomberg
+
         table, fixings = get_live_quotes_table(), get_live_fixings(fixings_from, t)
     else:
         table, fixings = _get_quotes_table(t), _get_fixings(fixings_from, t)
 
     def mid(ticker: str) -> float:
-        return (float(table.loc[ticker, "px_bid"]) + float(table.loc[ticker, "px_ask"])) / 2
+        return (
+            float(table.loc[ticker, "px_bid"]) + float(table.loc[ticker, "px_ask"])
+        ) / 2
 
     def has_prices(ticker: str) -> bool:
-        return not (pd.isna(table.loc[ticker].get("px_bid")) or pd.isna(table.loc[ticker].get("px_ask")))
+        return not (
+            pd.isna(table.loc[ticker].get("px_bid"))
+            or pd.isna(table.loc[ticker].get("px_ask"))
+        )
 
     def as_date(ticker: str, field: str) -> date:
         return pd.to_datetime(table.loc[ticker, field]).date()
@@ -170,10 +233,18 @@ def get_market_and_quotes(t: date, fixings_from: date, collateral_cutoff_months:
     sofr_fixings = fixings[fixings.ticker.str.startswith("SOFRRATE")]
     icp_levels = fixings[fixings.ticker.str.startswith("CLICP")]
     if icp_levels.empty or icp_levels.date.max() < t:
-        source = "Bloomberg" if live else "the local snapshot (re-run export_snapshot.py for that date)"
+        source = (
+            "Bloomberg"
+            if live
+            else "the local snapshot (re-run export_snapshot.py for that date)"
+        )
         raise ValueError(f"No CLICP level for {t} in {source}.")
-    sofr_history = OvernightRateHistory(SOFR, {r.date: rate(r.value / 100) for r in sofr_fixings.itertuples()})
-    icp_history = OvernightInterestPriceHistory(ICP, {r.date: r.value for r in icp_levels.itertuples()})
+    sofr_history = OvernightRateHistory(
+        SOFR, {r.date: rate(r.value / 100) for r in sofr_fixings.itertuples()}
+    )
+    icp_history = OvernightInterestPriceHistory(
+        ICP, {r.date: r.value for r in icp_levels.itertuples()}
+    )
 
     market = Market(t, risk_free_index=ICP)
     market.add_index(icp_history)
@@ -196,32 +267,101 @@ def get_market_and_quotes(t: date, fixings_from: date, collateral_cutoff_months:
 
         if swap and family == "CHSWP":
             frequency = ZERO_COUPON if (value, unit) == (18, "M") else SEMIANNUAL
-            collateral = SOFR if _months(value, unit) >= collateral_cutoff_months else None
-            quotes.append(IRSQuote(
-                quoted_side=QuotedSide.RECEIVE, term=_term(value, unit, CL_ADJ), quote_date=t, adj_convention=CL_ADJ,
-                maturity_date=maturity, collateral_index=collateral,
-                fixed_leg=FixedLegSpec(Currency.CLP, frequency, CL_ADJ, TIME_FRACTION, rate(mid(ticker) / 100)),
-                floating_leg=FloatingLegSpec(Currency.CLP, frequency, CL_ADJ, TIME_FRACTION, ICP, rate(0.0))))
-            description.append((ticker, f"CLP fixed vs ICP {value}{unit}, collateral {'SOFR' if collateral else 'none'}"))
+            collateral = (
+                SOFR if _months(value, unit) >= collateral_cutoff_months else None
+            )
+            quotes.append(
+                IRSQuote(
+                    quoted_side=QuotedSide.RECEIVE,
+                    term=_term(value, unit, CL_ADJ),
+                    quote_date=t,
+                    adj_convention=CL_ADJ,
+                    maturity_date=maturity,
+                    collateral_index=collateral,
+                    fixed_leg=FixedLegSpec(
+                        Currency.CLP,
+                        frequency,
+                        CL_ADJ,
+                        TIME_FRACTION,
+                        rate(mid(ticker) / 100),
+                    ),
+                    floating_leg=FloatingLegSpec(
+                        Currency.CLP, frequency, CL_ADJ, TIME_FRACTION, ICP, rate(0.0)
+                    ),
+                )
+            )
+            description.append(
+                (
+                    ticker,
+                    f"CLP fixed vs ICP {value}{unit}, collateral {'SOFR' if collateral else 'none'}",
+                )
+            )
         elif swap and family == "USOSFR":
-            quotes.append(IRSQuote(
-                quoted_side=QuotedSide.RECEIVE, term=_term(value, unit, US_ADJ), quote_date=t, adj_convention=US_ADJ,
-                maturity_date=maturity, collateral_index=SOFR,
-                fixed_leg=FixedLegSpec(Currency.USD, ANNUAL, US_ADJ, TIME_FRACTION, rate(mid(ticker) / 100)),
-                floating_leg=FloatingLegSpec(Currency.USD, ANNUAL, US_ADJ, TIME_FRACTION, SOFR, rate(0.0))))
-            description.append((ticker, f"USD fixed vs SOFR {value}{unit}, collateral SOFR"))
+            quotes.append(
+                IRSQuote(
+                    quoted_side=QuotedSide.RECEIVE,
+                    term=_term(value, unit, US_ADJ),
+                    quote_date=t,
+                    adj_convention=US_ADJ,
+                    maturity_date=maturity,
+                    collateral_index=SOFR,
+                    fixed_leg=FixedLegSpec(
+                        Currency.USD,
+                        ANNUAL,
+                        US_ADJ,
+                        TIME_FRACTION,
+                        rate(mid(ticker) / 100),
+                    ),
+                    floating_leg=FloatingLegSpec(
+                        Currency.USD, ANNUAL, US_ADJ, TIME_FRACTION, SOFR, rate(0.0)
+                    ),
+                )
+            )
+            description.append(
+                (ticker, f"USD fixed vs SOFR {value}{unit}, collateral SOFR")
+            )
         elif swap and family == "CPXOSS":
-            quotes.append(CrossCurrencyFloatFloatQuote(
-                quoted_side=QuotedSide.RECEIVE, term=_term(value, unit, CL_ADJ), quote_date=t, adj_convention=CL_ADJ,
-                maturity_date=maturity, collateral_index=SOFR,
-                receive_leg=FloatingLegSpec(Currency.CLP, SEMIANNUAL, CL_ADJ, TIME_FRACTION, ICP, rate(mid(ticker) / 1e4)),
-                pay_leg=FloatingLegSpec(Currency.USD, SEMIANNUAL, CL_ADJ, TIME_FRACTION, SOFR, rate(0.0))))
-            description.append((ticker, f"xccy ICP{mid(ticker):+.1f}bp vs SOFR {value}{unit}, collateral SOFR"))
+            quotes.append(
+                CrossCurrencyFloatFloatQuote(
+                    quoted_side=QuotedSide.RECEIVE,
+                    term=_term(value, unit, CL_ADJ),
+                    quote_date=t,
+                    adj_convention=CL_ADJ,
+                    maturity_date=maturity,
+                    collateral_index=SOFR,
+                    receive_leg=FloatingLegSpec(
+                        Currency.CLP,
+                        SEMIANNUAL,
+                        CL_ADJ,
+                        TIME_FRACTION,
+                        ICP,
+                        rate(mid(ticker) / 1e4),
+                    ),
+                    pay_leg=FloatingLegSpec(
+                        Currency.USD, SEMIANNUAL, CL_ADJ, TIME_FRACTION, SOFR, rate(0.0)
+                    ),
+                )
+            )
+            description.append(
+                (
+                    ticker,
+                    f"xccy ICP{mid(ticker):+.1f}bp vs SOFR {value}{unit}, collateral SOFR",
+                )
+            )
         elif forward:
             settle = as_date(ticker, "settle_dt")
-            quotes.append(ForwardPointsQuote(
-                currency_pair=USDCLP, value=mid(ticker), is_buy=True, payment_date=settle,
-                fixing_date=CL_ADJ.calendar.add_business_days(settle, -1), quote_date=t))
-            description.append((ticker, f"USDCLP NDF points {mid(ticker):+.3f}, uncollateralised"))
+            quotes.append(
+                ForwardPointsQuote(
+                    currency_pair=USDCLP,
+                    value=mid(ticker),
+                    is_buy=True,
+                    payment_date=settle,
+                    fixing_date=CL_ADJ.calendar.add_business_days(settle, -1),
+                    quote_date=t,
+                )
+            )
+            description.append(
+                (ticker, f"USDCLP NDF points {mid(ticker):+.3f}, uncollateralised")
+            )
 
     return MarketAndQuotes(market, quotes, description)

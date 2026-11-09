@@ -8,6 +8,7 @@ The snapshot holds the same tables as MySQL, without the schema prefix:
 Dates are ISO text (``YYYY-MM-DD``), so pass dates as ``date.isoformat()``. ``export_snapshot.py`` creates the file and
 is the only script that connects to MySQL.
 """
+
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +19,9 @@ DB_PATH = Path(__file__).with_name("local_data.sqlite")
 
 def read_sql(sql: str, **params) -> pd.DataFrame:
     if not DB_PATH.exists():
-        raise FileNotFoundError(f"{DB_PATH} not found. Create it with export_snapshot.py (needs MySQL access).")
+        raise FileNotFoundError(
+            f"{DB_PATH} not found. Create it with export_snapshot.py (needs MySQL access)."
+        )
     engine = create_engine(f"sqlite:///{DB_PATH}")
     try:
         with engine.connect() as conn:
