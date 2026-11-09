@@ -1,79 +1,104 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING
 
-from ...rates import ZeroCouponCurve
+if TYPE_CHECKING:
+    from ...market.currencies import CurrencyPair
+
+
+def _non_deliverable_currencies(currency_pair: CurrencyPair) -> list:
+    return [
+        ccy
+        for ccy in (currency_pair.base_currency, currency_pair.quote_currency)
+        if not ccy.is_deliverable
+    ]
 
 
 @dataclass
 class Forward:
+    """Deliverable FX forward: both currencies are exchanged at `payment_date`.
+
+    Parameters
+    ----------
+    notional : float
+        Amount of the base currency bought or sold.
+    strike : float
+        Agreed rate (quote currency per unit of base currency).
+    payment_date : date
+        Settlement date.
+    is_buy : bool
+        True when buying the base currency.
+    currency_pair : CurrencyPair
+        Traded pair.
+
+    Attributes
+    ----------
+    sign : int
+        +1 for a buy, -1 for a sell.
+
+    Raises
+    ------
+    ValueError
+        If `currency_pair` is missing or holds a non-deliverable currency (the UF,
+        ``CLF``): such a forward can only be an :class:`NDF`.
+    """
+
     notional: float
     strike: float
     payment_date: date
     is_buy: bool
+    currency_pair: CurrencyPair = None
 
     sign: int = field(init=False)
 
     def __post_init__(self):
         self.sign = 1 if self.is_buy else -1
+        if self.currency_pair is None:
+            raise ValueError(f"currency_pair is required for a {type(self).__name__}.")
+        self._check_settlement()
 
-    def get_mtm(
-        self,
-        spot: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
-    ) -> float:
-        df_d = domestic_curve.get_df(self.payment_date)
-        df_f = foreign_curve.get_df(self.payment_date)
-        notional_leg_vp = spot * self.notional * df_f
-        strike_leg_vp = self.strike * self.notional * df_d
-
-        mtm = self.sign * (notional_leg_vp - strike_leg_vp)
-        return mtm
-
-
-class NDF(Forward):
-    fixing_date: date
-
-    def get_mtm(
-        self,
-        spot: float,
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
-    ) -> float:
-        df_d = domestic_curve.get_df(self.fixing_date)
-        df_f = foreign_curve.get_df(self.fixing_date)
-
-        s_t = spot * df_f / df_d
-
-        fv = self.sign * self.notional(s_t - self.strike)
-        mtm = fv * domestic_curve.get_df(self.payment_date)
-        return mtm
-
-
-class IndexedNDF(NDF):
-    def get_mtm(
-        self,
-        indexes: dict[date, float],
-        domestic_curve: ZeroCouponCurve,
-        foreign_curve: ZeroCouponCurve,
-    ) -> float:
-        valid_dates = [t for t in indexes.keys() if t <= self.fixing_date]
-        if len(valid_dates) == 0:
+    def _check_settlement(self) -> None:
+        undeliverable = _non_deliverable_currencies(self.currency_pair)
+        if undeliverable:
             raise ValueError(
-                "Indexes dict received does not contain any date less or equal than fixing_date."
+                f"{undeliverable[0]} cannot be delivered; a forward on "
+                f"{self.currency_pair} must be an NDF."
             )
-        if domestic_curve.curve_date not in valid_dates:
-            raise ValueError("Indexes dict does not contain values for curve dates.")
 
-        max_valid_date = max(valid_dates)
-        if max_valid_date == self.fixing_date:
-            fv = self.sign * self.notional * (indexes[max_valid_date] - self.strike)
-        else:
-            df_d = domestic_curve.get_df_fwd(max_valid_date, self.fixing_date)
-            df_f = foreign_curve.get_df_fwd(max_valid_date, self.fixing_date)
-            s = indexes[max_valid_date]
-            s_t = s * df_f / df_d
-            fv = self.sign * self.notional * (s_t - self.strike)
 
-        mtm = fv * domestic_curve.get_df(self.payment_date)
-        return mtm
+@dataclass
+class NDF(Forward):
+    """Non-deliverable FX forward, cash-settled at the rate of `fixing_date`.
+
+    Pays ``notional * (FX(fixing_date) - strike)`` in the quote currency at
+    `payment_date`. A UF forward is an NDF on the ``CLF/CLP`` pair, whose
+    fixing is the UF level of `fixing_date`.
+
+    Parameters
+    ----------
+    fixing_date : date
+        Date whose FX rate settles the contract; not after `payment_date`.
+
+    Raises
+    ------
+    ValueError
+        If `fixing_date` is missing or after `payment_date`, or `currency_pair` is
+        missing.
+    """
+
+    fixing_date: date = None
+
+    def __post_init__(self):
+        if self.fixing_date is None:
+            raise ValueError("fixing_date is required for an NDF.")
+        if self.fixing_date > self.payment_date:
+            raise ValueError(
+                f"fixing_date {self.fixing_date} is after payment_date {self.payment_date}."
+            )
+        super().__post_init__()
+
+    def _check_settlement(self) -> None:
+        # Cash settlement: any pair, including one quoted in a unit of account.
+        pass

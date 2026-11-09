@@ -1,19 +1,31 @@
+import warnings
 from copy import copy
 from datetime import date
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Self
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 
+from .Curve import InterpolationMethod
+from .LegacyCurve import LegacyCurve, forward_rates_from_wfs
 from .Rates import Rate, RateConvention
 from ..dates import ActualDayCountConvention
 
+_LEGACY_MESSAGE = (
+    "ZeroCouponCurve is legacy, kept for CLBonds and Nelson-Siegel-Svensson fitting; "
+    "pricing, Market and the curve builder use IndexCurve / DiscountCurve."
+)
+_ZCC_METHODS = frozenset(
+    {InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline}
+)
 
-class InterpolationMethod(Enum):
-    LogLinear = 1
-    HermiteCubicSpline = 2
+
+def _quiet_copy(make):
+    """Build a ZeroCouponCurve internally (copy, aged curve) without the legacy warning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return make()
 
 
 @dataclass(slots=True)
@@ -28,18 +40,23 @@ class ZeroCouponCurvePoint:
         return self.copy()
 
     def simple_str(self) -> str:
-        return f"({self.date}|{self.rate.rate_value})"
+        return f"({self.date}|{self.rate.rate})"
 
 
 @dataclass(slots=True)
-class ZeroCouponCurve:
+class ZeroCouponCurve(LegacyCurve):
+    """Curve backed by pillars (ZeroCouponCurvePoint) interpolated in DF.
+
+    Beyond the Curve interface it exposes pillar mechanics: add_point, delete_point,
+    sort, len(), and get_zero_rates / get_zero_rates_values (the rates AT the pillars)."""
+
     curve_date: date
 
     curve_points: list[ZeroCouponCurvePoint] = field(default_factory=list)
     date_dfs: list[tuple[date, float]] = field(default_factory=list)
     _rate_conv_for_dfs_init: RateConvention = field(default=None)
     df_interpolation_method: InterpolationMethod = field(
-        default=InterpolationMethod.HermiteCubicSpline
+        default=InterpolationMethod.LogLinear
     )
 
     wfs: np.ndarray = field(init=False, default=None)
@@ -51,6 +68,7 @@ class ZeroCouponCurve:
     _str_dates_rates: str = field(init=False, default=None)
 
     def __post_init__(self):
+        warnings.warn(_LEGACY_MESSAGE, DeprecationWarning, stacklevel=3)
         if self._rate_conv_for_dfs_init is None:
             self._rate_conv_for_dfs_init = RateConvention()
         if not self.curve_points and self.date_dfs:
@@ -74,9 +92,9 @@ class ZeroCouponCurve:
                 "If curve_points is not set, then date_dfs (list[tuples[date, float]]) must be set."
             )
 
-        if not isinstance(self.df_interpolation_method, InterpolationMethod):
+        if self.df_interpolation_method not in _ZCC_METHODS:
             raise TypeError(
-                f"'df_interpolation_method' must be of type 'InterpolationMethod'. Received type '{type(self.df_interpolation_method)}' with value '{self.df_interpolation_method}'."
+                f"'df_interpolation_method' must be InterpolationMethod.LogLinear or HermiteCubicSpline. Received type '{type(self.df_interpolation_method)}' with value '{self.df_interpolation_method}'."
             )
 
         self._cashed_dfs: dict[str, np.ndarray] = {}
@@ -124,7 +142,7 @@ class ZeroCouponCurve:
         if isinstance(bps, np.ndarray):
             bps = float(bps[0])
         for zccp in self.curve_points:
-            zccp.rate.rate_value += bps / 10_000
+            zccp.rate.rate += bps / 10_000
 
         # Copy of a part of self.sort() method. Other lines are not necessary here.
         self.set_df_curve()
@@ -158,7 +176,10 @@ class ZeroCouponCurve:
             )
 
         # Start of interpolation part
-        if self.df_interpolation_method == InterpolationMethod.HermiteCubicSpline:
+        if len(self.days) == 1:
+            # Single pillar: normal_tenors can only be the pillar's exact date; return it directly.
+            interp_dfs = np.full(len(normal_tenors), self.dfs[0])
+        elif self.df_interpolation_method == InterpolationMethod.HermiteCubicSpline:
             chs = PchipInterpolator(self.days, self.dfs)
             interp_dfs = chs(normal_tenors)
         elif self.df_interpolation_method == InterpolationMethod.LogLinear:
@@ -224,16 +245,7 @@ class ZeroCouponCurve:
         if isinstance(end_dates, date):
             end_wfs = end_wfs[0]
         fwd_wfs = end_wfs / start_wfs
-        tfb = rate_convention.time_fraction_base
-        tfs = rate_convention.day_count_convention.get_time_fraction(
-            start_dates, end_dates, tfb
-        )
-        fwd_rates = rate_convention.interest_convention.get_rate_from_wf(fwd_wfs, tfs)
-        if isinstance(fwd_rates, np.ndarray):
-            fwd_rates = [Rate(rate_convention, rate) for rate in fwd_rates]
-        else:
-            fwd_rates = Rate(rate_convention, fwd_rates)
-        return fwd_rates
+        return forward_rates_from_wfs(fwd_wfs, start_dates, end_dates, rate_convention)
 
     def get_forward_rates_values(
         self,
@@ -245,9 +257,9 @@ class ZeroCouponCurve:
         if isinstance(rates_obj, np.ndarray):
             return rates_obj
         elif isinstance(rates_obj, list):
-            return np.array([r.rate_value for r in rates_obj])
+            return np.array([r.rate for r in rates_obj])
         else:
-            return rates_obj.rate_value
+            return rates_obj.rate
 
     def get_zero_rates(self, rate_convention: RateConvention = None) -> list[Rate]:
         if rate_convention is None:
@@ -278,7 +290,7 @@ class ZeroCouponCurve:
         self, rate_convention: RateConvention = None
     ) -> np.ndarray:
         rates_obj = self.get_zero_rates(rate_convention)
-        return np.array([r.rate_value for r in rates_obj])
+        return np.array([r.rate for r in rates_obj])
 
     def get_accrued_interest(
         self, notional: float, start_date: date, end_date: date
@@ -303,15 +315,24 @@ class ZeroCouponCurve:
         fwd_dates = [cp.date for cp in self.curve_points if cp.date > date]
         fwd_dfs = self.get_dfs_fwds([date] * len(fwd_dates), fwd_dates)
         date_dfs = [(fwd_dates[i], fwd_dfs[i]) for i in range(len(fwd_dates))]
-        fwd_zcc = ZeroCouponCurve(date, date_dfs=date_dfs)
-        return fwd_zcc
+        return _quiet_copy(
+            lambda: ZeroCouponCurve(
+                date,
+                date_dfs=date_dfs,
+                df_interpolation_method=self.df_interpolation_method,
+            )
+        )
 
     def __len__(self) -> int:
         return len(self.curve_points)
 
     def copy(self) -> Self:
-        return ZeroCouponCurve(
-            self.curve_date, [zccp.copy() for zccp in self.curve_points]
+        return _quiet_copy(
+            lambda: ZeroCouponCurve(
+                self.curve_date,
+                [zccp.copy() for zccp in self.curve_points],
+                df_interpolation_method=self.df_interpolation_method,
+            )
         )
 
     def __copy__(self) -> Self:

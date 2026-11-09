@@ -1,183 +1,124 @@
-from abc import ABC, abstractmethod
+from __future__ import annotations
+
+from abc import ABC
 from dataclasses import dataclass, field
-from datetime import date
 
-import numpy as np
-
-from ...market import Currency, Market, Locality
-from ...dates import Calendar
-
-from .legs import SwapLegBase
+from ...market.currencies import Currency
+from ...market.index import InterestIndex
+from .legs import SwapLeg
 
 
 @dataclass
 class SwapBase(ABC):
-    receive_leg: SwapLegBase
-    pay_leg: SwapLegBase
+    """Base for all swap instruments.
 
-    collateral_index_name: str = field(default=None)
+    Parameters
+    ----------
+    payment_currency : Currency, optional
+        Settlement currency. Required for a non-deliverable swap whose legs are
+        in different currencies; every flow in another currency is converted at
+        its FX fixing. Must be None for a deliverable swap, where each leg
+        settles in its own currency.
+    collateral_index : InterestIndex, optional
+        Index remunerating the CSA collateral; None means uncollateralised.
+    """
+
+    payment_currency: Currency | None = field(default=None)
+    collateral_index: InterestIndex | None = field(default=None)
+
+
+@dataclass(kw_only=True)
+class Swap(SwapBase):
+    """Swap instrument made of two legs.
+
+    Direction is given by which leg is received (added) and which is paid
+    (subtracted). Build legs with :mod:`fintoolsom.derivatives.swaps.builders`.
+
+    Parameters
+    ----------
+    receive_leg : SwapLeg
+        Leg received.
+    pay_leg : SwapLeg
+        Leg paid.
+    is_deliverable : bool, default False
+        True when each leg settles physically in its own currency. False when
+        the swap settles in `payment_currency` (non-deliverable); irrelevant
+        when both legs share a currency.
+
+    Raises
+    ------
+    ValueError
+        If a non-deliverable cross-currency swap has no `payment_currency`, or a
+        deliverable swap has one.
+    """
+
+    receive_leg: SwapLeg
+    pay_leg: SwapLeg
+    is_deliverable: bool = False
 
     def __post_init__(self):
+        if self.is_deliverable and self.payment_currency is not None:
+            raise ValueError(
+                "A deliverable swap settles each leg in its own currency: payment_currency must be None."
+            )
         if (
-            self.receive_leg.currency == self.pay_leg.currency
-            and self.receive_leg.notional != self.pay_leg.notional
+            not self.is_deliverable
+            and self.payment_currency is None
+            and self.receive_leg.currency != self.pay_leg.currency  # type: ignore[attr-defined]
         ):
             raise ValueError(
-                f"If receive and pay legs are of the same currency, notional must match. Receive leg notional: {self.receive_leg.notional}, Pay leg notional: {self.pay_leg.notional}"
+                "A non-deliverable cross-currency swap needs a payment_currency."
             )
-
-    @abstractmethod
-    def get_receive_flows_value(
-        self, market: Market = None, locality: Locality = None
-    ) -> float:
-        pass
-
-    @abstractmethod
-    def get_pay_flows_value(
-        self, market: Market = None, locality: Locality = None
-    ) -> float:
-        pass
-
-    def valuate(self, market: Market = None, locality: Locality = None) -> float:
-        receive_discount_curve = market.get_discount_curve(
-            self.receive_leg.currency,
-            collateral_index_name=self.collateral_index_name,
-            locality=locality,
-        )
-        pay_discount_curve = market.get_discount_curve(
-            self.pay_leg.currency,
-            collateral_index_name=self.collateral_index_name,
-            locality=locality,
-        )
-
-        receive_flows_value = self.get_receive_flows_value(
-            market=market, locality=locality
-        )
-        pay_flows_value = self.get_pay_flows_value(market=market, locality=locality)
-
-        receive_future_payment_dates = [
-            c.payment_date for c in self.receive_leg.coupons
-        ]
-        pay_future_payment_dates = [c.payment_date for c in self.pay_leg.coupons]
-
-        return receive_flows_value * receive_discount_curve.get_dfs(
-            receive_future_payment_dates
-        ) - pay_flows_value * pay_discount_curve.get_dfs(pay_future_payment_dates)
-
-
-@dataclass
-class DefaultSwap(SwapBase):
-    receive_leg: SwapLegBase
-    pay_leg: SwapLegBase
-
-    collateral_index_name: str = field(default=None)
-
-    def __post_init__(self):
         if (
-            self.receive_leg.currency == self.pay_leg.currency
-            and self.receive_leg.notional != self.pay_leg.notional
+            self.payment_currency is not None
+            and not self.payment_currency.is_deliverable
         ):
             raise ValueError(
-                f"If receive and pay legs are of the same currency, notional must match. Receive leg notional: {self.receive_leg.notional}, Pay leg notional: {self.pay_leg.notional}"
+                f"payment_currency {self.payment_currency} cannot be delivered; use "
+                f"{self.payment_currency.settlement_currency}."
             )
 
-    def get_receive_flows_value(
-        self, market: Market = None, locality: Locality = None
-    ) -> float:
-        return self.receive_leg.get_flows(market=market, locality=locality)
+    @property
+    def settlement_currency(self) -> Currency | None:
+        """Currency every flow settles in, or None when each leg settles in its own."""
+        return None if self.is_deliverable else self.payment_currency
 
-    def get_pay_flows_value(
-        self, market: Market = None, locality: Locality = None
-    ) -> float:
-        return self.pay_leg.get_flows(market=market, locality=locality)
+    def leg_settlement_currency(self, leg: SwapLeg) -> Currency:
+        """Currency the flows of `leg` are paid in.
 
+        The swap's `settlement_currency` when non-deliverable; otherwise the leg
+        currency, unless that is a unit of account that cannot be delivered (the
+        UF, ``CLF``), whose flows are always paid in its settlement currency (CLP)
+        at the rate of their FX fixing dates, even in a deliverable swap.
 
-@dataclass
-class FXCompensatedSwap(SwapBase):
-    calendar: Calendar
-    compensation_currency: Currency
-    fx_fixing_lag: int = field(default=0)
+        Parameters
+        ----------
+        leg : SwapLeg
+            One of the swap's legs.
 
-    fx_fixing_dates: list[date] = field(default=None)
+        Returns
+        -------
+        Currency
+        """
+        settlement = self.settlement_currency
+        if settlement is not None:
+            return settlement
+        return leg.currency.settlement_currency  # type: ignore[attr-defined]
 
-    def __post_init__(self):
-        super().__post_init__()
+    def valuate(self, market, currency: Currency) -> float:
+        """Mark-to-market in `currency`; see :meth:`Calculator.get_swap_mtm`.
 
-        rp_coups = list(zip(self.receive_leg.coupons, self.pay_leg.coupons))
-        for rc, pc in rp_coups:
-            if rc.payment_date != pc.payment_date:
-                raise ValueError(
-                    f"Payment dates of receive and pay legs must match. Receive leg payment date: {rc.payment_date}, Pay leg payment date: {pc.payment_date}"
-                )
+        Parameters
+        ----------
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency.
 
-        # Check that all coupons from both legs match payment dates if all ok add fx_fixing_date
-        if self.fx_fixing_dates is None:
-            self.fx_fixing_dates = []
-            for rc, pc in rp_coups:
-                self.fx_fixing_dates.append(
-                    self.calendar.add_business_days(
-                        rc.payment_date, -self.fx_fixing_lag
-                    )
-                )
-        else:
-            # Check fx_fixing_dates length
-            if len(self.fx_fixing_dates) != len(rp_coups):
-                raise ValueError(
-                    f"fx_fixing_dates length must match the number of swap coupons. fx_fixing_dates length: {len(self.fx_fixing_dates)}, number of swap coupons: {len(rp_coups)}"
-                )
-            self.fx_fixing_dates.sort()
+        Returns
+        -------
+        float
+        """
+        from ..calculator import Calculator
 
-            rf_ts = list(zip(self.receive_leg.coupons, self.fx_fixing_dates))
-
-            # Check that all coupons have an fx_fixing_date between start and payment_date
-            for rc, fd in rf_ts:
-                if not rc.start_accrual_date <= fd <= rc.payment_date:
-                    raise ValueError(
-                        f"fx_fixing_dates must be between start and payment dates. fx_fixing_date: {fd}, start_accrual_date: {rc.start_accrual_date}, payment_date: {rc.payment_date}"
-                    )
-
-    def get_fx_rate_values(
-        self, market: Market, original_currency: Currency, fx_fixing_dates: list[date]
-    ) -> np.ndarray:
-        past_fx_rates = [
-            market.get_currency_pair(
-                t, original_currency, self.compensation_currency
-            ).value
-            for t in fx_fixing_dates
-            if t <= market.t
-        ]
-        if len(past_fx_rates) == len(self.fx_fixing_dates):
-            return np.array(past_fx_rates)
-        else:
-            future_fx_rates = [
-                market.accrue_currency_pair(
-                    original_currency, self.compensation_currency, t
-                ).value
-                for t in fx_fixing_dates[len(past_fx_rates) :]
-            ]
-            all_fx = past_fx_rates + future_fx_rates
-            return np.array(all_fx)
-
-    def get_receive_flows_value(
-        self, market: Market = None, locality: Locality = None
-    ) -> np.ndarray:
-        original_currency_receive_flows = self.receive_leg.get_flows(
-            market=market, locality=locality
-        )
-        fx_fixing_dates = self.fx_fixing_lag[-len(original_currency_receive_flows) :]
-        fx_rates = self.get_fx_rate_values(
-            market, self.receive_leg.currency, fx_fixing_dates
-        )
-        return original_currency_receive_flows * fx_rates
-
-    def get_pay_flows_value(
-        self, market: Market = None, locality: Locality = None
-    ) -> float:
-        original_currency_pay_flows = self.pay_leg.get_flows(
-            market=market, locality=locality
-        )
-        fx_fixing_dates = self.fx_fixing_lag[-len(original_currency_pay_flows) :]
-        fx_rates = self.get_fx_rate_values(
-            market, self.pay_leg.currency, fx_fixing_dates
-        )
-        return original_currency_pay_flows * fx_rates
+        return Calculator.get_swap_mtm(self, market, currency)

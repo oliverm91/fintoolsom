@@ -26,7 +26,7 @@ class Coupon:
     accrue_rate: Rate = field(init=False)
 
     def __post_init__(self):
-        self.validate_inputs()
+        self._validate_inputs()
         self.amortization = float(self.amortization)
         self.interest = float(self.interest)
         self.flow = self.amortization + self.interest
@@ -44,7 +44,7 @@ class Coupon:
             ),
         )
 
-    def validate_inputs(self):
+    def _validate_inputs(self):
         if not isinstance(self.amortization, (float, int)):
             raise TypeError(
                 f"Amortization must be an int or float. Got {type(self.amortization)}"
@@ -123,7 +123,7 @@ class Coupons:
                 )
         self.sort()
         if self.check_residuals:
-            self.validate_residuals()
+            self._validate_residuals()
 
     def copy(self) -> Self:
         return Coupons([c.copy() for c in self.coupons])
@@ -137,13 +137,17 @@ class Coupons:
         self.flows = self.get_flows()
         self.end_dates = self.get_end_dates()
 
-    def validate_residuals(self):
+    def _validate_residuals(self):
         for i in range(len(self.coupons)):
             calculated_residual = sum(
                 [self.coupons[j].amortization for j in range(i, len(self.coupons))]
             )
+            # Remaining amortizations must repay the residual (within 1%), both ways.
             if (
-                round(calculated_residual, 1) / round(self.coupons[i].residual, 1) - 1
+                abs(
+                    round(calculated_residual, 1) / round(self.coupons[i].residual, 1)
+                    - 1
+                )
                 > 1 / 100
             ):
                 raise ValueError(
@@ -195,11 +199,11 @@ class Coupons:
             n += coupon.amortization
             coupon.residual *= ratio
         if self.check_residuals:
-            if round(float(n), 1) / round(float(notional), 1) - 1 >= 1 / 100:
+            if abs(round(float(n), 1) / round(float(notional), 1) - 1) >= 1 / 100:
                 raise ValueError(
                     f"Could not adjust to notional {notional}. Sum of amortization is {n}."
                 )
-            self.validate_residuals()
+            self._validate_residuals()
 
 
 class CLBond:
@@ -352,7 +356,7 @@ class CLBond:
             zc_curve.parallel_bump_rates_bps(-bp_bump)
             return bumped_val - irr_value
 
-        result = newton(bp_bump_curve_value, initial_guess)
+        result = newton(bp_bump_curve_value, initial_guess, maxiter=maxiter)
         return result
 
     def get_irr_from_present_value(
@@ -376,7 +380,7 @@ class CLBond:
             irr (Rate): The internal rate of return of the bond.
         """
         irr_initial_guess = (
-            self.accrue_rate.rate_value if initial_guess is None else initial_guess
+            self.accrue_rate.rate if initial_guess is None else initial_guess
         )
 
         def objective_function(irr_value: float) -> float:
@@ -431,7 +435,7 @@ class CLBond:
         tera = self.get_irr_from_present_value(
             self.start_date, 100.0, tera_rate_convention
         )
-        tera.rate_value = round(tera.rate_value, 6)
+        tera.rate = round(tera.rate, 6)
         self.tera = tera
         return tera
 
@@ -593,7 +597,7 @@ class CLBond:
             self.get_present_value(date, self.tera) * (self.notional / 100) * fx
         )
         dv01 = self.get_dv01(date, self.tera) * fx
-        initial_guess = self.tera.rate_value + ((amount - tera_value) / dv01) / 10_000
+        initial_guess = self.tera.rate + ((amount - tera_value) / dv01) / 10_000
         div_value = min(self.notional / 1000, 10)
 
         def objective_function(irr_value: float) -> float:

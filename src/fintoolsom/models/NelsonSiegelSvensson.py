@@ -1,6 +1,6 @@
+import warnings
 from dataclasses import dataclass, field
 from datetime import date
-from dateutil.relativedelta import relativedelta
 from typing import Optional
 from scipy.optimize import minimize
 
@@ -12,7 +12,37 @@ from ..rates.ZeroCouponCurve import ZeroCouponCurve
 from ..dates import ActualDayCountConvention
 
 
-def _nss_rate(
+# ── NSS formulas ──
+
+
+def nss_factors(t: float | np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
+    """Factor loadings [level, slope, curvature, 2nd curvature] at year fraction `t`.
+
+    Shape (4,) for scalar `t`, (n, 4) for an array: the zero rate is linear in the
+    betas, r(t) = nss_factors(t) @ [b0, b1, b2, b3]. At t=0 the formulas are 0/0; the
+    limits [1, 1, 0, 0] are used (r(0) = b0 + b1, the instantaneous short rate)."""
+    t = np.asarray(t, dtype=float)
+    at_zero = t == 0.0
+    safe_t = np.where(at_zero, 1.0, t)
+    lambda_t = safe_t / lambda_
+    mu_t = mu_ * safe_t
+    e_minus_lambda_t = np.exp(-lambda_t)
+    e_minus_mu_t = np.exp(-mu_t)
+    slope = (1 - e_minus_lambda_t) / lambda_t
+    curvature = slope - e_minus_lambda_t
+    curvature_2 = (1 - e_minus_mu_t) / mu_t - e_minus_mu_t
+    return np.stack(
+        (
+            np.ones_like(t),
+            np.where(at_zero, 1.0, slope),
+            np.where(at_zero, 0.0, curvature),
+            np.where(at_zero, 0.0, curvature_2),
+        ),
+        axis=-1,
+    )
+
+
+def nss_rate(
     t: float | np.ndarray,
     beta0: float,
     beta1: float,
@@ -21,17 +51,23 @@ def _nss_rate(
     lambda_: float,
     mu_: float,
 ) -> float | np.ndarray:
-    lambda_t = t / lambda_
-    mu_t = mu_ * t
+    """Nelson-Siegel-Svensson continuously-compounded act/365 zero rate at year fraction `t`."""
+    return nss_factors(t, lambda_, mu_) @ np.array([beta0, beta1, beta2, beta3])
 
-    e_minus_lambda_t = np.exp(-lambda_t)
-    aux_term_lambda = (1 - e_minus_lambda_t) / lambda_t
-    e_minus_mu_t = np.exp(-mu_t)
-    return (
-        beta0
-        + beta1 * aux_term_lambda
-        + beta2 * (aux_term_lambda - e_minus_lambda_t)
-        + beta3 * ((1 - e_minus_mu_t) / mu_t - e_minus_mu_t)
+
+def nss_df(
+    t: float | np.ndarray,
+    beta0: float,
+    beta1: float,
+    beta2: float,
+    beta3: float,
+    lambda_: float,
+    mu_: float,
+) -> float | np.ndarray:
+    """Discount factor exp(-r(t)·t) at year fraction `t` (1 at t=0)."""
+    return np.exp(
+        -nss_rate(t, beta0, beta1, beta2, beta3, lambda_, mu_)
+        * np.asarray(t, dtype=float)
     )
 
 
@@ -55,14 +91,29 @@ class NelsonSiegelSvensson:
         )
 
     def get_rate(self, t: float | np.ndarray) -> float | np.ndarray:
-        return NelsonSiegelSvensson._get_rate(
-            t, self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_
-        )
+        return nss_rate(t, *self.get_params())
 
     def get_df(self, t: float | np.ndarray) -> float | np.ndarray:
-        return np.exp(-self.get_rate(t) * t)
+        return nss_df(t, *self.get_params())
 
     def calibrate(
+        self,
+        calibration_date: date,
+        bonds_irr_list: list[tuple[CLBond, Rate]],
+        initial_guess: Optional[list[float]] = None,
+        method: Optional[str] = "powell",
+    ):
+        """Deprecated alias of :meth:`calibrate_from_bonds`."""
+        warnings.warn(
+            "NelsonSiegelSvensson.calibrate is deprecated; use calibrate_from_bonds instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.calibrate_from_bonds(
+            calibration_date, bonds_irr_list, initial_guess, method
+        )
+
+    def calibrate_from_bonds(
         self,
         calibration_date: date,
         bonds_irr_list: list[tuple[CLBond, Rate]],
@@ -103,7 +154,7 @@ class NelsonSiegelSvensson:
         ns_pvs = np.zeros(len(bonds_ts))
 
         def get_valuation_error(params):
-            ns_dfs = np.exp(-NelsonSiegelSvensson._get_rate(flat_ts, *params) * flat_ts)
+            ns_dfs = nss_df(flat_ts, *params)
             flows_vps = ns_dfs * flat_flows
             for ix, start_length in enumerate(starts_lengths):
                 start, length = start_length
@@ -111,12 +162,9 @@ class NelsonSiegelSvensson:
             return sum((ns_pvs - mkt_pvs) ** 2)
 
         if initial_guess is None:
-            self.b0 = sum([irr.rate_value for _, irr in bonds_irr_list]) / len(
-                bonds_irr_list
-            )
+            self.b0 = sum([irr.rate for _, irr in bonds_irr_list]) / len(bonds_irr_list)
             short_term_yields = [
-                irr.rate_value
-                for _, irr in bonds_irr_list[: min(3, len(bonds_irr_list))]
+                irr.rate for _, irr in bonds_irr_list[: min(3, len(bonds_irr_list))]
             ]
             self.b1 = sum(short_term_yields) / len(short_term_yields) - self.b0
             self.b2 = 0
@@ -211,68 +259,10 @@ class NelsonSiegelSvensson:
         betas, *_ = np.linalg.lstsq(design_matrix, target_rates, rcond=None)
         self.b0, self.b1, self.b2, self.b3 = betas
 
-    @staticmethod
-    def _get_design_matrix(t: np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
-        lambda_t = t / lambda_
-        mu_t = mu_ * t
-        e_minus_lambda_t = np.exp(-lambda_t)
-        aux_term_lambda = (1 - e_minus_lambda_t) / lambda_t
-        e_minus_mu_t = np.exp(-mu_t)
-        x1 = aux_term_lambda
-        x2 = aux_term_lambda - e_minus_lambda_t
-        x3 = (1 - e_minus_mu_t) / mu_t - e_minus_mu_t
-        return np.column_stack((np.ones_like(t), x1, x2, x3))
-
-    @staticmethod
-    def _get_rate(
-        t: float | np.ndarray,
-        b0: float,
-        b1: float,
-        b2: float,
-        b3: float,
-        lambda_: float,
-        mu_: float,
-    ) -> float | np.ndarray:
-        return _nss_rate(t, b0, b1, b2, b3, lambda_, mu_)
-
-    @staticmethod
-    def _get_df(
-        t: float | np.ndarray,
-        b0: float,
-        b1: float,
-        b2: float,
-        b3: float,
-        lambda_: float,
-        mu_: float,
-    ) -> float | np.ndarray:
-        return np.exp(
-            -NelsonSiegelSvensson._get_rate(t, b0, b1, b2, b3, lambda_, mu_) * t
-        )
-
-    def get_curve(
-        self,
-        calibration_date: date,
-        bonds_irr_list: list[tuple[CLBond, Rate]],
-        initial_guess: list[float] | None = None,
-        method: str = "powell",
-    ) -> ZeroCouponCurve:
-        bonds_irr_list = [
-            (bond, irr)
-            for bond, irr in bonds_irr_list
-            if bond.get_maturity_date() > calibration_date
-        ]
-        self.calibrate(
-            calibration_date, bonds_irr_list, initial_guess=initial_guess, method=method
-        )
-        dates = [
-            calibration_date + relativedelta(months=i) + relativedelta(days=1)
-            for i in range(0, 12 * 20, 1)
-        ]
-        dfs = self.get_df(
-            np.array([(mat - calibration_date).days / 365 for mat in dates])
-        )
-        curve = ZeroCouponCurve(calibration_date, date_dfs=list(zip(dates, dfs)))
-        return curve
+    # The module-level formulas, as static methods.
+    _get_design_matrix = staticmethod(nss_factors)
+    _get_rate = staticmethod(nss_rate)
+    _get_df = staticmethod(nss_df)
 
     def get_params(self) -> list[float]:
         return [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]

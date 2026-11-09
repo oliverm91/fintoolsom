@@ -1,24 +1,26 @@
-# Localities have currencies and calendars
-
-from dataclasses import dataclass, field
-
-from .currencies import Currency
-from ..dates import Calendar
+from enum import Enum
 
 
-@dataclass(slots=True)
-class Locality:
-    name: str
-    currency: Currency
-    calendar: Calendar = field(default=None)
-
-    def __post_init__(self):
-        self.name = self.name.upper()
-        if self.calendar is None:
-            try:
-                self.calendar = Calendar(country=self.name)
-            except NotImplementedError:
-                print(
-                    f"Warning. No calendar for {self.name}. Using default calendar (only holidays are Saturday and Sunday)."
-                )
-                self.calendar = Calendar()
+class Locality(Enum):
+    US = "US"
+    EU = "DE"
+    GB = "GB"
+    JP = "JP"
+    CH = "CH"
+    CL = "CL"
+    BR = "BR"
+    RU = "RU"
+    CN = "CN"
+    IN = "IN"
+    AU = "AU"
+    NZ = "NZ"
+    HK = "HK"
+    SG = "SG"
+    KR = "KR"
+    TH = "TH"
+    CO = "CO"
+    MX = "MX"
+    BN = "BN"
+    SE = "SE"
+    NO = "NO"
+    PE = "PE"

@@ -5,10 +5,11 @@ from typing import Self
 
 import numpy as np
 
-from ..rates import ZeroCouponCurve
+from ..rates import Curve
+from .localities import Locality
 
 
-class Currency(Enum):
+class CurrencyName(Enum):
     USD = "USD"
     EUR = "EUR"
     GBP = "GBP"
@@ -30,6 +31,112 @@ class Currency(Enum):
     BND = "BND"
     SEK = "SEK"
     NOK = "NOK"
+    PEN = "PEN"
+    CLF = "CLF"  # Unidad de Fomento (UF)
+
+
+_CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
+    CurrencyName.USD: Locality.US,
+    CurrencyName.EUR: Locality.EU,
+    CurrencyName.GBP: Locality.GB,
+    CurrencyName.JPY: Locality.JP,
+    CurrencyName.CHF: Locality.CH,
+    CurrencyName.CLP: Locality.CL,
+    CurrencyName.BRL: Locality.BR,
+    CurrencyName.RUB: Locality.RU,
+    CurrencyName.CNY: Locality.CN,
+    CurrencyName.INR: Locality.IN,
+    CurrencyName.AUD: Locality.AU,
+    CurrencyName.NZD: Locality.NZ,
+    CurrencyName.HKD: Locality.HK,
+    CurrencyName.SGD: Locality.SG,
+    CurrencyName.KRW: Locality.KR,
+    CurrencyName.THB: Locality.TH,
+    CurrencyName.COP: Locality.CO,
+    CurrencyName.MXN: Locality.MX,
+    CurrencyName.BND: Locality.BN,
+    CurrencyName.SEK: Locality.SE,
+    CurrencyName.NOK: Locality.NO,
+    CurrencyName.PEN: Locality.PE,
+    CurrencyName.CLF: Locality.CL,
+}
+
+
+class Currency:
+    """A currency, identified by its ISO name.
+
+    Parameters
+    ----------
+    name : CurrencyName
+        ISO name.
+    settles_in : Currency, optional
+        For a unit of account that cannot be delivered (the UF, ``CLF``), the
+        currency its flows are paid in, converted at the rate of their fixing
+        date. None for a deliverable currency.
+
+    Attributes
+    ----------
+    locality : Locality
+        Locality whose calendar the currency uses.
+    """
+
+    def __init__(self, name: CurrencyName, settles_in: "Currency | None" = None):
+        self.name = name
+        self.locality: Locality = _CURRENCY_LOCALITY_MAP[name]
+        self.settles_in = settles_in
+
+    @property
+    def value(self) -> str:
+        """ISO code."""
+        return self.name.value
+
+    @property
+    def is_deliverable(self) -> bool:
+        """False for a unit of account settled in another currency (the UF)."""
+        return self.settles_in is None
+
+    @property
+    def settlement_currency(self) -> "Currency":
+        """Currency flows in this currency are paid in (itself when deliverable)."""
+        return self if self.settles_in is None else self.settles_in
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Currency) and self.name == other.name
+
+    def __repr__(self) -> str:
+        return f"Currency({self.name.value})"
+
+    def __str__(self) -> str:
+        return self.name.value
+
+
+Currency.USD = Currency(CurrencyName.USD)
+Currency.EUR = Currency(CurrencyName.EUR)
+Currency.GBP = Currency(CurrencyName.GBP)
+Currency.JPY = Currency(CurrencyName.JPY)
+Currency.CHF = Currency(CurrencyName.CHF)
+Currency.CLP = Currency(CurrencyName.CLP)
+Currency.BRL = Currency(CurrencyName.BRL)
+Currency.RUB = Currency(CurrencyName.RUB)
+Currency.CNY = Currency(CurrencyName.CNY)
+Currency.INR = Currency(CurrencyName.INR)
+Currency.AUD = Currency(CurrencyName.AUD)
+Currency.NZD = Currency(CurrencyName.NZD)
+Currency.HKD = Currency(CurrencyName.HKD)
+Currency.SGD = Currency(CurrencyName.SGD)
+Currency.KRW = Currency(CurrencyName.KRW)
+Currency.THB = Currency(CurrencyName.THB)
+Currency.COP = Currency(CurrencyName.COP)
+Currency.MXN = Currency(CurrencyName.MXN)
+Currency.BND = Currency(CurrencyName.BND)
+Currency.SEK = Currency(CurrencyName.SEK)
+Currency.NOK = Currency(CurrencyName.NOK)
+Currency.PEN = Currency(CurrencyName.PEN)
+# The UF is a CLP unit of account: UF flows are paid in CLP at the UF of their fixing.
+Currency.CLF = Currency(CurrencyName.CLF, settles_in=Currency.CLP)
 
 
 @dataclass(slots=True)
@@ -76,8 +183,8 @@ class FX_Rate:
     def get_accrued_value_date(
         self,
         t: date,
-        base_currency_curve: ZeroCouponCurve,
-        quote_currency_curve: ZeroCouponCurve,
+        base_currency_curve: Curve,
+        quote_currency_curve: Curve,
     ) -> float:
         base_df = base_currency_curve.get_df(t)
         quote_df = quote_currency_curve.get_df(t)
@@ -86,8 +193,8 @@ class FX_Rate:
     def get_accrued_values_dates(
         self,
         ts: list[date],
-        base_currency_curve: ZeroCouponCurve,
-        quote_currency_curve: ZeroCouponCurve,
+        base_currency_curve: Curve,
+        quote_currency_curve: Curve,
     ) -> np.ndarray:
         base_df = base_currency_curve.get_dfs(ts)
         quote_df = quote_currency_curve.get_dfs(ts)

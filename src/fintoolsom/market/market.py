@@ -1,28 +1,69 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING
+
+import numpy as np
 
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
-from .index import Index, IndexData
-from .localities import Locality
-from ..rates import Rate, ZeroCouponCurve
-from ..dates import Calendar
+from .index import Index
+from .index_history import IndexHistory
+from ..rates import Rate, Curve, IndexCurve, LegacyCurve
+from ..dates import Calendar, get_calendar
+
+if TYPE_CHECKING:
+    # Deferred: volatility_surface imports derivatives.calculator, which imports
+    # Swap (derivatives.swaps -> market.currencies), so a runtime import here
+    # would cycle back into this module before Market is defined.
+    from .volatility_surface import VolatilitySurface
 
 
 @dataclass(slots=True)
 class Market:
     t: date
     fx_history: dict[CurrencyPair, FX_RateData] = field(default_factory=dict)
-    indexes_history: dict[str, IndexData] = field(default_factory=dict)
+    indexes_history: dict[str, IndexHistory] = field(default_factory=dict)
+    interest_rates: dict[str, dict[date, Rate]] = field(default_factory=dict)
+    index_to_interest_rate_map: dict[str, str] = field(default_factory=dict)
 
-    # How should curves be assigned?
-    # All curves have a currency. Curves might or not be assigned to an index (ICP, Ibor, or USD_CL which has no Index)
-    # First filter per Currency.
-    # Filter per Index.
-    zero_coupon_curve_mapper: dict[
-        str, ZeroCouponCurve | dict[Locality, dict[Currency, ZeroCouponCurve]]
-    ] = field(default_factory=dict)  # First key is index_name which can be None.
+    interest_rate_to_index_map: dict[str, str] = field(init=False, default_factory=dict)
+
+    # The market's funding index (Chile: ICP): the numeraire its discount curves are
+    # built under. Uncollateralised flows in its currency discount on its curve.
+    risk_free_index: Index | None = None
+
+    # Every curve, under its id (``curve.get_id()``):
+    #   IndexCurve    -> "<index name>" (ICP, SOFR, a term index): projects that index
+    #                    and discounts with it.
+    #   DiscountCurve -> "<currency>_<risk-free index>" (e.g. "USD_ICP"): a currency
+    #                    other than the risk-free index's, implied from cross-currency
+    #                    products.
+    # Collateralised discounting across currencies is not stored: get_dfs derives it.
+    # Construction also accepts an iterable of curves.
+    curves: dict[str, Curve] = field(default_factory=dict)
+    volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self):
+        if self.risk_free_index is not None and self.risk_free_index.currency is None:
+            raise ValueError(
+                f"risk_free_index '{self.risk_free_index.name}' needs a currency: it funds that currency."
+            )
+        if isinstance(self.curves, dict):
+            for key, curve in self.curves.items():
+                if isinstance(curve, Curve) and key != curve.get_id():
+                    raise ValueError(
+                        f"Curve stored under '{key}' has id '{curve.get_id()}'."
+                    )
+            given = list(self.curves.values())
+        else:
+            given = list(self.curves)
+        self.curves = {}
+        for curve in given:
+            self.set_curve(curve)
+        fxs_to_add = {}
         for cp, fx_data in self.fx_history.items():
             # Check fx_history FX_RateData is correctly mapped to CurrencyPairs.
             if cp != fx_data.currency_pair:
@@ -31,17 +72,15 @@ class Market:
                 )
             # Add inverted data
             if cp.invert() not in self.fx_history:
-                self.fx_history[cp.invert()] = fx_data.invert()
+                fxs_to_add[cp.invert()] = fx_data.invert()
+        for cp, fx_data in fxs_to_add.items():
+            self.fx_history[cp] = fx_data
 
-        for k in list(self.zero_coupon_curve_mapper.items()):
-            v = self.zero_coupon_curve_mapper.pop(k)
-            self.zero_coupon_curve_mapper[k.upper()] = v
-
-        for k in list(self.interest_rates.items()):
+        for k in list(self.interest_rates.keys()):
             v = self.interest_rates.pop(k)
             self.interest_rates[k.upper()] = v
 
-        for k in list(self.indexes_history.items()):
+        for k in list(self.indexes_history.keys()):
             v = self.indexes_history.pop(k)
             self.indexes_history[k.upper()] = v
 
@@ -50,56 +89,189 @@ class Market:
             for index_name, rate_name in self.index_to_interest_rate_map.items()
         }
 
-        # Invert currency pairs
-        for cp_history_dict in self.currency_pairs_history.values():
-            for cp_date, cp in cp_history_dict.items():
-                inverted_cp = cp.invert()
-                self.currency_pairs_history[inverted_cp.name][cp_date] = inverted_cp
+    # ── Curves ───────────────────────────────────────────────────────────────
 
-    def add_index(self, index: Index):
-        if index.name not in self.indexes_history:
-            self.indexes_history[index.name] = {}
-        self.indexes_history[index.name][index.index_date] = index
+    def set_curve(self, curve: Curve) -> None:
+        """Store `curve` under its id, replacing any curve with that id.
 
-    def add_currency_pair(self, currency_pair: CurrencyPair):
-        if currency_pair.name not in self.currency_pairs_history:
-            self.currency_pairs_history[currency_pair.name] = {}
-        self.currency_pairs_history[currency_pair.name][currency_pair.cp_date] = (
-            currency_pair
+        Two indexes with the same name share an id: keeping names unique is the
+        caller's responsibility.
+
+        Raises
+        ------
+        TypeError
+            If `curve` is not a :class:`Curve` (e.g. a legacy ZeroCouponCurve).
+        """
+        if isinstance(curve, LegacyCurve):
+            raise TypeError(
+                f"{type(curve).__name__} is a legacy curve and cannot be stored in a Market; "
+                "use IndexCurve / DiscountCurve (see their from_zero_coupon_curve)."
+            )
+        if not isinstance(curve, Curve):
+            raise TypeError(
+                f"Market curves must be Curve instances, got {type(curve).__name__}."
+            )
+        self.curves[curve.get_id()] = curve
+
+    def get_index_curve(self, index: Index) -> IndexCurve:
+        """Curve of `index`: it projects the index and discounts with it.
+
+        Raises
+        ------
+        KeyError
+            If the market has no curve for `index`.
+        """
+        curve = self.curves.get(index.name)
+        if not isinstance(curve, IndexCurve):
+            raise KeyError(f"No index curve for '{index.name}' in market.")
+        return curve
+
+    def get_discount_curve(
+        self, currency: Currency, *, risk_free_index: Index | None = None
+    ) -> Curve:
+        """Uncollateralised discount curve of `currency` under `risk_free_index`.
+
+        The risk-free index's own curve for its currency, else the stored
+        ``"<currency>_<index>"`` :class:`DiscountCurve`.
+
+        Parameters
+        ----------
+        currency : Currency
+            Currency of the flows.
+        risk_free_index : Index, optional
+            Numeraire; defaults to :attr:`risk_free_index`.
+
+        Raises
+        ------
+        ValueError
+            If no risk-free index is given or set on the market.
+        KeyError
+            If no curve was built for that currency under that numeraire.
+        """
+        rfi = risk_free_index if risk_free_index is not None else self.risk_free_index
+        if rfi is None:
+            raise ValueError(
+                "Market has no risk_free_index; cannot resolve discount curves."
+            )
+        if currency == rfi.currency:
+            return self.get_index_curve(rfi)
+        curve_id = f"{currency.value}_{rfi.name}"
+        try:
+            return self.curves[curve_id]
+        except KeyError:
+            raise KeyError(f"No discount curve '{curve_id}' in market.") from None
+
+    def get_dfs(
+        self,
+        currency: Currency,
+        dates: list[date],
+        *,
+        collateral: Index | None = None,
+        risk_free_index: Index | None = None,
+    ) -> np.ndarray:
+        """Discount factors of `currency` flows paid on `dates`.
+
+        Uncollateralised: one curve, :meth:`get_discount_curve`. Collateral in the
+        flows' currency: the collateral index's curve. Collateral in another
+        currency: ``disc(ccy) * curve(collateral) / disc(collateral.ccy)``.
+
+        Parameters
+        ----------
+        currency : Currency
+            Currency of the flows.
+        dates : list of date
+            Payment dates.
+        collateral : Index, optional
+            CSA collateral index; None means uncollateralised.
+        risk_free_index : Index, optional
+            Numeraire of the discount curves; defaults to :attr:`risk_free_index`.
+
+        Returns
+        -------
+        numpy.ndarray
+        """
+        if collateral is None:
+            return self.get_discount_curve(
+                currency, risk_free_index=risk_free_index
+            ).get_dfs(dates)
+        if collateral.currency == currency:
+            return self.get_index_curve(collateral).get_dfs(dates)
+        return (
+            self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(
+                dates
+            )
+            * self.get_index_curve(collateral).get_dfs(dates)
+            / self.get_discount_curve(
+                collateral.currency, risk_free_index=risk_free_index
+            ).get_dfs(dates)
         )
-        inverted_pair = currency_pair.invert()
-        self.currency_pairs_history[currency_pair.name][inverted_pair.cp_date] = (
-            inverted_pair
+
+    def get_df(
+        self,
+        currency: Currency,
+        t: date,
+        *,
+        collateral: Index | None = None,
+        risk_free_index: Index | None = None,
+    ) -> float:
+        """Single-date :meth:`get_dfs`."""
+        return float(
+            self.get_dfs(
+                currency, [t], collateral=collateral, risk_free_index=risk_free_index
+            )[0]
         )
 
-    def get_index(self, t: date, name: str) -> Index:
+    def add_index(self, history: IndexHistory):
+        """Register `history` under its index name (case-insensitive)."""
+        self.indexes_history[history.name.upper()] = history
+
+    def get_index(self, name: str) -> IndexHistory:
+        """History of the index `name` (case-insensitive).
+
+        Raises
+        ------
+        KeyError
+            If no history is registered under `name`.
+        """
+        name = name.upper()
         if name in self.indexes_history:
-            if t in self.indexes_history[name]:
-                return self.indexes_history[name][t]
-            raise KeyError(f"Index {name} not found for date {t}.")
-
+            return self.indexes_history[name]
         raise KeyError(f"Index {name} not found in market.")
 
     def get_rate(self, t: date, name: str, use_closest_past_rate: bool = False) -> Rate:
-        if name in self.interest_rates:
-            if t in self.interest_rates[name]:
-                return self.interest_rates[name][t]
-            if not use_closest_past_rate:
-                raise ValueError(f"Rate {name} not found for date {t}.")
-            else:
-                past_dates = [
-                    x
-                    for x in self.interest_rates
-                    if x < t and name in self.interest_rates[x]
-                ]
-                if len(past_dates) == 0:
-                    raise ValueError(
-                        f"Rate {name} not found for date {t} and there were no past dates."
-                    )
-                last_rate_date = max(past_dates)
-                return self.interest_rates[name][last_rate_date]
+        """Rate `name` fixed on `t`, from ``interest_rates``.
 
-        raise ValueError(f"Rate {name} not found.")
+        Parameters
+        ----------
+        t : date
+            Fixing date.
+        name : str
+            Rate series name.
+        use_closest_past_rate : bool, default False
+            Fall back to the latest fixing before `t` when there is none on `t`.
+
+        Returns
+        -------
+        Rate
+
+        Raises
+        ------
+        ValueError
+            If the series is unknown, or no fixing is found.
+        """
+        if name not in self.interest_rates:
+            raise ValueError(f"Rate {name} not found.")
+        series = self.interest_rates[name]
+        if t in series:
+            return series[t]
+        if not use_closest_past_rate:
+            raise ValueError(f"Rate {name} not found for date {t}.")
+        past_dates = [d for d in series if d < t]
+        if not past_dates:
+            raise ValueError(
+                f"Rate {name} not found for date {t} and there were no past dates."
+            )
+        return series[max(past_dates)]
 
     def accrue_rates_reset_business_days(
         self,
@@ -112,7 +284,7 @@ class Market:
         use_closest_past_rate_for_fixing: bool = False,
     ) -> float:
         if calendar is None:
-            calendar = Calendar()
+            calendar = get_calendar()
         if fixing_lag < 0:
             raise ValueError(
                 f"fixing_lag must be greater than or equal to 0. Got {fixing_lag}."
@@ -124,17 +296,17 @@ class Market:
         t = start_date
         acrrued_interest = 0
         while t < end_date:
-            reset_date = calendar.add_business_day(t, -fixing_lag)
+            reset_date = calendar.add_business_days(t, -fixing_lag)
             rate = self.get_rate(
                 reset_date,
                 rate_name,
                 use_closest_past_rate=use_closest_past_rate_for_fixing,
             )
-            next_business_day = calendar.add_business_day(t, 1)
+            next_business_day = calendar.add_business_days(t, 1)
             acrrued_interest += rate.get_accrued_interest(
                 notional + acrrued_interest, t, min(next_business_day, end_date)
             )
-            t = calendar.add_business_day(t, 1)
+            t = calendar.add_business_days(t, 1)
 
         return acrrued_interest
 
@@ -150,7 +322,7 @@ class Market:
         reset_dates.sort()
         if reset_dates[0] > start_date:
             raise ValueError(
-                f"First reset date must be after start date. Got Start date: {start_date} and min reset date: {reset_dates[0]}."
+                f"First reset date must be on or before the start date. Got Start date: {start_date} and min reset date: {reset_dates[0]}."
             )
         if start_date > end_date:
             raise ValueError(
@@ -176,7 +348,7 @@ class Market:
             # If we have not reach the end of reset dates AND next_t is after end_date, we need to accrue till the end date. Case when custom dates are after accrual period
             if next_t > end_date:
                 next_t = end_date  # As t becomes next_t, loop will end.
-            acrrued_interest = rate.get_accrued_interest(
+            acrrued_interest += rate.get_accrued_interest(
                 notional + acrrued_interest, t, next_t
             )
             reset_counter += 1
@@ -207,53 +379,78 @@ class Market:
         )
         return rate.get_accrued_interest(notional, start_date, end_date)
 
-    def get_zero_coupon_curve(
-        self, currency: Currency, locality: Locality = None, index_name: str = None
-    ) -> ZeroCouponCurve:
-        currency_str = currency.value
-        if currency_str not in self.zero_coupon_curve_mapper:
-            raise KeyError(f"No zero coupon curve found for currency {currency_str}.")
-        currency_curves_dict = self.zero_coupon_curve_mapper[
-            currency_str
-        ]  # This dict has locality and index_name as keys
+    def get_volatility_surface(self, currency_pair: CurrencyPair) -> VolatilitySurface:
+        if currency_pair not in self.volatility_surfaces:
+            raise KeyError(
+                f"No volatility surface found for currency pair {currency_pair}."
+            )
+        return self.volatility_surfaces[currency_pair]
 
-        if locality is None and index_name is None:
-            raise ValueError("locality and index_name cannot both be None.")
+    def get_fx_known_until(self, currency_pair: CurrencyPair) -> date:
+        """Last date whose rate of `currency_pair` is known as of ``self.t``.
 
-        if locality is not None:
-            if locality not in currency_curves_dict:
-                raise KeyError(
-                    f"No zero coupon curve found for currency {currency_str} and locality {locality}."
-                )
-            return currency_curves_dict[locality]
-        else:
-            index_name = index_name.upper()
-            if index_name not in currency_curves_dict:
-                raise KeyError(
-                    f"No zero coupon curve found for currency {currency_str} and index {index_name}."
-                )
-            return currency_curves_dict[index_name]
+        The latest date loaded for the pair when it is on or after ``self.t``,
+        else ``self.t``. A traded pair has nothing loaded after today, so this is
+        today; the UF (CLF/CLP) is published ahead of time, so loading its
+        published levels makes them known (see
+        :func:`fintoolsom.market.uf.last_published_date`). Rates after this date
+        are projected on the curves; do not load assumed levels (e.g. from a
+        forecast CPI) unless they are to be treated as fixed.
 
-    def get_discount_curve(
-        self,
-        currency: Currency,
-        collateral_index_name: str = None,
-        locality: Locality = None,
-    ) -> ZeroCouponCurve:
-        return self.get_zero_coupon_curve(
-            currency, locality=locality, index_name=collateral_index_name
-        )
+        Parameters
+        ----------
+        currency_pair : CurrencyPair
+            Pair considered.
+
+        Returns
+        -------
+        date
+        """
+        data = self.fx_history.get(currency_pair)
+        if data is None or not data.historic_data:
+            return self.t
+        return max(self.t, max(data.historic_data))
 
     def add_fx_rate(self, t: date, fx_rate: FX_Rate):
-        if fx_rate.currency_pair not in self.fx_history:
-            self.fx_history[fx_rate.currency_pair] = FX_RateData(
-                fx_rate.currency_pair, {t: fx_rate}
-            )
-        else:
-            self.fx_history[fx_rate.currency_pair].add_date(t, fx_rate)
+        """Store `fx_rate` at `t`, together with its inverse.
+
+        Parameters
+        ----------
+        t : date
+            Fixing date.
+        fx_rate : FX_Rate
+            Rate to store.
+        """
+        for fxr in (fx_rate, fx_rate.invert()):
+            data = self.fx_history.get(fxr.currency_pair)
+            if data is None:
+                self.fx_history[fxr.currency_pair] = FX_RateData(
+                    fxr.currency_pair, {t: fxr}
+                )
+            else:
+                data.add_date(t, fxr)
 
     def get_fx_rate(self, t: date, currency_pair: CurrencyPair) -> FX_Rate:
+        """FX rate of `currency_pair` at `t` (1 for a currency against itself).
+
+        Parameters
+        ----------
+        t : date
+            Fixing date.
+        currency_pair : CurrencyPair
+            Pair to look up.
+
+        Returns
+        -------
+        FX_Rate
+
+        Raises
+        ------
+        KeyError
+            If the pair or the date is not loaded.
+        """
+        if currency_pair.base_currency == currency_pair.quote_currency:
+            return FX_Rate(currency_pair, 1.0)
         if currency_pair in self.fx_history:
             return self.fx_history[currency_pair].get_fx_rate(t)
-        else:
-            raise KeyError(f"No {currency_pair} data loaded in market.")
+        raise KeyError(f"No {currency_pair} data loaded in market.")

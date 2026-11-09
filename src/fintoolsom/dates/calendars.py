@@ -4,6 +4,10 @@ from typing import Self
 
 from holidays import country_holidays, HolidayBase
 
+# Holiday categories added on top of public holidays, per country (ISO code).
+# Bank holidays close the financial markets: CL (31 Dec) and JP (2-3 Jan, 31 Dec).
+_EXTRA_CATEGORIES: dict[str, tuple[str, ...]] = {"CL": ("bank",), "JP": ("bank",)}
+
 
 @dataclass(slots=True)
 class Calendar:
@@ -24,14 +28,15 @@ class Calendar:
             if self.country is None:
                 self._calendar = HolidayBase()
             else:
-                self._extra_categories = ("bank",)
+                self._extra_categories = _EXTRA_CATEGORIES.get(self.country, ())
                 self._calendar = country_holidays(self.country, subdiv=self.subdiv)
                 if self._extra_categories:
-                    original_categories = set(self._calendar.categories)
-                    extra_categories = set(self._extra_categories)
-                    categories = original_categories | extra_categories
+                    # Rebuild once with the extra categories, keeping the subdivision.
+                    categories = set(self._calendar.categories) | set(
+                        self._extra_categories
+                    )
                     self._calendar = country_holidays(
-                        self.country, categories=categories
+                        self.country, subdiv=self.subdiv, categories=categories
                     )
 
             self._calendar.update(self.custom_holidays)
@@ -55,3 +60,22 @@ class Calendar:
 
     def __add__(self, other: Self) -> Self:
         return self.combine(other)
+
+
+# One shared calendar per country (None: weekends only). Building a country calendar
+# and filling its holiday years is costly, so every consumer that names a country
+# gets the same instance; a holiday added to it is seen by all of them.
+_CALENDARS: dict[str | None, Calendar] = {}
+
+
+def get_calendar(country: str | None = None) -> Calendar:
+    """The shared calendar of `country` (ISO code), built on first use."""
+    calendar = _CALENDARS.get(country)
+    if calendar is None:
+        calendar = _CALENDARS[country] = Calendar(country=country)
+    return calendar
+
+
+def resolve_calendar(calendar: "Calendar | str | None") -> Calendar:
+    """`calendar` itself, or the shared calendar of the country code it names."""
+    return calendar if isinstance(calendar, Calendar) else get_calendar(calendar)

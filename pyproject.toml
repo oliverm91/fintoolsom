@@ -13,7 +13,7 @@ authors = [
 ]
 keywords = ["fixed income", "dates", "rates", "curves"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3.11",
@@ -41,6 +41,7 @@ Homepage = "https://github.com/oliverm91/fintoolsom"
 dev = [
     "commitizen>=4.16.4",
     "pytest",
+    "pytest-cov>=7.1.0",
     "ruff",
 ]
 
@@ -55,9 +56,28 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fintoolsom"]
+# Subpackage READMEs are for the repository, not for installs.
+exclude = ["**/README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# CLBonds / NelsonSiegelSvensson tests still use the legacy ZeroCouponCurve on purpose.
+filterwarnings = ["ignore:ZeroCouponCurve is legacy:DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["fintoolsom"]
+branch = false
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 85
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

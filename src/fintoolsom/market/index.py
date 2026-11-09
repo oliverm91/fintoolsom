@@ -1,139 +1,185 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, KW_ONLY
 from datetime import date
-from typing import Self
+from typing import TYPE_CHECKING
 
-from ..rates import Rate
-from ..dates import Calendar
+from .currencies import Currency
+from ..dates import ActualDayCountConvention, Calendar, get_calendar
+from ..rates import LinearInterestConvention, RateConvention
+
+if TYPE_CHECKING:
+    from ..dates.term import Term
 
 
-@dataclass
-class Index:
+@dataclass(eq=False)
+class Index(ABC):
+    """Definition (identity) of a market index.
+
+    A definition holds no time series: fixings and the calculations using them
+    live in an :class:`~fintoolsom.market.index_history.IndexHistory`. Definitions
+    travel inside quotes and legs; histories are market data. Two indexes are
+    equal when their names are.
+
+    Parameters
+    ----------
+    name : str
+        Index name, the identity of the index.
+    currency : Currency, optional
+        Currency of the index (keyword-only).
+
+    Attributes
+    ----------
+    calendar : Calendar
+        Fixing and business-day calendar of the currency's locality (a plain
+        weekend calendar when there is no currency).
+    """
+
     name: str
+    _: KW_ONLY
+    currency: Currency = field(default=None)
+    # Fixing / business-day calendar, resolved from the currency's locality in __post_init__.
+    calendar: Calendar = field(init=False, default=None)
 
+    def __post_init__(self):
+        self.calendar = get_calendar(
+            self.currency.locality.value if self.currency is not None else None
+        )
 
-@dataclass
-class IndexData(ABC):
-    name: str
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Index) and self.name == other.name
 
     @abstractmethod
-    def get_accrued_interest(self, notional: float, start_date: date, end_date: date):
-        pass
+    def get_maturity(self, start_date: date) -> date:
+        """End of one accrual period of the index starting on `start_date`.
+
+        Parameters
+        ----------
+        start_date : date
+            Period start.
+
+        Returns
+        -------
+        date
+            The next business day for an overnight index, `start_date` advanced
+            by the tenor for a term rate.
+        """
+        ...
 
 
-@dataclass
-class OvernightIndexData(IndexData):
-    index_values: dict[date, float] = field(default_factory=dict)
-    overnight_rates: dict[date, Rate] = field(default_factory=dict)
+class InterestIndex(ABC):
+    """Marker for interest-bearing index definitions (their history accrues).
 
-    calendar: Calendar = field(default=None)
-
-    def __post_init__(self):
-        if self.calendar is None:
-            self.calendar = Calendar()
-        # If index_values dict is empty, fill it with artificial index starting from 100 at min(overnight_rates.keys())
-        if len(self.index_values) == 0:
-            if len(self.overnight_rates) == 0:
-                raise ValueError(
-                    "Either index_values or overnight_rates must be non-empty"
-                )
-            start_t = min(self.overnight_rates.keys())
-            max_t = max(self.overnight_rates.keys())
-            self.index_values[start_t] = 100
-            self._fill_index_period(self, start_t, max_t)
-
-    def _fill_index_period(
-        self, start_date: date, end_date: date, find_start_date: bool = False
-    ):
-        if find_start_date:
-            start_date = max(t for t in self.index_values.keys() if t <= start_date)
-            self._fill_index_period(start_date, end_date, find_start_date=False)
-            return
-        while start_date < end_date:
-            next_t = self.calendar.add_business_days(start_date, 1)
-            adj_next = min(next_t, end_date)
-            if adj_next not in self.index_values:
-                if start_date in self.overnight_rates:
-                    r = self.overnight_rates[start_date]
-                self.index_values[adj_next] = self.index_values[
-                    start_date
-                ] * r.get_wealth_factor(start_date, adj_next)
-            start_date = next_t
-
-    def add_index_value(self, t: date, index_value: float):
-        self.index_values[t] = index_value
-
-    def add_rate(self, t: date, rate: Rate, fill_index_for_next_t: bool = False):
-        self.overnight_rates[t] = rate
-        if fill_index_for_next_t:
-            next_t = self.calendar.add_business_days(t, 1)
-            if next_t not in self.index_values:
-                self.index_values[next_t] = self.index_values[
-                    t
-                ] * rate.get_wealth_factor(t, next_t)
-
-    def get_accrued_interest(
-        self,
-        notional: float,
-        start_date: date,
-        end_date: date,
-        fill_index_values_with_rates: bool = False,
-    ) -> float:
-        if start_date in self.index_values and end_date in self.index_values:
-            return notional * (
-                self.index_values[end_date] / self.index_values[start_date] - 1
-            )
-
-        if fill_index_values_with_rates:
-            self._fill_index_period(start_date, end_date)
-            return self.get_accrued_interest(
-                notional, start_date, end_date, fill_index_values_with_rates=False
-            )
-
-
-@dataclass
-class IborRateIndex(Index):
-    """
-    Examples: Ibor rates
+    Types interest-bearing references such as a floating-leg or collateral index,
+    so price-only indexes are excluded by type.
     """
 
-    rate: Rate
 
-    def copy(self) -> Self:
-        return IborRateIndex(self.name, self.rate.copy())
+@dataclass(eq=False)
+class RateIndex(Index, InterestIndex):
+    """Index whose fixings are :class:`Rate` values (e.g. SOFR, ESTR, LIBOR 3M).
 
-    def __str__(self) -> str:
-        return f"{self.name}:{self.rate.rate_value}"
+    Abstract by convention: use :class:`OvernightRateIndex` (daily compounding)
+    or :class:`TermRateIndex` (one fixing over a tenor).
+
+    Parameters
+    ----------
+    spot_lag : int, default 0
+        Business days from the fixing date to the accrual start (keyword-only):
+        0 for an overnight index, typically 2 for a term rate.
+    """
+
+    spot_lag: int = field(default=0, kw_only=True)
 
 
-class IborRateIndexData(ABC):
-    name: str
-    historic_data: dict[date, IborRateIndex]
+class OvernightIndex(ABC):
+    """Marker for indexes accrued by daily compounding (OIS-style: SOFR, ESTR, ICP).
 
-    def __post_init__(self):
-        for ri in self.historic_data.values():
-            if ri.name != self.name:
-                raise ValueError(
-                    f"All values in historic_data of RateIndex object must match RateIndexData object name. RateIndexData object name: {self.name}, found {ri.name} in historic_data"
-                )
+    Orthogonal to rate vs price: it combines with :class:`RateIndex` or
+    :class:`InterestPriceIndex`. It selects an ``OvernightLeg`` rather than a
+    ``TermRateLeg`` for legs on the index. Concrete overnight indexes advance
+    one business day per accrual period.
+    """
 
-    def add_date(self, t: date, rate_index: IborRateIndex):
-        self.historic_data[t] = rate_index
 
-    def get_rate_index(self, t: date) -> IborRateIndex:
-        if t in self.historic_data:
-            return self.historic_data[t]
-        else:
-            raise KeyError(f"Date {t} not found in {self.name} data.")
+@dataclass(eq=False)
+class OvernightRateIndex(OvernightIndex, RateIndex):
+    """Overnight rate index (e.g. SOFR, ESTR, Cámara).
 
-    def get_accrued_interest(
-        self,
-        notional: float,
-        start_date: date,
-        end_date: date,
-        fixing_date: date = None,
-    ) -> float:
-        if fixing_date is None:
-            fixing_date = start_date
-        fixed_rate = self.get_rate_index(fixing_date)
-        return fixed_rate.rate.get_accrued_interest(notional, start_date, end_date)
+    No tenor: each fixing covers one business day of the index calendar and
+    fixings compound daily.
+    """
+
+    def get_maturity(self, start_date: date) -> date:
+        # Overnight accrual spans one business day on the index's fixing calendar.
+        return self.calendar.add_business_days(start_date, 1)
+
+
+@dataclass(eq=False)
+class TermRateIndex(RateIndex):
+    """Term rate index (e.g. LIBOR 3M, Term SOFR, TAB).
+
+    Parameters
+    ----------
+    term : Term
+        Tenor covered by a single fixing.
+    spot_lag : int, default 2
+        Business days from the fixing date to the accrual start (keyword-only).
+    """
+
+    term: Term
+    spot_lag: int = field(default=2, kw_only=True)
+
+    def get_maturity(self, start_date: date) -> date:
+        # A term rate covers a full tenor: advance start_date by the term.
+        return self.term.advance(start_date)
+
+
+@dataclass(eq=False)
+class PriceIndex(Index):
+    """Index published as price levels.
+
+    Not an :class:`InterestIndex` by itself. Abstract by convention: use
+    :class:`OvernightInterestPriceIndex`. (The UF is not an index: it is the
+    currency ``Currency.CLF``, see :mod:`fintoolsom.market.uf`.)
+    """
+
+
+def _linear_act_360() -> RateConvention:
+    return RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
+
+
+@dataclass(eq=False)
+class InterestPriceIndex(PriceIndex, InterestIndex):
+    """Price index whose level ratio accrues interest (e.g. the Chilean ICP).
+
+    Both a price index and interest-bearing. Abstract by convention: use
+    :class:`OvernightInterestPriceIndex`.
+
+    Parameters
+    ----------
+    rate_convention : RateConvention, default linear Act/360
+        Convention in which a rate implied from two levels is quoted
+        (keyword-only). ICP's own convention is the default.
+    """
+
+    rate_convention: RateConvention = field(
+        default_factory=_linear_act_360, kw_only=True
+    )
+
+
+@dataclass(eq=False)
+class OvernightInterestPriceIndex(OvernightIndex, InterestPriceIndex):
+    """Overnight interest-bearing price index (e.g. the Chilean ICP).
+
+    Published as daily levels; the ratio of two levels is the daily-compounded
+    accrual between them. Paired with ``OvernightInterestPriceHistory``.
+    """
+
+    def get_maturity(self, start_date: date) -> date:
+        # Overnight accrual spans one business day on the index's fixing calendar.
+        return self.calendar.add_business_days(start_date, 1)

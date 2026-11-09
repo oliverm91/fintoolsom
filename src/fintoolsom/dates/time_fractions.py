@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import calendar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 
@@ -10,9 +10,8 @@ class TimeFractionBase(ABC):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
         pass
 
-    @abstractmethod
     def get_coupon_factor(self, start_date: date, end_date: date) -> float:
-        pass
+        return self.get_day_count_factor(start_date, end_date)
 
 
 @dataclass
@@ -145,15 +144,7 @@ class TF_Actual365_Long(TimeFractionBase):
         numerator = (end_date - start_date).days
 
         if frequency == 1:
-            denominator = 365
-            for year in range(start_date.year, end_date.year + 1):
-                if calendar.isleap(year):
-                    if year != end_date:
-                        denominator = 366
-                        break
-                    elif end_date >= date(year, 2, 29):
-                        denominator = 366
-                        break
+            denominator = 366 if _feb_29_count(start_date, end_date) else 365
         else:
             denominator = 366 if calendar.isleap(end_date.year) else 365
         return numerator / denominator
@@ -169,15 +160,9 @@ class TF_NL_360(TimeFractionBase):
         The denominator is always 360.
         The first day in the period is excluded, the last day is included.
         """
-        feb_29_count = 0
-        # Loop through each year in the range
-        for year in range(start_date.year, end_date.year + 1):
-            if calendar.isleap(year):
-                feb_29 = date(year, 2, 29)
-                if start_date <= feb_29 < end_date:
-                    feb_29_count += 1
-
-        return ((end_date - start_date).days - feb_29_count) / 360
+        return (
+            (end_date - start_date).days - _feb_29_count(start_date, end_date)
+        ) / 360
 
 
 @dataclass
@@ -187,18 +172,12 @@ class TF_NL_365(TimeFractionBase):
         From Strata OpenGamma.
         The result is a simple division.
         The numerator is the actual number of days in the requested period minus the number of occurrences of February 29.
-        The denominator is always 360.
+        The denominator is always 365.
         The first day in the period is excluded, the last day is included.
         """
-        feb_29_count = 0
-        # Loop through each year in the range
-        for year in range(start_date.year, end_date.year + 1):
-            if calendar.isleap(year):
-                feb_29 = date(year, 2, 29)
-                if start_date <= feb_29 < end_date:
-                    feb_29_count += 1
-
-        return ((end_date - start_date).days - feb_29_count) / 365
+        return (
+            (end_date - start_date).days - _feb_29_count(start_date, end_date)
+        ) / 365
 
 
 @dataclass
@@ -214,11 +193,9 @@ class TF_ActualActualISDA(TimeFractionBase):
         portion of the Calculation Period or Compounding Period falling in a non-leap year divided by 365)
         """
         t = start_date
-        t_year_end = date(t.year, 12, 31)
-
-        time_factor = 0
+        time_factor = 0.0
         while t < end_date:
-            next_t = min(t_year_end, end_date)
+            next_t = min(date(t.year + 1, 1, 1), end_date)
             period_base = 366 if calendar.isleap(t.year) else 365
             time_factor += (next_t - t).days / period_base
             t = next_t
@@ -228,13 +205,13 @@ class TF_ActualActualISDA(TimeFractionBase):
 
 @dataclass
 class TF_ActualActualICMA(TimeFractionBase):
-    _actactisda_calc = field(init=False)
-
-    def __post_init__(self):
-        self._actactisda_calc = TF_ActualActualISDA()
-
     def get_day_count_factor(
-        self, start_date: date, end_date: date, frequency: int
+        self,
+        start_date: date,
+        end_date: date,
+        frequency: int,
+        period_start: date | None = None,
+        period_end: date | None = None,
     ) -> float:
         """
         From 2006 ISDA Definitions - 4.16 ().
@@ -246,8 +223,23 @@ class TF_ActualActualICMA(TimeFractionBase):
         coupon on a bond were being calculated for a coupon period corresponding to the Calculation Period or
         Compounding Period in respect of which payment is being made.
 
-        In summary is a Actual/Actual (ISDA) but divided on the frequency. Frequency is 1 for annual payments, 2 for semi-annual, 4 for quarterly...
+        That is ``days(start, end) / (frequency * days(period_start, period_end))``,
+        where ``[period_start, period_end]`` is the regular coupon period holding the
+        accrual (default ``[start_date, end_date]``: a full regular period is worth
+        exactly ``1 / frequency``). Frequency is 1 for annual payments, 2 for
+        semi-annual, 4 for quarterly...
         """
-        return (
-            self._actactisda_calc.get_day_count_factor(start_date, end_date) / frequency
+        period_start = start_date if period_start is None else period_start
+        period_end = end_date if period_end is None else period_end
+        return (end_date - start_date).days / (
+            frequency * (period_end - period_start).days
         )
+
+
+def _feb_29_count(start_date: date, end_date: date) -> int:
+    """Number of 29 Februaries in ``(start_date, end_date]`` (first day excluded)."""
+    return sum(
+        1
+        for year in range(start_date.year, end_date.year + 1)
+        if calendar.isleap(year) and start_date < date(year, 2, 29) <= end_date
+    )
