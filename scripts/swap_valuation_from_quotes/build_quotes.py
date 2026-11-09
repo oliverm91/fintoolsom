@@ -5,9 +5,9 @@ Quote families (all rates lin/act/360):
 =========  ==========================================  ====================================================
 Ticker     Instrument                                  Conventions
 =========  ==========================================  ====================================================
-CHSWP*     CLP fixed vs ICP (camara) OIS               semiannual (18M zero-coupon); SOFR collateral from
-                                                       ``collateral_cutoff_months`` on, none before
-USOSFR*    USD fixed vs SOFR OIS                       annual, SOFR collateral
+CHSWP*     CLP fixed vs ICP (camara) OIS               semiannual from 1Y, zero-coupon below; SOFR collateral
+                                                       from ``collateral_cutoff_months`` on, none before
+USOSFR*    USD fixed vs SOFR OIS                       annual from 18M, zero-coupon below; SOFR collateral
 CPXOSS*    USD/CLP xccy basis, ICP + spread vs SOFR    semiannual, SOFR collateral, spread in bp on the ICP leg
 CHN*       USDCLP NDF forward points                   uncollateralised, settles on ``settle_dt``
 USDCLP     USDCLP spot                                 mid
@@ -66,6 +66,10 @@ SEMIANNUAL, ANNUAL = PaymentFrequency.SEMIANNUAL, PaymentFrequency.ANNUAL
 ZERO_COUPON = SimpleNamespace(
     value="ZERO"
 )  # stands in for a PaymentFrequency, see _enable_zero_coupon_frequency
+
+ICP_FIRST_COUPON_MONTHS = 12  # shorter CHSWP quotes are zero coupon
+SOFR_FIRST_COUPON_MONTHS = 18  # shorter USOSFR quotes are zero coupon
+STUB_FIRST = True  # the first coupon is the short one
 
 FIXINGS_MARGIN_DAYS = 7  # calendar days of fixings kept before the swap start (or the valuation date, if earlier)
 
@@ -191,7 +195,7 @@ class MarketAndQuotes:
 def get_market_and_quotes(
     t: date,
     fixings_from: date,
-    collateral_cutoff_months: int = 18,
+    collateral_cutoff_months: int = 24,
     drop_tickers: tuple[str, ...] = ("CHN2Y",),
     live: bool = False,
 ) -> MarketAndQuotes:
@@ -266,7 +270,11 @@ def get_market_and_quotes(
             maturity = as_date(ticker, "maturity")
 
         if swap and family == "CHSWP":
-            frequency = ZERO_COUPON if (value, unit) == (18, "M") else SEMIANNUAL
+            frequency = (
+                SEMIANNUAL
+                if _months(value, unit) >= ICP_FIRST_COUPON_MONTHS
+                else ZERO_COUPON
+            )
             collateral = (
                 SOFR if _months(value, unit) >= collateral_cutoff_months else None
             )
@@ -278,6 +286,7 @@ def get_market_and_quotes(
                     adj_convention=CL_ADJ,
                     maturity_date=maturity,
                     collateral_index=collateral,
+                    stub_first=STUB_FIRST,
                     fixed_leg=FixedLegSpec(
                         Currency.CLP,
                         frequency,
@@ -297,6 +306,11 @@ def get_market_and_quotes(
                 )
             )
         elif swap and family == "USOSFR":
+            frequency = (
+                ANNUAL
+                if _months(value, unit) >= SOFR_FIRST_COUPON_MONTHS
+                else ZERO_COUPON
+            )
             quotes.append(
                 IRSQuote(
                     quoted_side=QuotedSide.RECEIVE,
@@ -305,15 +319,16 @@ def get_market_and_quotes(
                     adj_convention=US_ADJ,
                     maturity_date=maturity,
                     collateral_index=SOFR,
+                    stub_first=STUB_FIRST,
                     fixed_leg=FixedLegSpec(
                         Currency.USD,
-                        ANNUAL,
+                        frequency,
                         US_ADJ,
                         TIME_FRACTION,
                         rate(mid(ticker) / 100),
                     ),
                     floating_leg=FloatingLegSpec(
-                        Currency.USD, ANNUAL, US_ADJ, TIME_FRACTION, SOFR, rate(0.0)
+                        Currency.USD, frequency, US_ADJ, TIME_FRACTION, SOFR, rate(0.0)
                     ),
                 )
             )
@@ -329,6 +344,7 @@ def get_market_and_quotes(
                     adj_convention=CL_ADJ,
                     maturity_date=maturity,
                     collateral_index=SOFR,
+                    stub_first=STUB_FIRST,
                     receive_leg=FloatingLegSpec(
                         Currency.CLP,
                         SEMIANNUAL,

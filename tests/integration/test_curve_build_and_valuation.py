@@ -10,6 +10,7 @@ from dataclasses import replace
 import pytest
 
 from fintoolsom.derivatives.calculator import Calculator
+from fintoolsom.derivatives.swaps import LegSide
 from fintoolsom.market import (
     CrossCurrencyFloatFloatQuote,
     Currency,
@@ -94,7 +95,7 @@ def test_one_bp_on_the_fixed_rate_moves_mtm_by_the_fixed_leg_dv01(
     )
     change = Calculator.valuate(bumped.get_instrument(), market, CLP) - base
 
-    dv01 = Calculator.get_leg_dv01(swap, fixed, market, CLP)
+    dv01 = Calculator.get_leg_dv01(swap, LegSide.RECEIVE, market, CLP)
     assert (
         dv01 < 0 < change
     )  # receiving 1bp more is worth what 1bp lower rates would be
@@ -103,7 +104,7 @@ def test_one_bp_on_the_fixed_rate_moves_mtm_by_the_fixed_leg_dv01(
     rough = (
         fixed.residuals[0]
         * _fx(currency)
-        * Calculator.get_leg_duration(swap, fixed, market)
+        * Calculator.get_leg_duration(swap, LegSide.RECEIVE, market)
         / 10_000
     )
     assert change == pytest.approx(rough, rel=0.06)
@@ -126,7 +127,7 @@ def test_one_bp_on_the_basis_spread_moves_mtm_by_a_fixed_leg_dv01(built, term):
     irs = _irs(quotes, Currency.USD, term).get_instrument()
     fixed = irs.receive_leg
     dv01 = (
-        Calculator.get_leg_dv01(irs, fixed, market, CLP)
+        Calculator.get_leg_dv01(irs, LegSide.RECEIVE, market, CLP)
         * swap.pay_leg.residuals[0]
         / fixed.residuals[0]
     )

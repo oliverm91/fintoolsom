@@ -7,7 +7,7 @@ from datetime import date
 from typing import TYPE_CHECKING, ClassVar, Sequence
 
 import numpy as np
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import CubicSpline, PchipInterpolator
 
 from .Curve import Curve, InterpolationMethod, year_fractions
 
@@ -39,11 +39,17 @@ class DiscountCurve(Curve):
     dfs : array-like
         Discount factors at `pillar_dates`.
     interpolation_method : InterpolationMethod, optional
-        Discount-factor methods only; ``LogLinear`` by default.
+        Discount-factor methods only; ``LogLinear`` by default. ``CubicSpline`` is a
+        natural spline on ``log(df)``, so the forward joins the flat extrapolation
+        smoothly at the last pillar.
     """
 
     allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset(
-        {InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline}
+        {
+            InterpolationMethod.LogLinear,
+            InterpolationMethod.HermiteCubicSpline,
+            InterpolationMethod.CubicSpline,
+        }
     )
 
     curve_date: date
@@ -57,6 +63,7 @@ class DiscountCurve(Curve):
     _log_dfs: np.ndarray = field(init=False, repr=False)
     _last_forward: float = field(init=False, repr=False)
     _pchip: PchipInterpolator | None = field(init=False, repr=False, default=None)
+    _log_df_spline: CubicSpline | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self):
         self._check_method()
@@ -93,6 +100,11 @@ class DiscountCurve(Curve):
             and len(self._tau) > 2
         ):
             self._pchip = PchipInterpolator(self._tau, np.exp(self._log_dfs))
+        if self.interpolation_method is InterpolationMethod.CubicSpline:
+            self._log_df_spline = CubicSpline(
+                self._tau, self._log_dfs, bc_type="natural"
+            )
+            self._last_forward = -float(self._log_df_spline(self._tau[-1], 1))
 
     @classmethod
     def from_zero_coupon_curve(
@@ -129,6 +141,8 @@ class DiscountCurve(Curve):
         out = np.empty(len(tau))
         if self._pchip is not None:
             out[inside] = self._pchip(tau[inside])
+        elif self._log_df_spline is not None:
+            out[inside] = np.exp(self._log_df_spline(tau[inside]))
         else:
             out[inside] = np.exp(np.interp(tau[inside], self._tau, self._log_dfs))
         out[~inside] = np.exp(

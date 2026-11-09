@@ -136,6 +136,73 @@ def test_copy_is_equal_and_independent():
     assert curve.forward_rates[0] == FWDS[0] and twin.spot_rate is not curve.spot_rate
 
 
+def _linear_integral(d: date) -> float:
+    """Integral of forwards flat over the first segment, then linear through FWDS."""
+    nodes = [FWDS[0], *FWDS]
+    taus = [_tau(k) for k in KNOTS]
+    forward_at = float(np.interp(_tau(d), taus, nodes))
+    ends = [(tau, f) for tau, f in zip(taus, nodes) if tau < _tau(d)]
+    ends.append((_tau(d), forward_at))
+    return sum((f0 + f1) / 2 * (t1 - t0) for (t0, f0), (t1, f1) in zip(ends, ends[1:]))
+
+
+@pytest.mark.parametrize("days", [45, 90, 135, 180, 250, 365, 500, 730])
+def test_linear_integrates_forwards_linear_between_knots(days):
+    curve = _curve(interpolation_method=InterpolationMethod.Linear)
+    d = T + timedelta(days=days)
+    assert curve.get_df(d) == pytest.approx(math.exp(-_linear_integral(d)), rel=1e-13)
+
+
+def test_linear_extends_the_last_forward_flat():
+    curve = _curve(interpolation_method=InterpolationMethod.Linear)
+    beyond = KNOTS[-1] + timedelta(days=365)
+    assert curve.get_df(beyond) == pytest.approx(
+        curve.get_df(KNOTS[-1]) * math.exp(-FWDS[-1]), rel=1e-13
+    )
+
+
+def test_cubic_spline_keeps_the_knot_dfs_of_piecewise_constant_forwards():
+    spline = _curve(interpolation_method=InterpolationMethod.CubicSpline)
+    plain = _curve()
+    assert spline.get_dfs(KNOTS) == pytest.approx(plain.get_dfs(KNOTS), rel=1e-13)
+    between = T + timedelta(days=250)
+    assert spline.get_df(between) != pytest.approx(plain.get_df(between), rel=1e-7)
+
+
+def test_cubic_spline_forward_joins_the_flat_extrapolation_smoothly():
+    curve = _curve(interpolation_method=InterpolationMethod.CubicSpline)
+    last, day = KNOTS[-1], timedelta(days=1)
+    before = math.log(curve.get_df(last - day)) - math.log(curve.get_df(last))
+    after = math.log(curve.get_df(last)) - math.log(curve.get_df(last + day))
+    assert before == pytest.approx(after, abs=1e-8)
+
+
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline]
+)
+def test_parallel_bump_and_copy_keep_the_shape(method):
+    curve = _curve(interpolation_method=method)
+    bumped = curve.parallel_bump_bps(1)
+    dates = [T + timedelta(days=n) for n in (1, 45, 200, 500, 729, 1000)]
+    shift = (np.log(curve.get_dfs(dates)) - np.log(bumped.get_dfs(dates))) / [
+        _tau(d) for d in dates
+    ]
+    assert shift == pytest.approx([1e-4] * len(dates), abs=1e-12)
+    assert bumped.interpolation_method is method
+    assert curve.copy().get_dfs(dates) == pytest.approx(curve.get_dfs(dates))
+
+
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline]
+)
+def test_a_single_segment_is_a_constant_forward(method):
+    one = IndexCurve(T, SOFR, KNOTS[:2], FWDS[:1], interpolation_method=method)
+    beyond = KNOTS[1] + timedelta(days=100)
+    assert one.get_df(beyond) == pytest.approx(
+        math.exp(-FWDS[0] * _tau(beyond)), rel=1e-13
+    )
+
+
 def test_validation_errors():
     with pytest.raises(ValueError, match="at least 2 knots"):
         IndexCurve(T, SOFR, [T], [])

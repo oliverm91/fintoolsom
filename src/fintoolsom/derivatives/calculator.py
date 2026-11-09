@@ -11,7 +11,8 @@ from ..rates import Curve, RateConvention, ExponentialInterestConvention
 from ..dates import ActualDayCountConvention
 from .forwards.forwards import Forward, NDF
 from .options.options import Option
-from .swaps.swaps import Swap
+from .swaps.legs import FixedLeg, FloatingLeg, TermRateLeg
+from .swaps.swaps import LegSide, Swap
 
 if TYPE_CHECKING:
     from ..market import Market
@@ -673,11 +674,13 @@ class Calculator:
             PV of the received leg minus PV of the paid leg, in `currency`.
         """
         return Calculator.get_leg_pv(
-            swap, swap.receive_leg, market, currency
-        ) - Calculator.get_leg_pv(swap, swap.pay_leg, market, currency)
+            swap, LegSide.RECEIVE, market, currency
+        ) - Calculator.get_leg_pv(swap, LegSide.PAY, market, currency)
 
     @staticmethod
-    def get_leg_pv(swap: Swap, leg, market: Market, currency: Currency) -> float:
+    def get_leg_pv(
+        swap: Swap, side: LegSide, market: Market, currency: Currency
+    ) -> float:
         """PV of one leg of `swap`, in the reporting `currency`.
 
         The leg settles in :meth:`Swap.leg_settlement_currency` and is discounted
@@ -686,9 +689,9 @@ class Calculator:
         Parameters
         ----------
         swap : Swap
-            Swap holding `leg` (settlement and collateral).
-        leg : SwapLeg
-            ``swap.receive_leg`` or ``swap.pay_leg``.
+            Swap to value one leg of.
+        side : LegSide
+            Which leg: ``LegSide.RECEIVE`` or ``LegSide.PAY``.
         market : Market
             Market at the valuation date.
         currency : Currency
@@ -699,6 +702,7 @@ class Calculator:
         float
             PV of the unpaid flows, positive for a leg that pays to its holder.
         """
+        leg = swap.leg(side)
         settlement = swap.leg_settlement_currency(leg)
         pv = Calculator._leg_pv_non_deliverable(
             leg, swap.collateral_index, market, settlement
@@ -716,14 +720,12 @@ class Calculator:
         replaced by the residual notional at that coupon's start (the next reset),
         and only the spread flows remain.
         """
-        from .swaps.legs import FixedLeg as _FixedLeg, TermRateLeg as _TermRateLeg
-
         future_payment, flows = Calculator._leg_flows(leg, market)
         idx = np.where(future_payment)[0]
-        if isinstance(leg, _FixedLeg) or len(idx) == 0:
+        if isinstance(leg, FixedLeg) or len(idx) == 0:
             return [leg.payment_dates[i] for i in idx], flows
 
-        if isinstance(leg, _TermRateLeg):
+        if isinstance(leg, TermRateLeg):
             is_set = [leg.fixing_dates[i] <= market.t for i in idx]
         else:
             is_set = [leg.start_dates[i] <= market.t for i in idx]
@@ -743,7 +745,7 @@ class Calculator:
         return dates_out, np.array(flows_out, dtype=float)
 
     @staticmethod
-    def get_leg_duration(swap: Swap, leg, market: Market) -> float:
+    def get_leg_duration(swap: Swap, side: LegSide, market: Market) -> float:
         """Macaulay duration of one leg of `swap`, in act/365 years.
 
         ``sum(tau_i * PV_i) / sum(PV_i)`` over the leg's rate-sensitive flows
@@ -755,9 +757,9 @@ class Calculator:
         Parameters
         ----------
         swap : Swap
-            Swap holding `leg` (collateral).
-        leg : SwapLeg
-            ``swap.receive_leg`` or ``swap.pay_leg``.
+            Swap holding the leg (collateral).
+        side : LegSide
+            Which leg: ``LegSide.RECEIVE`` or ``LegSide.PAY``.
         market : Market
             Market at the valuation date.
 
@@ -766,6 +768,7 @@ class Calculator:
         float
             Duration in years; 0 for a leg with no unpaid flow.
         """
+        leg = swap.leg(side)
         pay_dates, flows = Calculator._rate_sensitive_flows(leg, market)
         if not pay_dates:
             return 0.0
@@ -776,8 +779,10 @@ class Calculator:
         return float(np.sum(taus * pvs) / total) if total != 0 else 0.0
 
     @staticmethod
-    def get_leg_dv01(swap: Swap, leg, market: Market, currency: Currency) -> float:
-        """DV01 estimate of one leg: ``-PV * duration / 10_000``, in `currency`.
+    def get_leg_dv01(
+        swap: Swap, side: LegSide, market: Market, currency: Currency
+    ) -> float:
+        """DV01 estimate of one fixed leg: ``-PV * duration / 10_000``, in `currency`.
 
         The change of the leg PV for a 1bp parallel rise of its rates. For a leg
         near par, ``PV ~ notional``, so this is ``-notional * duration / 10_000``.
@@ -785,9 +790,9 @@ class Calculator:
         Parameters
         ----------
         swap : Swap
-            Swap holding `leg`.
-        leg : SwapLeg
-            ``swap.receive_leg`` or ``swap.pay_leg``.
+            Swap holding the leg.
+        side : LegSide
+            Which leg: ``LegSide.RECEIVE`` or ``LegSide.PAY``; must be a fixed leg.
         market : Market
             Market at the valuation date.
         currency : Currency
@@ -796,9 +801,19 @@ class Calculator:
         Returns
         -------
         float
+
+        Raises
+        ------
+        NotImplementedError
+            For a floating leg.
         """
-        pv = Calculator.get_leg_pv(swap, leg, market, currency)
-        return -pv * Calculator.get_leg_duration(swap, leg, market) / 10_000
+        leg = swap.leg(side)
+        if isinstance(leg, FloatingLeg):
+            raise NotImplementedError(
+                f"DV01 is only implemented for fixed legs, got {type(leg).__name__}."
+            )
+        pv = Calculator.get_leg_pv(swap, side, market, currency)
+        return -pv * Calculator.get_leg_duration(swap, side, market) / 10_000
 
     # --- Dispatcher ---
 

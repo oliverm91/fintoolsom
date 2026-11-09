@@ -43,6 +43,7 @@ dev = [
     "pytest",
     "pytest-cov>=7.1.0",
     "ruff",
+    "sqlalchemy>=2.1.8",
 ]
 
 [tool.commitizen]

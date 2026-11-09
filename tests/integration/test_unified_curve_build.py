@@ -196,3 +196,43 @@ def test_non_local_interpolation_skips_the_sweep_and_still_reprices(real, monkey
     big = [n for n in sizes if n > 2]
     assert len(big) == 2 and len(sizes) > len(big)
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
+
+
+def test_linear_forwards_are_local_and_still_sweep(real, monkeypatch):
+    sizes = _spy_block_sizes(monkeypatch)
+    market = _build(real, index_interp_method=InterpolationMethod.Linear)
+    assert len(sizes) > 50 and max(sizes) <= 2
+    assert market.curves["ICP"].interpolation_method is InterpolationMethod.Linear
+    assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
+
+
+@pytest.mark.parametrize(
+    "methods",
+    [
+        {"index_interp_method": InterpolationMethod.CubicSpline},
+        {"discount_interp_method": InterpolationMethod.CubicSpline},
+        {
+            "discount_interp_method": InterpolationMethod.CubicSpline,
+            "index_interp_method": InterpolationMethod.CubicSpline,
+        },
+        {
+            "discount_interp_method": InterpolationMethod.CubicSpline,
+            "index_interp_method": InterpolationMethod.Linear,
+        },
+    ],
+)
+def test_a_cubic_spline_curve_still_reprices_every_quote_after_the_build(real, methods):
+    # A later group extending a spline moves what earlier groups were fitted on.
+    market = _build(real, **methods)
+    assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
+
+
+def test_cubic_spline_solves_every_pillar_jointly_at_the_end(real, monkeypatch):
+    sizes = _spy_block_sizes(monkeypatch)
+    _build(real, index_interp_method=InterpolationMethod.CubicSpline)
+    assert sizes[-1] == max(sizes) and sizes[-1] > 50
+
+
+def test_linear_is_rejected_for_discount_curves(real):
+    with pytest.raises(ValueError, match="does not support interpolation 'Linear'"):
+        _build(real, discount_interp_method=InterpolationMethod.Linear)

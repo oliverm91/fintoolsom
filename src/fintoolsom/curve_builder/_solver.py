@@ -28,7 +28,11 @@ from ._keys import CurveKey, _built, _curve_id
 _SWEEP_TOL = 1e-6
 # Interpolations where a pillar only moves the curve between its neighbours.
 _LOCAL_METHODS = frozenset(
-    {InterpolationMethod.LogLinear, InterpolationMethod.PiecewiseConstant}
+    {
+        InterpolationMethod.LogLinear,
+        InterpolationMethod.PiecewiseConstant,
+        InterpolationMethod.Linear,
+    }
 )
 _MAX_SWEEPS = 4
 
@@ -178,8 +182,8 @@ class _GroupSolve:
     @property
     def local(self) -> bool:
         """Whether every curve solved interpolates locally (log-linear dfs,
-        piecewise-constant forwards): an instrument then depends only on pillars up
-        to its own maturity."""
+        piecewise-constant or linear forwards): an instrument then depends only on
+        pillars up to its own maturity."""
         return all(m in _LOCAL_METHODS for m in self.methods.values())
 
     @property
@@ -235,8 +239,8 @@ def _solve_unknowns(
 ) -> np.ndarray:
     """Bootstrap the free pillars date by date, falling back to one joint solve.
 
-    With local interpolation (log-linear dfs, piecewise-constant forwards) an
-    instrument depends only on pillars up to its own last free pillar, so
+    With local interpolation (log-linear dfs, piecewise-constant or linear forwards)
+    an instrument depends only on pillars up to its own last free pillar, so
     ascending dates give small square blocks, one per pillar date. The joint
     solve runs, warm-started from the sweep, when the interpolation is not local,
     a block is not square, or the sweep leaves a residual above ``_SWEEP_TOL``.

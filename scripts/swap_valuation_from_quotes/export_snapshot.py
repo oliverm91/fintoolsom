@@ -9,7 +9,7 @@ be valued. Needs the PT_MYSQL_* environment variables and read grants on ``fin_d
   fixings from ``fixings_start`` (a week before the swap start or the first date, whichever is earlier) to the last date;
 * ``derivatives.swaps`` and ``derivatives.swap_legs`` of ``--swap-id``.
 
-Running it again overwrites the snapshot. The stored MTMs are not exported: ``run_valuation.py`` keeps them as constants.
+Running it again overwrites the snapshot. The stored MTMs are not exported: ``stored_values.py`` keeps them as constants.
 """
 
 import argparse

@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from abc import ABC
 from dataclasses import dataclass, field
+from enum import Enum
 
 from ...market.currencies import Currency
 from ...market.index import InterestIndex
 from .legs import SwapLeg
+
+
+class LegSide(Enum):
+    """Which leg of a swap: the one received or the one paid."""
+
+    RECEIVE = "RECEIVE"
+    PAY = "PAY"
 
 
 @dataclass
@@ -96,6 +104,29 @@ class Swap(SwapBase):
             f"{fmt('Receive', self.receive_leg)}\n"
             f"{fmt('Pay', self.pay_leg)}"
         )
+
+    def leg(self, side: LegSide) -> SwapLeg:
+        """The swap's leg on `side`.
+
+        Parameters
+        ----------
+        side : LegSide
+            ``LegSide.RECEIVE`` or ``LegSide.PAY``.
+
+        Returns
+        -------
+        SwapLeg
+
+        Raises
+        ------
+        TypeError
+            If `side` is not a :class:`LegSide`.
+        """
+        if side is LegSide.RECEIVE:
+            return self.receive_leg
+        if side is LegSide.PAY:
+            return self.pay_leg
+        raise TypeError(f"side must be a LegSide, got {type(side).__name__}.")
 
     @property
     def settlement_currency(self) -> Currency | None:

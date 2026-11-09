@@ -58,11 +58,13 @@ is no initial exchange, and coupons paid on or before `t` are dropped.
 
 ## Risk
 
-- `get_leg_pv(swap, leg, market, currency)` gives the PV of the unpaid flows of
-  one leg. `get_swap_mtm` is the receive leg minus the pay leg.
-- `get_leg_duration(swap, leg, market)` is the Macaulay duration in Act/365 years.
-- `get_leg_dv01(swap, leg, market, currency)` is `−PV · duration / 10 000`. It is
-  a first-order estimate: a full revaluation with
+- `get_leg_pv(swap, side, market, currency)` gives the PV of the unpaid flows of
+  one leg, with `side` being `LegSide.RECEIVE` or `LegSide.PAY`. `get_swap_mtm` is
+  the receive leg minus the pay leg.
+- `get_leg_duration(swap, side, market)` is the Macaulay duration in Act/365 years.
+- `get_leg_dv01(swap, side, market, currency)` is `−PV · duration / 10 000`, for
+  fixed legs only (a floating leg raises `NotImplementedError`). It is a
+  first-order estimate: a full revaluation with
   `market.set_curve(curve.parallel_bump_bps(1))` matches it to first order.
 - Forwards: `get_forward_mtm` and `get_ndf_mtm`. Options: `get_option_mtm`,
   `get_option_delta`, `get_option_gamma`, `get_option_vega` and the strikes from
@@ -75,7 +77,7 @@ from datetime import date
 
 from fintoolsom.dates import ModifiedFollowingConvention, Term, TermUnit
 from fintoolsom.derivatives import Calculator
-from fintoolsom.derivatives.swaps import Swap, builders
+from fintoolsom.derivatives.swaps import LegSide, Swap, builders
 from fintoolsom.market import Currency, Market, OvernightInterestPriceIndex
 from fintoolsom.rates import IndexCurve, Rate, RateConvention
 
@@ -91,7 +93,7 @@ floating = builders.overnight_leg(index=icp, **common)
 swap = Swap(receive_leg=fixed, pay_leg=floating, collateral_index=icp)
 
 Calculator.valuate(swap, market, Currency.CLP)  # > 0: 5.2% annual beats the curve's ~5.13% (5% continuous)
-Calculator.get_leg_dv01(swap, swap.receive_leg, market, Currency.CLP)  # about -190k CLP per bp
+Calculator.get_leg_dv01(swap, LegSide.RECEIVE, market, Currency.CLP)  # about -190k CLP per bp
 ```
 
 ## Notes

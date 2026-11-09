@@ -18,9 +18,10 @@ build_curves(quotes, market, discount_interp_method=InterpolationMethod.HermiteC
 - **Discount curves.** Every currency other than the risk-free index's gets a
   `DiscountCurve` under `"<ccy>_<risk-free index>"`, such as `"USD_ICP"`.
 - **Interpolation.** New curves use `discount_interp_method` (`LogLinear` by
-  default, or `HermiteCubicSpline`) and `index_interp_method` (`PiecewiseConstant`
-  forwards). A curve already in the market keeps its own method when the build
-  extends it past its last date.
+  default, `HermiteCubicSpline` or `CubicSpline`) and `index_interp_method`
+  (`PiecewiseConstant` forwards by default, `Linear` forwards or `CubicSpline`). A
+  curve already in the market keeps its own method when the build extends it past
+  its last date.
 
 ## What the market needs
 
@@ -71,11 +72,14 @@ The build is split in private modules, driven by `builder._CurveBuilder`.
    - Unknowns are log discount factors on discount curves and segment forwards on
      index curves.
    - With local interpolation on every curve (log-linear dfs, piecewise-constant
-     forwards), a quote depends only on pillars up to its own maturity. The group
+     or linear forwards), a quote depends only on pillars up to its own maturity. The group
      is then bootstrapped date by date, in small square blocks of at most one
      unknown per curve.
    - A spline curve moves everywhere, so its group is solved jointly with one
      `scipy.optimize.root` (hybr).
+   - If any curve is a `CubicSpline`, the groups still solve in order to settle
+     pillar ownership, and every pillar is then re-solved in one joint `root` from
+     that result: a later spline pillar moves quotes that were fitted earlier.
    - Every solve is atomic: on failure the curves are restored.
 6. **Checks (`builder.py`).**
    - After the last group, every quote that pinned a pillar must still reprice

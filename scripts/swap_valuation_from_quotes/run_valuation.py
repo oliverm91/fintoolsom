@@ -1,11 +1,11 @@
 """Builds the curves from the ``fin_data`` quotes with fintoolsom.curve_builder and values a booked swap.
 
     python scripts/swap_valuation_from_quotes/run_valuation.py                      # swap 10 on 2026-11-06
-    python scripts/swap_valuation_from_quotes/run_valuation.py --swap-id 10 --date 2026-11-06 --collateral-cutoff 18
+    python scripts/swap_valuation_from_quotes/run_valuation.py --swap-id 10 --date 2026-11-06 --collateral-cutoff 24
     python scripts/swap_valuation_from_quotes/run_valuation.py --collateral 0        # value the swap uncollateralised (1 = SOFR)
     python scripts/swap_valuation_from_quotes/run_valuation.py --live                # current valuation from Bloomberg
 
-Prints the leg PVs, the swap MTM and DV01 (CLP), next to the MTMs stored for swap 10 on 2026-11-06 (constants below). For any
+Prints the leg PVs, the swap MTM and DV01 (CLP), next to the MTMs stored for swap 10 on 2026-11-06 (constants in ``stored_values.py``). For any
 other swap or date there is no stored MTM: the table then just leaves those columns out, without a message or an error.
 Runs fully offline on the SQLite snapshot ``local_data.sqlite`` (see ``local_db.py``). The snapshot only covers the dates
 and swap exported by ``export_snapshot.py`` (the only script that needs MySQL).
@@ -21,28 +21,20 @@ from datetime import date, datetime
 
 from fintoolsom.curve_builder import build_curves
 from fintoolsom.derivatives import Calculator
+from fintoolsom.derivatives.swaps import FloatingLeg, LegSide
 from fintoolsom.market import Currency
+from fintoolsom.rates import InterpolationMethod
 
 from build_quotes import fixings_start, get_market_and_quotes
 from build_swap import COLLATERAL_CHOICES, get_swap
+from stored_values import stored_mtm
 
 
-# MTMs stored in derivatives.swaps_mtm for swap 10 on 2026-11-06 (CLP; the DB signs the pay leg negative), kept as constants.
-_STORED_MTM = {
-    (date(2026, 11, 6), "SLMNID5G"): 16_955_420_167.0,  # receive leg, fixed 4.92%
-    (date(2026, 11, 6), "SLMNID5H"): -17_015_550_924.0,  # pay leg, ICP
-    (date(2026, 11, 9), "SLMNID5G"): 16_966_709_576.0,  # receive leg
-    (date(2026, 11, 9), "SLMNID5H"): -17_011_472_728.0,  # pay leg
-}
-
-
-def _stored_mtm(t: date, leg_ids: list[str]) -> dict[str, float]:
-    """Stored MTM per leg id on ``t``; a leg without a stored value is left out."""
-    return {
-        leg_id: _STORED_MTM[(t, leg_id)]
-        for leg_id in leg_ids
-        if (t, leg_id) in _STORED_MTM
-    }
+def _leg_dv01(swap, side: LegSide, market) -> float | None:
+    """DV01 (CLP) of a fixed leg; None for a floating leg, which is not calculated."""
+    if isinstance(swap.leg(side), FloatingLeg):
+        return None
+    return Calculator.get_leg_dv01(swap, side, market, Currency.CLP)
 
 
 def _format_report(
@@ -54,9 +46,9 @@ def _format_report(
     as_of: datetime | None = None,
 ) -> str:
     """Table of fintoolsom vs stored values. ``diff (bp)`` is ``diff / DV01``: the parallel rate move (bp) that explains the
-    difference, positive when fintoolsom's rates would have to be higher than the stored ones. Legs use their own DV01 and the
-    swap uses the net DV01 (the pay leg is floating, so its tiny DV01 inflates its bp). With ``as_of`` (live valuation) it only
-    states the current PVs and MTM."""
+    difference, positive when fintoolsom's rates would have to be higher than the stored ones. Fixed legs use their own DV01, a
+    floating leg shows n/a and the swap uses the net DV01 of its fixed legs. With ``as_of`` (live valuation) it only states the
+    current PVs and MTM."""
     rows = (
         ("Receive leg PV", "receive_pv"),
         ("Pay leg PV", "pay_pv"),
@@ -75,10 +67,13 @@ def _format_report(
         lines += [f"{label:<16}{result[key]:>18,.0f}" for label, key in rows]
         return "\n".join(lines)
 
+    dv01_receive, dv01_pay = result["dv01_receive"], result["dv01_pay"]
     dv01 = {
-        "receive_pv": result["dv01_receive"],
-        "pay_pv": result["dv01_pay"],
-        "mtm": result["dv01_receive"] - result["dv01_pay"],
+        "receive_pv": dv01_receive,
+        "pay_pv": dv01_pay,
+        "mtm": None
+        if dv01_receive is None and dv01_pay is None
+        else (dv01_receive or 0.0) - (dv01_pay or 0.0),
     }
     has_stored = "stored" in result
     header = f"{'':<16}{'fintoolsom':>18}"
@@ -95,7 +90,7 @@ def _format_report(
         if has_stored:
             diff = result[key] - result["stored"][key]
             line += f"{result['stored'][key]:>18,.0f}{diff:>15,.0f}"
-        line += f"{dv01[key]:>16,.0f}"
+        line += f"{dv01[key]:>16,.0f}" if dv01[key] is not None else f"{'n/a':>16}"
         if has_stored:
             line += f"{diff / dv01[key]:>+12.2f}" if dv01[key] else f"{'n/a':>12}"
         lines.append(line)
@@ -109,7 +104,7 @@ def _format_report(
 def run(
     t: date,
     swap_id: int,
-    collateral_cutoff_months: int = 18,
+    collateral_cutoff_months: int = 24,
     collateral: int = 1,
     verbose: bool = True,
     live: bool = False,
@@ -129,7 +124,12 @@ def run(
     market = inputs.market
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        build_curves(inputs.quotes, market)
+        build_curves(
+            inputs.quotes,
+            market,
+            discount_interp_method=InterpolationMethod.LogLinear,
+            index_interp_method=InterpolationMethod.PiecewiseConstant,
+        )
     for w in caught:
         if issubclass(w.category, (UserWarning, RuntimeWarning)):
             print(f"WARNING {w.category.__name__}: {str(w.message)[:500]}")
@@ -139,19 +139,15 @@ def run(
     result = {
         "collateral": collateral_index.name if collateral_index is not None else "none",
         "receive_pv": Calculator.get_leg_pv(
-            swap, swap.receive_leg, market, Currency.CLP
+            swap, LegSide.RECEIVE, market, Currency.CLP
         ),
-        "pay_pv": Calculator.get_leg_pv(swap, swap.pay_leg, market, Currency.CLP),
+        "pay_pv": Calculator.get_leg_pv(swap, LegSide.PAY, market, Currency.CLP),
         "mtm": Calculator.get_swap_mtm(swap, market, Currency.CLP),
     }
     if not live:
-        result["dv01_receive"] = Calculator.get_leg_dv01(
-            swap, swap.receive_leg, market, Currency.CLP
-        )
-        result["dv01_pay"] = Calculator.get_leg_dv01(
-            swap, swap.pay_leg, market, Currency.CLP
-        )
-        stored = _stored_mtm(t, [booked.receive_leg_id, booked.pay_leg_id])
+        result["dv01_receive"] = _leg_dv01(swap, LegSide.RECEIVE, market)
+        result["dv01_pay"] = _leg_dv01(swap, LegSide.PAY, market)
+        stored = stored_mtm(t, [booked.receive_leg_id, booked.pay_leg_id])
         if len(stored) == 2:  # the DB stores the pay leg with a negative sign
             result["stored"] = {
                 "receive_pv": stored[booked.receive_leg_id],
@@ -182,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--collateral-cutoff",
         type=int,
-        default=18,
+        default=24,
         help="CHSWP tenors (months) from which the quote is SOFR collateralised",
     )
     parser.add_argument(

@@ -87,7 +87,7 @@ Legs come from `swaps.builders`; each swap carries its CSA ([`derivatives`](src/
 ```python
 from fintoolsom.dates import ModifiedFollowingConvention, Term, TermUnit
 from fintoolsom.derivatives import Calculator
-from fintoolsom.derivatives.swaps import Swap, builders
+from fintoolsom.derivatives.swaps import LegSide, Swap, builders
 
 cl, us = ModifiedFollowingConvention("CL"), ModifiedFollowingConvention("US")
 clp_leg_descriptor = dict(notional=1e9, start_date=icp.calendar.add_business_days(t, 2),
@@ -98,7 +98,7 @@ icp_irs = Swap(  # receive 5.3% vs ICP, ICP CSA
     collateral_index=icp,
 )
 Calculator.valuate(icp_irs, market, Currency.CLP)                            # 2_428_464 CLP
-Calculator.get_leg_dv01(icp_irs, icp_irs.receive_leg, market, Currency.CLP)  # -448_305 CLP per bp
+Calculator.get_leg_dv01(icp_irs, LegSide.RECEIVE, market, Currency.CLP)      # -448_305 CLP per bp
 
 usd_leg_descriptor = dict(notional=1e6, start_date=sofr.calendar.add_business_days(t, 2),
                           term=Term(2, TermUnit.Y, us), frequency="ANNUAL", adj_convention=us)

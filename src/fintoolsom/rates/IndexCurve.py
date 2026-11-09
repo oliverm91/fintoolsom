@@ -8,6 +8,7 @@ from datetime import date
 from typing import TYPE_CHECKING, ClassVar, Sequence
 
 import numpy as np
+from scipy.interpolate import BSpline, CubicSpline, make_interp_spline
 
 from .Curve import Curve, DateArg, InterpolationMethod, year_fractions
 from .Rates import Rate
@@ -31,6 +32,14 @@ class IndexCurve(Curve):
     forward is extended back to ``curve_date``. Past the last knot the last forward
     is extended flat.
 
+    What ``forward_rates[i]`` means follows the interpolation:
+
+    * ``PiecewiseConstant``: the forward over the whole segment.
+    * ``CubicSpline``: the segment's average forward. The dfs at the knots are those
+      of ``PiecewiseConstant``, joined by a natural spline on ``log(df)``.
+    * ``Linear``: the forward at ``knot_dates[i + 1]``, the end of the segment. The
+      forward is linear between knots and flat over the first segment.
+
     Parameters
     ----------
     curve_date : date
@@ -48,7 +57,11 @@ class IndexCurve(Curve):
     """
 
     allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset(
-        {InterpolationMethod.PiecewiseConstant}
+        {
+            InterpolationMethod.PiecewiseConstant,
+            InterpolationMethod.Linear,
+            InterpolationMethod.CubicSpline,
+        }
     )
 
     curve_date: date
@@ -61,6 +74,9 @@ class IndexCurve(Curve):
     _knot_tau: np.ndarray = field(init=False, repr=False)
     _cum: np.ndarray = field(init=False, repr=False)
     _log_df_effective: float = field(init=False, repr=False)
+    _forward_integral: BSpline | CubicSpline | None = field(
+        init=False, repr=False, default=None
+    )
 
     def __post_init__(self):
         self._check_method()
@@ -87,6 +103,7 @@ class IndexCurve(Curve):
         self._cum = np.concatenate(
             ([0.0], np.cumsum(self.forward_rates * np.diff(self._knot_tau)))
         )
+        self._forward_integral = self._build_forward_integral()
         if self.knot_dates[0] == self.curve_date:
             self._log_df_effective = 0.0
         elif self.spot_rate is not None:
@@ -101,6 +118,21 @@ class IndexCurve(Curve):
             self._log_df_effective = -float(self.forward_rates[0]) * float(
                 self._knot_tau[0]
             )
+
+    def _build_forward_integral(self) -> BSpline | CubicSpline | None:
+        """Integral of the forward from the first knot, as a scipy spline over the knots.
+
+        None when the forward is constant per segment, which ``_cum`` already covers.
+        """
+        if (
+            self.interpolation_method is InterpolationMethod.PiecewiseConstant
+            or len(self.forward_rates) == 1
+        ):
+            return None
+        if self.interpolation_method is InterpolationMethod.CubicSpline:
+            return CubicSpline(self._knot_tau, self._cum, bc_type="natural")
+        at_knots = np.concatenate((self.forward_rates[:1], self.forward_rates))
+        return make_interp_spline(self._knot_tau, at_knots, k=1).antiderivative()
 
     @classmethod
     def from_zero_coupon_curve(cls, zcc, index: "Index") -> IndexCurve:
@@ -131,17 +163,7 @@ class IndexCurve(Curve):
     def get_dfs(self, dates: Sequence[date]) -> np.ndarray:
         dates = list(dates)
         tau = year_fractions(self.curve_date, dates)
-        # Segment of each date: the first forward before the effective date, the last
-        # one past the last knot.
-        idx = np.clip(
-            np.searchsorted(self._knot_tau, tau, side="right") - 1,
-            0,
-            len(self.forward_rates) - 1,
-        )
-        integral = self._cum[idx] + self.forward_rates[idx] * (
-            tau - self._knot_tau[idx]
-        )
-        dfs = np.exp(self._log_df_effective - integral)
+        dfs = np.exp(self._log_df_effective - self._integrate_forward(tau))
         if self.spot_rate is not None and self.knot_dates[0] > self.curve_date:
             spot = tau < self._knot_tau[0]
             if spot.any():
@@ -149,6 +171,27 @@ class IndexCurve(Curve):
                     self.curve_date, [d for d, s in zip(dates, spot) if s]
                 )
         return dfs
+
+    def _integrate_forward(self, tau: np.ndarray) -> np.ndarray:
+        """Integral of the forward from the first knot to each of `tau`, flat outside."""
+        if self._forward_integral is None:
+            # Segment of each date: the first forward before the effective date, the
+            # last one past the last knot.
+            idx = np.clip(
+                np.searchsorted(self._knot_tau, tau, side="right") - 1,
+                0,
+                len(self.forward_rates) - 1,
+            )
+            return self._cum[idx] + self.forward_rates[idx] * (
+                tau - self._knot_tau[idx]
+            )
+        first, last = self._knot_tau[0], self._knot_tau[-1]
+        last_forward = float(self._forward_integral(last, 1))
+        return (
+            self._forward_integral(np.clip(tau, first, last))
+            + self.forward_rates[0] * np.minimum(tau - first, 0.0)
+            + last_forward * np.maximum(tau - last, 0.0)
+        )
 
     def parallel_bump_bps(self, bps: float) -> IndexCurve:
         """Copy with every forward, and the spot segment, shifted by `bps` (continuous).

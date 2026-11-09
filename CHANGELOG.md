@@ -1,7 +1,15 @@
-## Unreleased
+## v1.0.0b3 (2026-11-09)
+
+### BREAKING CHANGE
+
+- **derivatives**: `Calculator.get_leg_pv`, `get_leg_duration` and `get_leg_dv01` take a `LegSide` (`LegSide.RECEIVE` or `LegSide.PAY`) instead of a leg, so they can only value the swap's own legs.
+- **derivatives**: `Calculator.get_leg_dv01` raises `NotImplementedError` for a floating leg.
 
 ### Feat
 
+- **derivatives**: add `LegSide` and `Swap.leg(side)`.
+- **rates**: `InterpolationMethod` adds `CubicSpline` (natural spline on `log(df)`, for `DiscountCurve` and `IndexCurve`) and `Linear` (forwards linear between knots, `IndexCurve` only).
+- **curve_builder**: `build_curves` accepts the new methods. With a `CubicSpline` curve every pillar is finally solved jointly.
 - **derivatives**: `Swap` and the swap legs print as a compact summary. `str(swap)` shows maturity, settlement mode and collateral, then one line per leg with its kind, currency, notional and rate or spread.
 - **dates**: `Calendar` has a short `__repr__`, so indexes and legs no longer print every holiday.
 

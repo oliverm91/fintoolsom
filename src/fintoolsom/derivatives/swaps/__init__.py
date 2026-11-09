@@ -15,6 +15,7 @@ from .legs import (
     XCCYFloatingLeg,
 )
 from .swaps import (
+    LegSide,
     SwapBase,
     Swap,
 )

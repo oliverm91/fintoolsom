@@ -39,12 +39,17 @@ class InterpolationMethod(Enum):
     * ``LogLinear`` (discount factors): linear in ``log(df)``, i.e. piecewise-constant
       forwards between pillars;
     * ``HermiteCubicSpline`` (discount factors): monotone cubic (PCHIP) on the dfs;
-    * ``PiecewiseConstant`` (forward rates): one constant forward per segment.
+    * ``PiecewiseConstant`` (forward rates): one constant forward per segment;
+    * ``Linear`` (forward rates): forwards linear in time between knots;
+    * ``CubicSpline`` (discount and index curves): natural C2 cubic spline on
+      ``log(df)``. A pillar moves the whole curve.
     """
 
     LogLinear = 1
     HermiteCubicSpline = 2
     PiecewiseConstant = 3
+    Linear = 4
+    CubicSpline = 5
 
 
 def year_fractions(curve_date: date, dates: Sequence[date]) -> np.ndarray:

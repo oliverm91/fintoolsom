@@ -36,7 +36,12 @@ def test_a_currency_with_its_own_risk_free_index_has_no_discount_curve():
 
 
 @pytest.mark.parametrize(
-    "method", [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline]
+    "method",
+    [
+        InterpolationMethod.LogLinear,
+        InterpolationMethod.HermiteCubicSpline,
+        InterpolationMethod.CubicSpline,
+    ],
 )
 def test_reprices_its_pillars_and_is_one_at_the_curve_date(method):
     curve = _curve(method)
@@ -70,6 +75,37 @@ def test_parallel_bump_shifts_every_continuous_zero_rate_and_returns_a_copy():
             math.log(curve.get_df(d)) - math.log(bumped.get_df(d))
         ) / tau == pytest.approx(2e-4, abs=1e-12)
     assert list(curve.dfs) == pytest.approx(DFS)
+
+
+def test_cubic_spline_forward_joins_the_flat_extrapolation_smoothly():
+    curve = _curve(InterpolationMethod.CubicSpline)
+    last, day = PILLARS[-1], timedelta(days=1)
+    before = math.log(curve.get_df(last - day)) - math.log(curve.get_df(last))
+    after = math.log(curve.get_df(last)) - math.log(curve.get_df(last + day))
+    assert before == pytest.approx(after, abs=1e-8)
+
+
+def test_cubic_spline_differs_from_log_linear_between_pillars():
+    between = T + timedelta(days=2500)
+    assert _curve(InterpolationMethod.CubicSpline).get_df(between) != pytest.approx(
+        _curve().get_df(between), rel=1e-6
+    )
+
+
+def test_cubic_spline_bump_shifts_every_zero_rate():
+    curve = _curve(InterpolationMethod.CubicSpline)
+    bumped = curve.parallel_bump_bps(2)
+    assert bumped.interpolation_method is InterpolationMethod.CubicSpline
+    for d in INSIDE + [PILLARS[-1] + timedelta(days=500)]:
+        tau = (d - T).days / 365
+        assert (
+            math.log(curve.get_df(d)) - math.log(bumped.get_df(d))
+        ) / tau == pytest.approx(2e-4, abs=1e-11)
+
+
+def test_linear_is_only_for_index_curves():
+    with pytest.raises(ValueError, match="does not support interpolation 'Linear'"):
+        DiscountCurve(T, USD, ICP, PILLARS, DFS, InterpolationMethod.Linear)
 
 
 def test_pillars_are_sorted_and_validated():

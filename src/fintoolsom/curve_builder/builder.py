@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
+from collections import defaultdict
+from datetime import date
 
 from ..derivatives.calculator import Calculator
 from ..derivatives.forwards import Forward
@@ -26,7 +28,7 @@ from ..market.conventions import FixedLegSpec, FloatingLegSpec
 from ..market.market import Market
 from ..rates import InterpolationMethod, Rate
 from ._errors import InsufficientQuotesError, RedundantQuoteWarning, RepricingError
-from ._keys import _instrument_of
+from ._keys import CurveKey, _built, _instrument_of
 from ._plan import _Planner
 from ._seeds import _Seeder
 from ._solver import _GroupSolve, _solve_unknowns
@@ -86,6 +88,9 @@ class _CurveBuilder:
         self.seeder = _Seeder(market, market.risk_free_index)
         self.plan = _Planner(quotes, market, self.seeder)
         self._pinning: list = []  # (instrument, report currency) of every quote that owned a pillar
+        self._pinned_dates: list[date] = []  # the pillar each of `_pinning` owns
+        self._fixed: dict = {}  # curve -> its fixed part before this build's first pillar
+        self._free_dates: dict[CurveKey, list[date]] = defaultdict(list)
 
     def build(self) -> None:
         """Solve every group in dependency order, then check the repricing.
@@ -129,6 +134,7 @@ class _CurveBuilder:
                     "Curve build stalled: the remaining groups are under-determined given "
                     f"the available quotes: {[set(g) for g in pending]}."
                 )
+        self._solve_splines_jointly()
         self._check_repricing()
         self._warn_ditched()
 
@@ -195,7 +201,50 @@ class _CurveBuilder:
         )
         solve.apply(y)  # root's last f-eval is not guaranteed to be at the solution.
         self._pinning += [(i, report_currency) for i in residual_instruments]
+        self._pinned_dates += pillar_dates
+        for curve, dates in free_dates.items():
+            self._fixed.setdefault(curve, fixed_pillars[curve])
+            self._free_dates[curve] += dates
         return "solved"
+
+    def _solve_splines_jointly(self) -> None:
+        """Re-solve every pillar of this build at once if a curve is a cubic spline.
+
+        Groups are solved in sequence on the premise that a later pillar leaves what
+        was already fitted alone. A spline pillar moves the whole curve, so the quotes
+        fitted before it drift; the sequential result only warm-starts this solve.
+        """
+        built = {c: _built(self.market, c) for c in self._free_dates}
+        if all(
+            curve.interpolation_method is not InterpolationMethod.CubicSpline
+            for curve in built.values()
+        ):
+            return
+        # New pillars are always appended, so each curve's are its last values.
+        seeds = {
+            c: (built[c].forward_rates if isinstance(c, Index) else built[c].dfs)[
+                -len(dates) :
+            ]
+            for c, dates in self._free_dates.items()
+        }
+        solve = _GroupSolve.from_free_pillars(
+            self.market,
+            self.t,
+            self.discount_interp_method,
+            self._fixed,
+            dict(self._free_dates),
+            seeds,
+            self.index_interp_method,
+        )
+        y = _solve_unknowns(
+            solve,
+            [instrument for instrument, _ in self._pinning],
+            self._pinned_dates,
+            _REPORT_CURRENCY,
+            "Joint solve of the cubic-spline curves",
+            date_by_date=False,
+        )
+        solve.apply(y)
 
     def _check_repricing(self) -> None:
         """Raise if a quote that pinned a pillar was moved off par by a later group."""
@@ -352,11 +401,13 @@ def build_curves(
         Market as of the quote date, with the FX and fixings valuation needs.
     discount_interp_method : InterpolationMethod, optional
         Interpolation of the discount curves this build creates: ``LogLinear``
-        (default, solved date by date) or ``HermiteCubicSpline``. A curve already
-        in the market keeps its own method when the build extends it.
+        (default, solved date by date), ``HermiteCubicSpline`` or ``CubicSpline``. A
+        curve already in the market keeps its own method when the build extends it.
     index_interp_method : InterpolationMethod, optional
-        Interpolation of the index curves this build creates (``PiecewiseConstant``
-        forwards by default); an extended one keeps its own.
+        Interpolation of the index curves this build creates: ``PiecewiseConstant``
+        forwards (default), ``Linear`` forwards or ``CubicSpline``; an extended one
+        keeps its own. With a ``CubicSpline`` curve every pillar is finally solved
+        jointly, since a spline pillar moves the whole curve.
 
     Raises
     ------
