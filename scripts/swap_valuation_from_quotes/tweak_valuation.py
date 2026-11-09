@@ -82,13 +82,13 @@ def _terms(tenors: str, adj) -> tuple[Term, ...]:
 
 
 _INDEX_METHODS = (
-    #InterpolationMethod.CubicSpline,
-    #InterpolationMethod.Linear,
+    # InterpolationMethod.CubicSpline,
+    # InterpolationMethod.Linear,
     InterpolationMethod.PiecewiseConstant,
 )
 _DISCOUNT_METHODS = (
-    #InterpolationMethod.CubicSpline,
-    #InterpolationMethod.HermiteCubicSpline,
+    # InterpolationMethod.CubicSpline,
+    # InterpolationMethod.HermiteCubicSpline,
     InterpolationMethod.LogLinear,
 )
 
@@ -97,12 +97,8 @@ _SOFR_TERMS = _terms(
     "18M",
     US_ADJ,
 )
-_ICP_TERMS = _terms(
-    "1Y 18M 2Y 3Y", CL_ADJ
-)
-_ICP_FIRST_COL = _terms(
-    "1Y 18M 2Y", CL_ADJ
-)
+_ICP_TERMS = _terms("1Y 18M 2Y 3Y", CL_ADJ)
+_ICP_FIRST_COL = _terms("1Y 18M 2Y", CL_ADJ)
 _BASIS_FIRST_QUOTE_TERMS = _terms("2Y", CL_ADJ)  # where the FX forwards stop
 _BASIS_NON_ZERO_TERMS = _terms("2Y", CL_ADJ)
 
