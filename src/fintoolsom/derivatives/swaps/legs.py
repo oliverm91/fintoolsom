@@ -71,6 +71,20 @@ class SwapLeg:
         """Number of coupons."""
         return len(self.coupons)
 
+    def _terms(self) -> str:
+        """Rate description used by :meth:`__str__`; empty for the base leg."""
+        return ""
+
+    def __str__(self) -> str:
+        ccy = getattr(self, "currency", None)
+        head = f"{type(self).__name__:<14}{ccy if ccy is not None else '?'}"
+        if not self.coupons:
+            return f"{head}  (no coupons)"
+        return (
+            f"{head}  notional {self.residuals[0]:,.0f}  {self._terms()}".rstrip()
+            + f"\n{self.start_dates[0]} -> {self.end_dates[-1]}  ({self.n_coupons} coupons)"
+        )
+
     @staticmethod
     def _build_schedule(
         start_date: date,
@@ -147,6 +161,9 @@ class FixedLeg(SwapLeg):
     currency: Currency
     rates: np.ndarray = field(init=False)
     flows: np.ndarray = field(init=False)
+
+    def _terms(self) -> str:
+        return f"{self.rates[0].rate:.4%}"
 
     def __post_init__(self):
         super().__post_init__()
@@ -245,6 +262,11 @@ class FloatingLeg(SwapLeg):
     index: InterestIndex
     spread: Rate
     spreads_values: np.ndarray = field(init=False)
+
+    def _terms(self) -> str:
+        return (
+            f"{getattr(self.index, 'name', self.index)} {self.spread.rate * 1e4:+.1f}bp"
+        )
 
     def __post_init__(self):
         super().__post_init__()

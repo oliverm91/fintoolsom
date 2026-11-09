@@ -69,3 +69,16 @@ def test_settlement_currency_validation():
         == CLP
     )
     Swap(receive_leg=clp, pay_leg=_fixed(Ccy.CLP))  # single currency: nothing to settle
+
+
+def test_str_is_a_compact_summary():
+    from tests.factories.swap_factory import build_swap, swap_cases
+
+    for case in swap_cases():
+        text = str(build_swap(case))
+        lines = text.splitlines()
+        assert lines[0].startswith("Swap  (")
+        assert len(lines) == 5
+        assert lines[1].lstrip().startswith("Receive")
+        assert lines[3].lstrip().startswith("Pay")
+        assert "coupons)" in lines[2] and "coupons)" in lines[4]

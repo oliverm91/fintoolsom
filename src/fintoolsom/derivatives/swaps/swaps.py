@@ -78,6 +78,25 @@ class Swap(SwapBase):
                 f"{self.payment_currency.settlement_currency}."
             )
 
+    def __str__(self) -> str:
+        if self.is_deliverable:
+            mode = "deliverable"
+        elif self.payment_currency is not None:
+            mode = f"non-deliverable, settles {self.payment_currency}"
+        else:
+            mode = "single currency"
+        collateral = getattr(self.collateral_index, "name", None) or "uncollateralised"
+        indent = " " * 11
+
+        def fmt(label: str, leg: SwapLeg) -> str:
+            return f"  {label:<9}" + str(leg).replace("\n", "\n" + indent)
+
+        return (
+            f"Swap  ({mode}, collateral: {collateral})\n"
+            f"{fmt('Receive', self.receive_leg)}\n"
+            f"{fmt('Pay', self.pay_leg)}"
+        )
+
     @property
     def settlement_currency(self) -> Currency | None:
         """Currency every flow settles in, or None when each leg settles in its own."""
