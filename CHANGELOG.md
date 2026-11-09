@@ -12,10 +12,13 @@
 - **curve_builder**: `build_curves` accepts the new methods. With a `CubicSpline` curve every pillar is finally solved jointly.
 - **derivatives**: `Swap` and the swap legs print as a compact summary. `str(swap)` shows maturity, settlement mode and collateral, then one line per leg with its kind, currency, notional and rate or spread.
 - **dates**: `Calendar` has a short `__repr__`, so indexes and legs no longer print every holiday.
+- **derivatives**: `TermRateLeg` warns on creation when a payment date is a holiday of its index's calendar.
 
 ### Docs
 
 - **scripts**: add a sample swap valuation from quotes in `scripts/swap_valuation_from_quotes`.
+- **derivatives**: add a `derivatives.swaps` README on the leg builders and custom swaps, and correct how amortizations are described.
+- **curve_builder**: the README shows both interpolation arguments and an example of feeding quotes to `build_curves`, and describes the build more briefly.
 
 ## v1.0.0b2 (2026-11-09)
 

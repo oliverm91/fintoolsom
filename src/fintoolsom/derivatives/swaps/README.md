@@ -145,7 +145,8 @@ Keep these in mind when building coupons by hand:
   repayments don't add up to the notional, or `residual` doesn't follow them, the
   swap is still valued.
 - **Dates are used exactly as given.** Coupons aren't adjusted for business days, so
-  pass dates that are already adjusted.
+  pass dates that are already adjusted. A `TermRateLeg` warns on creation if a payment
+  date is a holiday of its index's calendar.
 - **There is no initial notional exchange.** Only the repayments in `amortization`
   are paid.
 - **A floating leg uses the leg's `spread`.** The `spread` on each coupon is not used

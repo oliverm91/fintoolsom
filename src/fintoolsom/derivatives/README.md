@@ -53,8 +53,9 @@ FX(d) = FX(L) · [df_base(d) / df_base(L)] / [df_quote(d) / df_quote(L)]
 where `L = market.get_fx_known_until(pair)`: `t` for a traded pair, or the last
 published UF date for CLF/CLP. Fixings on or before `L` are read from the history.
 
-Only the final notional exchange is valued (the last coupon's amortization). There
-is no initial exchange, and coupons paid on or before `t` are dropped.
+Every coupon's amortization is paid with that coupon, so a bullet leg only repays
+its notional at the end and an amortizing leg repays it along the way. There is no
+initial exchange, and coupons paid on or before `t` are dropped.
 
 ## Risk
 

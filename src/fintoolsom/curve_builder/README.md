@@ -9,6 +9,12 @@ from fintoolsom.rates import InterpolationMethod
 
 build_curves(quotes, market)  # fills market.curves in place
 build_curves(quotes, market, discount_interp_method=InterpolationMethod.HermiteCubicSpline)
+build_curves(
+    quotes,
+    market,
+    discount_interp_method=InterpolationMethod.LogLinear,
+    index_interp_method=InterpolationMethod.PiecewiseConstant,
+)
 ```
 
 ## What it builds
@@ -32,62 +38,77 @@ build_curves(quotes, market, discount_interp_method=InterpolationMethod.HermiteC
   - the short end of overnight curves: today's fixing, or the last level ratio for
     ICP.
 
+## Example: feeding quotes to the builder
+
+A quote is a dataclass holding one instrument's conventions and its market level.
+Fill the market with fixings and spot, list the quotes in any order, and call
+`build_curves`. The builder works out which pillar each quote pins, so you don't
+assign them. Besides the two types below there are `IRBasisQuote`,
+`CrossCurrencyFixedFloatQuote`, `CrossCurrencyFloatFloatQuote` and
+`ForwardPriceQuote`.
+
+```python
+from datetime import date
+
+from fintoolsom.curve_builder import build_curves
+from fintoolsom.dates import ActualDayCountConvention, ModifiedFollowingConvention
+from fintoolsom.dates.time_fractions import TF_Actual360
+from fintoolsom.market import (
+    Currency, CurrencyPair, FixedLegSpec, FloatingLegSpec, ForwardPointsQuote, FX_Rate, IRSQuote, Market,
+    OvernightInterestPriceHistory, OvernightInterestPriceIndex, OvernightRateHistory, OvernightRateIndex,
+    PaymentFrequency, QuotedSide, Term, TermUnit,
+)
+from fintoolsom.rates import InterpolationMethod, LinearInterestConvention, Rate, RateConvention
+
+t = date(2026, 11, 6)
+icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
+sofr = OvernightRateIndex("SOFR", currency=Currency.USD)
+usdclp = CurrencyPair(Currency.USD, Currency.CLP)
+convention = RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
+cl, us = ModifiedFollowingConvention("CL"), ModifiedFollowingConvention("US")
+
+market = Market(t, risk_free_index=icp)
+market.add_index(OvernightInterestPriceHistory(icp, {date(2026, 11, 5): 100.0, t: 100.0125}))
+market.add_index(OvernightRateHistory(sofr, {t: Rate(convention, 0.0365)}))
+market.add_fx_rate(t, FX_Rate(usdclp, 945.0))
+
+def ois(years, level, currency, adj, index, frequency, collateral):
+    specs = (currency, frequency, adj, TF_Actual360())
+    return IRSQuote(
+        QuotedSide.RECEIVE, Term(years, TermUnit.Y, adj), t, adj, collateral_index=collateral,
+        fixed_leg=FixedLegSpec(*specs, Rate(convention, level)),
+        floating_leg=FloatingLegSpec(*specs, index, Rate(convention, 0.0)),
+    )
+
+quotes = [ois(y, r, Currency.CLP, cl, icp, PaymentFrequency.SEMIANNUAL, None) for y, r in [(1, 0.046), (2, 0.047), (3, 0.048)]]
+quotes += [ois(y, r, Currency.USD, us, sofr, PaymentFrequency.ANNUAL, sofr) for y, r in [(1, 0.036), (2, 0.035), (3, 0.0355)]]
+quotes += [
+    ForwardPointsQuote(currency_pair=usdclp, value=points, is_buy=True, term=Term(months, TermUnit.M, cl), quote_date=t)
+    for months, points in [(3, 2.0), (6, 3.5), (12, 6.0)]
+]
+
+build_curves(
+    quotes, market,
+    discount_interp_method=InterpolationMethod.LogLinear,
+    index_interp_method=InterpolationMethod.PiecewiseConstant,
+)
+list(market.curves)  # ['ICP', 'SOFR', 'USD_ICP']
+```
+
 ## How it works
 
 The build is split in private modules, driven by `builder._CurveBuilder`.
 
-1. **Keys (`_keys.py`).**
-   - `_curves_needed(quote)` lists every curve a quote reads: the curves of its
-     payment currencies, its collateral index and its floating indexes.
-   - Quotes that read the same set of curves form a group.
-2. **Pillar ownership (`_plan.py`).**
-   - Each quote owns at most one pillar: its maturity, on the first of its
-     candidate curves where that date is still open (curve not built, or the date
-     past its end) and not already taken by another quote of the group.
-   - Candidates, in preference order:
-     - FX forward or cross-currency swap: the non-risk-free funding curve, i.e.
-       the basis.
-     - Single-currency swap: its floating index curve.
-     - Basis swap: whichever index no IRS already pins.
-   - A quote with no open pillar is *ditched*: the curves ignore it, and the build
-     reports it in a `RedundantQuoteWarning`.
-3. **Scheduling (`_plan.py`).**
-   - A group is ready once no other pending group still owns a pillar on a curve
-     it reads, so a curve is never read before it is complete.
-   - Ready groups solve smallest first, then in quote order.
-   - Groups waiting on each other form a cycle and are merged into one joint
-     solve. A typical cycle is SOFR-collateralised cross-currency swaps that read
-     SOFR while the OIS builds it.
-   - Ownership is re-planned after every solve.
-4. **Seeds and anchors (`_seeds.py`).** A new index curve gets a fixed short end:
-   - Overnight index with fixings: knots start at the next business day, and
-     today's rate covers `[t, t + 1bd]` as the curve's `spot_rate`.
-   - Term index: the first segment is today's fixing over `[t + spot lag, + term]`.
-   - Otherwise: knots start at `t`.
-
-   Free pillars are seeded from the quotes themselves: fixed-leg zero rates,
-   covered interest parity for FX forwards, spreads for basis swaps. Good seeds
-   keep the root solves short; the solve itself is exact.
-5. **Solving (`_solver.py`).**
-   - Unknowns are log discount factors on discount curves and segment forwards on
-     index curves.
-   - With local interpolation on every curve (log-linear dfs, piecewise-constant
-     or linear forwards), a quote depends only on pillars up to its own maturity. The group
-     is then bootstrapped date by date, in small square blocks of at most one
-     unknown per curve.
-   - A spline curve moves everywhere, so its group is solved jointly with one
-     `scipy.optimize.root` (hybr).
-   - If any curve is a `CubicSpline`, the groups still solve in order to settle
-     pillar ownership, and every pillar is then re-solved in one joint `root` from
-     that result: a later spline pillar moves quotes that were fitted earlier.
-   - Every solve is atomic: on failure the curves are restored.
-6. **Checks (`builder.py`).**
-   - After the last group, every quote that pinned a pillar must still reprice
-     within `1e-4` (report currency CLP). Otherwise the build raises
-     `RepricingError`: a later group moved a curve it was fitted on.
-   - Ditched quotes are then warned once, with their MTM:
-     - swaps also in bp of their DV01;
-     - FX forwards also as a percentage of notional.
+1. **Grouping.** Quotes that read the same set of curves form a group.
+2. **Pillars.** Each quote pins at most one pillar, its maturity, on the first of
+   its candidate curves where that date is still open. A quote with no open pillar
+   is left out and reported in a `RedundantQuoteWarning`.
+3. **Order.** A group solves once no other group still owns a pillar on a curve it
+   reads. Groups waiting on each other are merged into one joint solve.
+4. **Solving.** The unknowns are log discount factors on discount curves and segment
+   forwards on index curves. With local interpolation a group is bootstrapped date
+   by date. A spline curve is solved jointly with `scipy.optimize.root`, and with a
+   `CubicSpline` every pillar is re-solved jointly at the end.
 
 ## Errors and warnings
 

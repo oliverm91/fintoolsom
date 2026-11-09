@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from datetime import date
 from typing import cast
@@ -297,11 +298,30 @@ class TermRateLeg(FloatingLeg):
     ----------
     fixing_dates : list of date
         Per-coupon rate fixing dates (usually before the accrual start).
+
+    Warns
+    -----
+    UserWarning
+        If a payment date is a holiday of the index calendar.
     """
 
     _label = "Term"
 
     fixing_dates: list[date] = field(default_factory=list)
+
+    def __post_init__(self):
+        super().__post_init__()
+        calendar = getattr(self.index, "calendar", None)
+        if calendar is None:
+            return
+        holidays = [d for d in self.payment_dates if calendar.is_holiday(d)]
+        if holidays:
+            warnings.warn(
+                f"Term-rate leg on {getattr(self.index, 'name', self.index)} pays on "
+                f"holidays of the index calendar: {[d.isoformat() for d in holidays]}.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     @classmethod
     def from_term(
