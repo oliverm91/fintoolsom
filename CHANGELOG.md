@@ -2,70 +2,63 @@
 
 ### BREAKING CHANGE
 
-- ProjectionCurve and NSSCurve are removed, as are
-NelsonSiegelSvensson.get_curve and Market.get_curve, get_funding_curve,
-get_discount_dfs, get_projection, projection_curves and funding_key.
-Market.riskless_index is now risk_free_index and Market.curves is keyed by
-curve id. build_curves takes discount_interp_method / index_interp_method.
+- **derivatives**: instruments only hold data and valuation moved to `Calculator`. `Forward.get_mtm`, `NDF.get_mtm`, `Option.get_mtm`, `get_delta`, `get_gamma`, `get_vega`, `get_log_moneyness`, `get_strike_from_delta` and `SwapBase.valuate`, `get_pay_flows_value`, `get_receive_flows_value` are removed. Use `Calculator.valuate(instrument, market, ...)` or the matching `Calculator` method.
+- **derivatives**: swaps are redesigned around typed legs and coupons. `DefaultSwap` and `FXCompensatedSwap` are replaced by `Swap`. The `*SwapLeg` classes are replaced by `SwapLeg`, `FixedLeg`, `FloatingLeg`, `OvernightLeg`, `TermRateLeg` and `XCCYFloatingLeg`. The `*SwapCoupon` classes are replaced by `SwapCoupon`, `FixedCoupon`, `FloatingCoupon`, `OvernightCoupon`, `TermRateCoupon` and `XCCYCoupon`.
+- **derivatives**: `IndexedNDF` is removed. A UF forward is now a CLF/CLP `NDF`.
+- **market**: index definitions are split from their data. `IborRateIndex`, `IborRateIndexData`, `IndexData` and `OvernightIndexData` are replaced by the index classes (`OvernightRateIndex`, `OvernightInterestPriceIndex`, `TermRateIndex`, ...) and the history classes (`OvernightRateHistory`, `TermRateHistory`, ...). "Ibor" is now "Term" throughout.
+- **market**: `Market.add_index` takes a history and `Market.get_index` no longer takes a date.
+- **market**: `Market.zero_coupon_curve_mapper` and `get_zero_coupon_curve` are replaced by `Market.curves` (keyed by curve id), `set_curve`, `get_index_curve`, `get_df` and `get_dfs`. `get_discount_curve` now takes `(currency, risk_free_index=...)`. `Market.add_currency_pair` is removed.
+- **market**: `Locality` is now an enum instead of a dataclass, and `Locality.EU` uses the German calendar.
+- **market**: `VolatilitySurface` and its interpolation classes move from `derivatives.options.volatility_surface` to `market.volatility_surface`.
+- **models**: `NelsonSiegelSvensson.get_curve` is removed. Use `get_rate` or `get_df`.
+- **fixedIncome**: `Coupon.validate_inputs` and `Coupons.validate_residuals` are now private.
+- **dates**: `ScheduleGenerator.generate_schedule` has a new `end_date` parameter before `stub_first`, so positional callers must be updated.
+- **rates**: rate conventions print in a readable form, for example `lin/act/360` instead of `lact360`, and interest conventions print as `lin`, `comp` and `exp` instead of `l`, `c` and `e`.
 
 ### Feat
 
-- **market**: rate convention of interest price indexes
-- **curve_builder**: ownership-based build order, one pillar per quote; split into private modules
-- **curve_builder**: one scheduler for discount and projection curves; date-by-date bootstrap
-- **derivatives**: leg duration and DV01; factories, integration tests, coverage
-- **derivatives,market**: ND settlement, UF as currency, exact swap valuation
-- **curve_builder**: anchor price-based overnight curves via spot_overnight_rate
-- **market**: concrete OvernightInterestPriceIndex + UFIndex.get_maturity
-- **curve_builder**: register/bootstrap projection curves after discount build
-- **rates**: ProjectionCurve forward-rate curve + get_projection seam
-- **market**: index spot_lag (fixing->value offset); projection-curve design doc
-- **market**: Index.get_maturity + locality calendar on Index
-- **market**: type indexes as Overnight/Term; dispatch OvernightLeg; fix OIS projection
-- **market**: build ForwardPointsQuote outright from the market spot
-- **derivatives**: XCCY notional exchange + FX-matched leg notionals
-- **curve_builder**: dependency-scheduled, log-df root solve of curve groups
-- **curve_builder**: bootstrap discount/projection curves from instrument quotes
-- **market**: term-based date derivation on forward quotes
-- **market**: swap-level adj_convention, Term class, explicit start/maturity on SwapQuote
-- **market**: add InstrumentQuote ABC; get_instrument() on all quote types
-- **derivatives**: redesign swap hierarchy with typed legs and coupons
-- **market**: add UF forward quote family
-- **market**: split index definitions from data-bearing histories
-- **market**: add PEN/Locality.PE; fix Locality.EU value to use DE calendar
-- **market**: add ForwardQuote and SwapQuote hierarchy with leg specs
-- **market**: redesign index hierarchy with InterestIndex, OvernightRateIndex, OvernightPriceIndex, TermRateIndex
-- **market**: add LocalityCode enum and locality attribute to Currency, add Spot
+- **curve_builder**: new `build_curves` bootstraps discount and index curves from market quotes, solving curves in dependency order. It raises `InsufficientQuotesError` and `RepricingError`, and warns with `RedundantQuoteWarning`.
+- **rates**: new `Curve` interface with `IndexCurve` (forward-rate curve projecting an index) and `DiscountCurve` (pillar discount factors), including `parallel_bump_bps`. `InterpolationMethod` adds `PiecewiseConstant`.
+- **market**: new quote family with `get_instrument()`: `IRSQuote`, `IRBasisQuote`, `CrossCurrencyFixedFloatQuote`, `CrossCurrencyFloatFloatQuote`, `ForwardPointsQuote` and `ForwardPriceQuote`.
+- **market**: indexes carry currency, calendar, spot lag and `get_maturity`.
+- **market**: the UF is a currency (`Currency.CLF`) quoted against CLP like any FX pair, with `Market.get_fx_known_until` and UF/CPI helpers in `market.uf`.
+- **market**: add PEN and `Locality.PE`.
+- **derivatives**: `Calculator` adds `get_swap_mtm`, `get_leg_pv`, `get_leg_duration` and `get_leg_dv01`.
+- **derivatives**: started swaps are valued exactly, combining realised fixings with projected ones.
+- **derivatives**: swaps support deliverable and non-deliverable settlement and cross-currency notional exchange.
+- **derivatives**: new leg builders `fixed_leg`, `floating_leg`, `overnight_leg`, `term_rate_leg` and `xccy_floating_leg`.
+- **dates**: add `Term`, `TermUnit` and `get_calendar`. Adjustment conventions accept a country code as well as a `Calendar`.
+
+### Deprecated
+
+- **rates**: `ZeroCouponCurve` is legacy, kept for `CLBond` and Nelson-Siegel-Svensson fitting, and emits a `DeprecationWarning`.
+- **rates**: `Rate.rate_value` is an alias of `Rate.rate`.
+- **models**: `NelsonSiegelSvensson.calibrate` is an alias of `calibrate_from_bonds`.
 
 ### Fix
 
-- **fixedIncome**: CLBond curve methods take ZeroCouponCurve; z-spread honours maxiter
-- **market**: UFIndex.get_maturity returns the reajuste-closing 9th
-- **notebooks**: instantiate ActualDayCountConvention for ICP index
-- **market**: rename implied_monthly_cpi_between params, enforce base on 9th
-- **dates**: handle unsupported bank holiday category gracefully
-- **market**: repair Market dataclass and make Locality hashable
+- **market**: `Market(t=...)` could not be instantiated.
+- **market**: `accrue_rates_custom_reset_days` did not accumulate periods.
+- **dates**: correct Act/Act ISDA (infinite loop across year ends), Act/Act ICMA, Act/365L, NL/360, NL/365 (29 February boundary) and the 30U/360 end-of-month rule.
+- **dates**: `ScheduleGenerator` dropped a date when `stub_first=False`.
+- **dates**: correct the `MonthDayRule` Monday adjustment (Chilean Law 19.668).
+- **dates**: countries without a bank holiday category no longer fail, and bank holidays are added only for CL and JP.
+- **rates**: `ZeroCouponCurve.copy` and `get_aged_curve` dropped the interpolation method.
+- **fixedIncome**: `CLBond.get_z_spread` ignored `maxiter`.
+
+### Perf
+
+- **dates**: legs share one calendar per country instead of rebuilding it.
+
+## v0.7.1 (2026-06-24)
+
+### Fix
+
 - **fixedIncome**: scale tera_value by notional in get_irr_from_amount
 
 ### Refactor
 
-- **models**: NelsonSiegelSvensson.calibrate_from_bonds
-- **rates**: readable rate convention names
-- **rates**: IndexCurve and DiscountCurve replace ZeroCouponCurve in market, builder and derivatives
-- **rates,market**: Curve interface, NSSCurve backend, riskless-index discounting
-- **market**: overnight histories defer next date to their Index
-- **curve_builder**: extract _CurveBuilder / _GroupSolve, unify helpers
-- **market**: move term from RateIndex to TermRateIndex
-- **derivatives**: leg-level swap builders, TermRateLeg fixing-date fix, market updates
-- **market**: remove Spot, use FX_Rate in ForwardQuote.to_outright
-- **market**: replace Locality dataclass and LocalityCode enum with a single Locality enum
-- **swaps**: rename Ibor to Term throughout
-- **derivatives**: strip valuation logic out of instruments into Calculator
 - **fixedIncome**: merge Bond into CLBond with explicit constructor
-
-### Perf
-
-- **dates**: share one calendar per country
 
 ## v0.7.0 (2026-06-23)
 
@@ -77,3 +70,4 @@ curve id. build_curves takes discount_interp_method / index_interp_method.
 - **fixed-income**: raise documented error when get_irr has no flows after valuation date
 
 ## v0.6.10 (2026-06-23)
+
