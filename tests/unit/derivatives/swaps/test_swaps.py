@@ -77,8 +77,7 @@ def test_str_is_a_compact_summary():
     for case in swap_cases():
         text = str(build_swap(case))
         lines = text.splitlines()
-        assert lines[0].startswith("Swap  (")
-        assert len(lines) == 5
+        assert lines[0].startswith("Swap  maturity ")
+        assert len(lines) == 3
         assert lines[1].lstrip().startswith("Receive")
-        assert lines[3].lstrip().startswith("Pay")
-        assert "coupons)" in lines[2] and "coupons)" in lines[4]
+        assert lines[2].lstrip().startswith("Pay")

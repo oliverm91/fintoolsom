@@ -71,19 +71,21 @@ class SwapLeg:
         """Number of coupons."""
         return len(self.coupons)
 
+    _label = "Leg"
+
     def _terms(self) -> str:
         """Rate description used by :meth:`__str__`; empty for the base leg."""
         return ""
 
     def __str__(self) -> str:
         ccy = getattr(self, "currency", None)
-        head = f"{type(self).__name__:<14}{ccy if ccy is not None else '?'}"
+        head = f"{self._label:<15}{ccy if ccy is not None else '?'}"
         if not self.coupons:
             return f"{head}  (no coupons)"
-        return (
-            f"{head}  notional {self.residuals[0]:,.0f}  {self._terms()}".rstrip()
-            + f"\n{self.start_dates[0]} -> {self.end_dates[-1]}  ({self.n_coupons} coupons)"
-        )
+        notional = f"{self.residuals[0]:,.0f}"
+        if np.count_nonzero(self.amortizations) > 1:
+            notional += " amortizing"
+        return f"{head}  {notional}  {self._terms()}".rstrip()
 
     @staticmethod
     def _build_schedule(
@@ -158,12 +160,16 @@ class FixedLeg(SwapLeg):
         Per-coupon interest plus amortization.
     """
 
+    _label = "Fixed"
+
     currency: Currency
     rates: np.ndarray = field(init=False)
     flows: np.ndarray = field(init=False)
 
     def _terms(self) -> str:
-        return f"{self.rates[0].rate:.4%}"
+        values = np.array([r.rate for r in self.rates])
+        prefix = "from " if np.ptp(values) > 0 else ""
+        return f"{prefix}{values[0]:.4%} {self.rates[0].rate_convention}"
 
     def __post_init__(self):
         super().__post_init__()
@@ -259,6 +265,8 @@ class FloatingLeg(SwapLeg):
         Per-coupon spread interest, added (not compounded) to the flow.
     """
 
+    _label = "Floating"
+
     index: InterestIndex
     spread: Rate
     spreads_values: np.ndarray = field(init=False)
@@ -290,6 +298,8 @@ class TermRateLeg(FloatingLeg):
     fixing_dates : list of date
         Per-coupon rate fixing dates (usually before the accrual start).
     """
+
+    _label = "Term"
 
     fixing_dates: list[date] = field(default_factory=list)
 
@@ -369,6 +379,8 @@ class TermRateLeg(FloatingLeg):
 @dataclass
 class OvernightLeg(FloatingLeg):
     """Floating leg on an overnight index, compounded daily (OIS-style)."""
+
+    _label = "Overnight"
 
     @classmethod
     def from_term(
@@ -469,6 +481,8 @@ class XCCYFloatingLeg(OvernightLeg):
     The final coupon carries the notional (final exchange); no initial notional
     exchange is modelled.
     """
+
+    _label = "XCCY Overnight"
 
     @classmethod
     def from_term(

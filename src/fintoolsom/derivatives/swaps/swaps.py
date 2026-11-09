@@ -86,13 +86,13 @@ class Swap(SwapBase):
         else:
             mode = "single currency"
         collateral = getattr(self.collateral_index, "name", None) or "uncollateralised"
-        indent = " " * 11
+        maturity = max(self.receive_leg.end_dates[-1], self.pay_leg.end_dates[-1])
 
         def fmt(label: str, leg: SwapLeg) -> str:
-            return f"  {label:<9}" + str(leg).replace("\n", "\n" + indent)
+            return f"  {label:<9}{leg}"
 
         return (
-            f"Swap  ({mode}, collateral: {collateral})\n"
+            f"Swap  maturity {maturity}  ({mode}, collateral: {collateral})\n"
             f"{fmt('Receive', self.receive_leg)}\n"
             f"{fmt('Pay', self.pay_leg)}"
         )
