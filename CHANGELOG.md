@@ -1,3 +1,23 @@
+## v1.0.0b4 (2026-11-09)
+
+### BREAKING CHANGE
+
+- **derivatives**: `Calculator.get_leg_pv`, `get_leg_duration` and `get_leg_dv01` take a `LegSide` (`LegSide.RECEIVE` or `LegSide.PAY`) instead of a leg, so they can only value the swap's own legs.
+- **derivatives**: `Calculator.get_leg_dv01` raises `NotImplementedError` for a floating leg.
+
+### Feat
+
+- **derivatives**: add `LegSide` and `Swap.leg(side)`.
+- **rates**: `InterpolationMethod` adds `CubicSpline` (natural spline on `log(df)`, for `DiscountCurve` and `IndexCurve`) and `Linear` (forwards linear between knots, `IndexCurve` only).
+- **curve_builder**: `build_curves` accepts the new methods. With a `CubicSpline` curve every pillar is finally solved jointly.
+- **derivatives**: `TermRateLeg` warns on creation when a payment date is a holiday of its index's calendar.
+
+### Docs
+
+- **derivatives**: add a `derivatives.swaps` README on the leg builders and custom swaps, and correct how amortizations are described.
+- **curve_builder**: the README shows both interpolation arguments and an example of feeding quotes to `build_curves`, and describes the build more briefly.
+- **scripts**: add `tweak_valuation.py` to compare the sample swap's valuation across curve-building settings, and set the sample quote conventions (ICP coupons from 1Y, SOFR coupons from 18M, SOFR collateral on ICP swaps from 2Y).
+
 ## v1.0.0b3 (2026-11-09)
 
 ### BREAKING CHANGE
@@ -12,13 +32,10 @@
 - **curve_builder**: `build_curves` accepts the new methods. With a `CubicSpline` curve every pillar is finally solved jointly.
 - **derivatives**: `Swap` and the swap legs print as a compact summary. `str(swap)` shows maturity, settlement mode and collateral, then one line per leg with its kind, currency, notional and rate or spread.
 - **dates**: `Calendar` has a short `__repr__`, so indexes and legs no longer print every holiday.
-- **derivatives**: `TermRateLeg` warns on creation when a payment date is a holiday of its index's calendar.
 
 ### Docs
 
 - **scripts**: add a sample swap valuation from quotes in `scripts/swap_valuation_from_quotes`.
-- **derivatives**: add a `derivatives.swaps` README on the leg builders and custom swaps, and correct how amortizations are described.
-- **curve_builder**: the README shows both interpolation arguments and an example of feeding quotes to `build_curves`, and describes the build more briefly.
 
 ## v1.0.0b2 (2026-11-09)
 
