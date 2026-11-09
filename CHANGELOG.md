@@ -1,3 +1,20 @@
+## Unreleased
+
+### Feat
+
+- **derivatives**: `Swap` and the swap legs print as a compact summary. `str(swap)` shows maturity, settlement mode and collateral, then one line per leg with its kind, currency, notional and rate or spread.
+- **dates**: `Calendar` has a short `__repr__`, so indexes and legs no longer print every holiday.
+
+### Docs
+
+- **scripts**: add a sample swap valuation from quotes in `scripts/swap_valuation_from_quotes`.
+
+## v1.0.0b2 (2026-11-09)
+
+### Fix
+
+- **deps**: raise the `holidays` floor to 0.88 so the holiday calendars are up to date.
+
 ## v1.0.0b1 (2026-11-08)
 
 ### BREAKING CHANGE
