@@ -1,3 +1,16 @@
+## v1.0.0b6 (2026-11-09)
+
+### Fix
+
+- **market**: `OvernightRateHistory.add_rate` no longer depends on the order fixings arrive in. A fixing added on a gap-filled day now applies until the next fixing that was actually set, and changing a set fixing also updates the repeated fixings after it, as when the history is created with all its fixings at once. Accruals across such a gap change for histories loaded out of order.
+
+### Perf
+
+- **market**: `OvernightRateHistory.add_rate` updates only what a new fixing changes instead of rebuilding the history. On 1,250 fixings, changing an existing fixing or adding one before the first is 87-98% faster. Later levels are scaled, so they can differ from a full rebuild by about 1e-15 in relative terms.
+- **models**: Nelson-Siegel-Svensson calibration sums bond values with `numpy`, 20-58% faster for 5 to 40 bonds.
+- **fixedIncome**: bond present value, duration and DV01 sum their flows with `numpy`, up to 42% faster on a 30-year bullet.
+- **dates**: `ActualDayCountConvention` computes date-to-list and list-to-date day counts from integer ordinals.
+
 ## v1.0.0b5 (2026-11-09)
 
 ### Feat
