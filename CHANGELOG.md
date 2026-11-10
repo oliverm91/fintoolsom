@@ -1,3 +1,13 @@
+## v1.0.0b7 (2026-11-10)
+
+### BREAKING CHANGE
+
+- **rates**: `Curve` declares the abstract method `get_aged_curve`, so a custom `Curve` subclass must implement it.
+
+### Feat
+
+- **rates**: `IndexCurve.get_aged_curve(date)` and `DiscountCurve.get_aged_curve(date)` return the curve as seen from `date` (after the curve date and before its last knot or pillar), with `df_aged(t) = df(t) / df(date)`. The aged curve matches the original exactly for `PiecewiseConstant` and `LogLinear`; spline methods match at the pillars and are refitted between them, and `Linear` keeps each remaining knot's forward with a flat first segment. An `IndexCurve` drops its spot rate.
+
 ## v1.0.0b6 (2026-11-09)
 
 ### Fix
