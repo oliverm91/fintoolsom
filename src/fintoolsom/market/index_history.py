@@ -153,7 +153,8 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
 
     Keeps a private level series starting at 100 on the first fixing date and
     compounding each fixing over its business day; accrual is the level ratio
-    minus 1. Missing business days repeat the last known fixing.
+    minus 1. Missing business days repeat the last known fixing, so a fixing added
+    inside such a gap applies until the next fixing that was actually set.
 
     Parameters
     ----------
@@ -168,6 +169,7 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
     _index_values: dict[date, float] = field(
         init=False, repr=False, default_factory=dict
     )
+    _filled_dates: set[date] = field(init=False, repr=False, default_factory=set)
 
     def __post_init__(self):
         if self.rates:
@@ -176,43 +178,93 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
 
     def _check_for_gaps(self, verbose: bool = False):
         """Fill missing business days in `rates` with the last known fixing."""
-        if not self.rates:
-            return
-        end_t = max(self.rates)
-        t = min(self.rates)
+        if self.rates:
+            self._fill_gaps(min(self.rates), max(self.rates), verbose)
+
+    def _fill_gaps(self, t: date, end_t: date, verbose: bool = False) -> date:
+        """Fill the business days from `t` to `end_t`; returns the date the walk ends on."""
         while t < end_t:
             next_t = self.index.get_maturity(
                 t
             )  # next business day (overnight accrual step)
             if next_t not in self.rates:
                 self.rates[next_t] = self.rates[t]
+                self._filled_dates.add(next_t)
                 if verbose:
                     warnings.warn(
                         f"{self.name}: no rate for {next_t}, filled with rate from {t}."
                     )
             t = next_t
+        return t
 
     def _rebuild_index(self):
         if not self.rates:
             self._index_values = {}
             return
         start_t = min(self.rates)
-        # A rate on day t covers t → next_business_day(t), so extend one BD past the last rate.
-        end_t = self.index.get_maturity(max(self.rates))
         self._index_values = {start_t: 100.0}
+        # A rate on day t covers t → next_business_day(t), so extend one BD past the last rate.
+        self._compound_levels(start_t, self.index.get_maturity(max(self.rates)))
+
+    def _compound_levels(self, t: date, end_t: date):
+        """Recompute the levels after `t` up to `end_t`, from the level at `t`."""
+        levels = self._index_values
         r = None
-        t = start_t
         while t < end_t:
             next_t = self.index.get_maturity(t)
             if t in self.rates:
                 r = self.rates[t]
-            self._index_values[next_t] = self._index_values[t] * r.get_wealth_factor(
-                t, next_t
-            )
+            levels[next_t] = levels[t] * r.get_wealth_factor(t, next_t)
             t = next_t
 
+    def _replace_fixing(self, t: date, rate: Rate):
+        """Apply `rate` from `t` until the next set fixing; later levels scale by the same ratio."""
+        levels = self._index_values
+        next_fixing = self.index.get_maturity(t)
+        while next_fixing in self._filled_dates:
+            self.rates[next_fixing] = rate
+            next_fixing = self.index.get_maturity(next_fixing)
+        previous = levels[next_fixing]
+        self._compound_levels(t, next_fixing)
+        ratio = levels[next_fixing] / previous
+        for d in reversed(levels):
+            if d <= next_fixing:
+                break
+            levels[d] *= ratio
+
+    def _prepend_levels(self, t: date, first: date):
+        """Start the levels at `t`, scaling the existing ones to keep them consistent."""
+        existing = self._index_values
+        self._index_values = {t: 100.0}
+        self._compound_levels(t, first)
+        ratio = self._index_values[first] / existing[first]
+        for d, level in existing.items():
+            self._index_values[d] = level * ratio
+
     def add_rate(self, t: date, rate: Rate):
+        """Set the fixing at `t`, recomputing only what it changes.
+
+        A date past the last fixing adds the new levels. A date already in the history
+        takes `rate` until the next set fixing, replacing any repeated fixings in
+        between, and scales the later levels, as does a date before the first fixing.
+        A date that is not a business day of the index rebuilds the whole history.
+        """
+        levels = self._index_values
         self.rates[t] = rate
+        self._filled_dates.discard(t)
+        newest = reversed(levels)
+        end, last_fixing = next(newest, None), next(newest, None)
+        if end is not None:
+            first = next(iter(levels))
+            if t == end or (t > end and self._fill_gaps(last_fixing, t) == t):
+                self._compound_levels(end, self.index.get_maturity(t))
+                return
+            if t in levels:
+                self._replace_fixing(t, rate)
+                return
+            if t < first and self._fill_gaps(t, first) == first:
+                self._prepend_levels(t, first)
+                return
         self._check_for_gaps()
         self._rebuild_index()
 

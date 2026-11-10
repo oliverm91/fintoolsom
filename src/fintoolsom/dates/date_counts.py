@@ -5,6 +5,11 @@ import calendar
 import numpy as np
 
 
+def date_ordinals(dates) -> np.ndarray:
+    """Proleptic Gregorian ordinals of `dates`, as integers."""
+    return np.array([d.toordinal() for d in dates], dtype=np.int64)
+
+
 def _gdc_dd(cls, sd, ed):
     return cls._get_day_count(sd, ed)
 
@@ -24,6 +29,14 @@ def _gdc_ll(cls, sds, eds):
         raise ValueError(
             f"Length of start_dates and end_dates must match. Got lengths {len(sds)} and {len(eds)}"
         )
+
+
+def _actual_dl(cls, sd, eds):
+    return date_ordinals(eds) - sd.toordinal()
+
+
+def _actual_ld(cls, sds, ed):
+    return ed.toordinal() - date_ordinals(sds)
 
 
 class DayCountConventionBase(ABC):
@@ -72,6 +85,12 @@ class DayCountConventionBase(ABC):
 
 
 class ActualDayCountConvention(DayCountConventionBase):
+    _method_mapper = {
+        **DayCountConventionBase._method_mapper,
+        (date, list): _actual_dl,
+        (list, date): _actual_ld,
+    }
+
     @staticmethod
     def _get_day_count(start_date: date, end_date: date) -> int:
         return (end_date - start_date).days

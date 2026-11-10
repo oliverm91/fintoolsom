@@ -299,7 +299,7 @@ class CLBond:
             present_value (float): present value of the bond at the given date.
         """
         pvs = self.get_flows_pv(date, Rate(rate_convention, irr_value))
-        total_pv = sum(pvs)
+        total_pv = pvs.sum()
         return total_pv
 
     def get_present_value_zc(
@@ -497,8 +497,9 @@ class CLBond:
             date, end_dates, time_fraction_base
         )
         pvs = self.get_flows_pv(date, irr)
-        total_pv = sum(pvs)
-        duration = sum(pvs * tenors) / total_pv
+        # Python floats: a matured bond must raise ZeroDivisionError, not return nan.
+        total_pv = float(pvs.sum())
+        duration = float((pvs * tenors).sum()) / total_pv
         return duration
 
     def get_dv01(self, date: date, irr: rates.Rate) -> float:

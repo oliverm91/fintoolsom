@@ -1,6 +1,7 @@
+import itertools
 import math
 import pytest
-from datetime import date
+from datetime import date, timedelta
 from fintoolsom.market import (
     Currency,
     OvernightRateIndex,
@@ -86,6 +87,132 @@ def test_overnight_rate_history_add_rate_rebuilds_index():
     h = OvernightRateHistory(index=SOFR, rates={D0: RATE_5PCT})
     h.add_rate(D1, RATE_3PCT)
     assert D2 in h._index_values
+
+
+def _business_days(start: date, n: int) -> list[date]:
+    days = [start]
+    while len(days) < n:
+        days.append(SOFR.get_maturity(days[-1]))
+    return days
+
+
+def _next_saturday(d: date) -> date:
+    return d + timedelta(days=(5 - d.weekday()) % 7 or 7)
+
+
+_B = _business_days(D0, 12)
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        pytest.param([_B[1], _B[2], _B[3]], id="next_business_days"),
+        pytest.param([_B[5]], id="gap_ahead"),
+        pytest.param([_B[1], _B[1]], id="change_last"),
+        pytest.param([_B[1], _B[2], _B[3], _B[1]], id="change_past"),
+        pytest.param([_B[3], _B[0]], id="change_first"),
+        pytest.param([_B[6], _B[2]], id="backfill_into_gap"),
+        pytest.param([D0 - timedelta(days=7)], id="before_first"),
+        pytest.param([_next_saturday(D0)], id="weekend_ahead"),
+        pytest.param([_B[8], _next_saturday(D0)], id="weekend_in_the_past"),
+    ],
+)
+def test_overnight_rate_history_add_rate_matches_a_full_rebuild(dates):
+    h = OvernightRateHistory(index=SOFR, rates={D0: RATE_5PCT})
+    for i, d in enumerate(dates):
+        h.add_rate(d, RATE_3PCT if i % 2 else RATE_5PCT)
+        rates, levels = dict(h.rates), dict(h._index_values)
+        h._check_for_gaps()
+        h._rebuild_index()
+        assert h.rates == rates
+        assert h._index_values == pytest.approx(levels, rel=1e-13)
+
+
+def test_overnight_rate_history_first_add_rate_on_an_empty_history():
+    h = OvernightRateHistory(index=SOFR)
+    h.add_rate(D0, RATE_5PCT)
+    assert h._index_values[D0] == 100.0
+    assert D1 in h._index_values
+
+
+@pytest.mark.parametrize(
+    "target",
+    [_B[4], _B[6], _B[3], _B[1], _B[0], D0 - timedelta(days=7)],
+    ids=[
+        "next_day",
+        "gap_ahead",
+        "change_last",
+        "change_past",
+        "change_first",
+        "before_first",
+    ],
+)
+def test_overnight_rate_history_add_rate_does_not_rebuild(monkeypatch, target):
+    h = OvernightRateHistory(index=SOFR, rates={d: RATE_5PCT for d in _B[:4]})
+
+    def fail(self):
+        raise AssertionError("full rebuild")
+
+    monkeypatch.setattr(OvernightRateHistory, "_rebuild_index", fail)
+    h.add_rate(target, RATE_3PCT)
+    assert list(h._index_values) == sorted(h._index_values)
+    assert SOFR.get_maturity(target) in h._index_values
+
+
+def test_overnight_rate_history_add_rate_into_a_gap_does_not_rebuild(monkeypatch):
+    h = OvernightRateHistory(index=SOFR, rates={_B[0]: RATE_5PCT, _B[4]: RATE_5PCT})
+
+    def fail(self):
+        raise AssertionError("full rebuild")
+
+    monkeypatch.setattr(OvernightRateHistory, "_rebuild_index", fail)
+    h.add_rate(_B[2], RATE_3PCT)
+    assert h.rates[_B[3]] == RATE_3PCT
+
+
+def test_overnight_rate_history_gap_fixing_lasts_until_the_next_set_fixing():
+    h = OvernightRateHistory(index=SOFR, rates={_B[0]: RATE_5PCT, _B[4]: RATE_3PCT})
+    h.add_rate(_B[2], RATE_3PCT)
+    assert [h.rates[d] for d in _B[1:4]] == [RATE_5PCT, RATE_3PCT, RATE_3PCT]
+    h.add_rate(_B[0], RATE_3PCT)  # repeats up to _B[2], which was set
+    assert [h.rates[d] for d in _B[1:4]] == [RATE_3PCT, RATE_3PCT, RATE_3PCT]
+    h.add_rate(_B[2], RATE_5PCT)  # _B[1] stays, _B[3] follows
+    assert [h.rates[d] for d in _B[1:5]] == [
+        RATE_3PCT,
+        RATE_5PCT,
+        RATE_5PCT,
+        RATE_3PCT,
+    ]
+
+
+@pytest.mark.parametrize(
+    "order", list(itertools.permutations(range(4))), ids=lambda o: "".join(map(str, o))
+)
+def test_overnight_rate_history_add_rate_order_does_not_matter(order):
+    fixings = [
+        (_B[0], RATE_5PCT),
+        (_B[2], RATE_3PCT),
+        (_B[5], RATE_5PCT),
+        (_B[7], RATE_3PCT),
+    ]
+    h = OvernightRateHistory(index=SOFR, rates=dict([fixings[order[0]]]))
+    for i in order[1:]:
+        h.add_rate(*fixings[i])
+    at_once = OvernightRateHistory(index=SOFR, rates=dict(fixings))
+    assert h.rates == at_once.rates
+    assert list(h._index_values) == list(at_once._index_values)
+    assert h._index_values == pytest.approx(at_once._index_values, rel=1e-13)
+
+
+def test_overnight_rate_history_add_rate_before_first_keeps_later_accruals():
+    h = OvernightRateHistory(index=SOFR, rates={d: RATE_5PCT for d in _B[:4]})
+    accrual = h.get_accrued_interest(1.0, _B[0], _B[3])
+    first = D0 - timedelta(days=7)
+    h.add_rate(first, RATE_3PCT)
+    assert h._index_values[first] == 100.0
+    assert h.get_accrued_interest(1.0, _B[0], _B[3]) == pytest.approx(
+        accrual, rel=1e-13
+    )
 
 
 def test_overnight_rate_history_accrued_interest_one_day():

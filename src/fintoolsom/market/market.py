@@ -10,8 +10,8 @@ from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
 from ..rates import Rate, Curve, IndexCurve, LegacyCurve
-from ..rates.Curve import date_ordinals
 from ..dates import Calendar, get_calendar
+from ..dates.date_counts import date_ordinals
 
 if TYPE_CHECKING:
     # Deferred: volatility_surface imports derivatives.calculator, which imports

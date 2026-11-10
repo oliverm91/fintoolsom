@@ -57,11 +57,6 @@ def year_fractions(curve_date: date, dates: Sequence[date]) -> np.ndarray:
     return np.array([(d - curve_date).days for d in dates], dtype=float) / DAY_BASE
 
 
-def date_ordinals(dates: Sequence[date]) -> np.ndarray:
-    """Proleptic Gregorian ordinals of `dates`, as integers."""
-    return np.array([d.toordinal() for d in dates], dtype=np.int64)
-
-
 class Curve(ABC):
     """A discount curve: maps a date to a discount factor from ``curve_date``.
 

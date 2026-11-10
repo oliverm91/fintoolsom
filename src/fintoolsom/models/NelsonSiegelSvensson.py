@@ -146,20 +146,13 @@ class NelsonSiegelSvensson:
         bonds_ts, bonds_flows = zip(*bond_t_flows_lst)
         flat_flows = np.concatenate(bonds_flows)
         flat_ts = np.concatenate(bonds_ts)
-        starts_ts = np.cumsum([len(bond_ts) for bond_ts in bonds_ts])
-        starts_ts = np.insert(starts_ts, 0, 0)
-        lengths_ts = np.diff(starts_ts)
-        starts_ts = starts_ts[:-1]
-        starts_lengths = list(zip(starts_ts, lengths_ts))
-        ns_pvs = np.zeros(len(bonds_ts))
+        n_bonds = len(bonds_ts)
+        bond_index = np.repeat(np.arange(n_bonds), [len(ts) for ts in bonds_ts])
 
         def get_valuation_error(params):
-            ns_dfs = nss_df(flat_ts, *params)
-            flows_vps = ns_dfs * flat_flows
-            for ix, start_length in enumerate(starts_lengths):
-                start, length = start_length
-                ns_pvs[ix] = np.sum(flows_vps[start : start + length])
-            return sum((ns_pvs - mkt_pvs) ** 2)
+            flows_vps = nss_df(flat_ts, *params) * flat_flows
+            ns_pvs = np.bincount(bond_index, weights=flows_vps, minlength=n_bonds)
+            return np.sum((ns_pvs - mkt_pvs) ** 2)
 
         if initial_guess is None:
             self.b0 = sum([irr.rate for _, irr in bonds_irr_list]) / len(bonds_irr_list)

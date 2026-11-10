@@ -8,8 +8,8 @@ import numpy as np
 from scipy.special import ndtr, ndtri
 
 from ..rates import Curve, RateConvention, ExponentialInterestConvention
-from ..rates.Curve import date_ordinals
 from ..dates import ActualDayCountConvention
+from ..dates.date_counts import date_ordinals
 from .forwards.forwards import Forward, NDF
 from .options.options import Option
 from .swaps.legs import FixedLeg, FloatingLeg, TermRateLeg

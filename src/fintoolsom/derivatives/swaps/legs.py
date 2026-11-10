@@ -7,11 +7,11 @@ from typing import cast
 
 import numpy as np
 
-from fintoolsom.rates.Curve import date_ordinals
 from fintoolsom.rates.Rates import Rate, RateConvention
 
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
 from ...dates import AdjustmentDateConventionBase, ScheduleGenerator
+from ...dates.date_counts import date_ordinals
 from ...dates.term import Term
 from ...market.currencies import Currency
 from ...market.index import Index, InterestIndex
