@@ -226,12 +226,18 @@ def test_piecewise_constant_aged_curve_is_exact():
     curve = _curve()
     for age in AGE_DATES:
         aged = curve.get_aged_curve(age)
-        dates = [age + timedelta(days=n) for n in (1, 60, 200, 700 - (age - T).days, 900)]
+        dates = [
+            age + timedelta(days=n) for n in (1, 60, 200, 700 - (age - T).days, 900)
+        ]
         assert aged.curve_date == age and aged.knot_dates[0] == age
-        assert aged.get_dfs(dates) == pytest.approx(curve.get_dfs(dates) / curve.get_df(age), rel=1e-12)
+        assert aged.get_dfs(dates) == pytest.approx(
+            curve.get_dfs(dates) / curve.get_df(age), rel=1e-12
+        )
 
 
-@pytest.mark.parametrize("method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline])
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline]
+)
 def test_other_methods_keep_the_dfs_or_forwards_at_the_knots(method):
     curve = _curve(interpolation_method=method)
     age = T + timedelta(days=120)
@@ -239,7 +245,9 @@ def test_other_methods_keep_the_dfs_or_forwards_at_the_knots(method):
     kept = [k for k in KNOTS if k > age]
     assert aged.knot_dates == [age, *kept]
     if method is InterpolationMethod.CubicSpline:
-        assert aged.get_dfs(kept) == pytest.approx(curve.get_dfs(kept) / curve.get_df(age), rel=1e-12)
+        assert aged.get_dfs(kept) == pytest.approx(
+            curve.get_dfs(kept) / curve.get_df(age), rel=1e-12
+        )
     else:  # Linear keeps each remaining knot's forward; the first segment is flat
         assert list(aged.forward_rates) == list(FWDS[1:])
 
@@ -251,7 +259,9 @@ def test_aged_before_the_effective_date_averages_the_spot_forward():
     age = T + timedelta(days=1)
     aged = curve.get_aged_curve(age)
     assert aged.spot_rate is None and aged.knot_dates[:2] == [age, effective]
-    assert aged.get_df(effective) == pytest.approx(curve.get_df(effective) / curve.get_df(age))
+    assert aged.get_df(effective) == pytest.approx(
+        curve.get_df(effective) / curve.get_df(age)
+    )
 
 
 @pytest.mark.parametrize("bad", [T, KNOTS[-1], KNOTS[-1] + timedelta(days=1)])
@@ -265,5 +275,7 @@ def test_df_t1_times_aged_df_t2_is_df_t2_and_aged_df_is_the_forward_df():
     for t1 in AGE_DATES:
         aged = curve.get_aged_curve(t1)
         for t2 in [t1 + timedelta(days=n) for n in (1, 60, 200, 500, 900)]:
-            assert curve.get_df(t1) * aged.get_df(t2) == pytest.approx(curve.get_df(t2), rel=1e-12)
+            assert curve.get_df(t1) * aged.get_df(t2) == pytest.approx(
+                curve.get_df(t2), rel=1e-12
+            )
             assert aged.get_df(t2) == pytest.approx(curve.get_df_fwd(t1, t2), rel=1e-12)

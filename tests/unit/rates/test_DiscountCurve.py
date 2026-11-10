@@ -127,7 +127,11 @@ AGE = T + timedelta(days=100)
 
 @pytest.mark.parametrize(
     "method",
-    [InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline, InterpolationMethod.CubicSpline],
+    [
+        InterpolationMethod.LogLinear,
+        InterpolationMethod.HermiteCubicSpline,
+        InterpolationMethod.CubicSpline,
+    ],
 )
 def test_aged_curve_discounts_with_forward_factors_at_the_pillars(method):
     curve = _curve(method)
@@ -142,10 +146,14 @@ def test_log_linear_aged_curve_is_exact_between_pillars_too():
     curve = _curve()
     aged = curve.get_aged_curve(AGE)
     dates = [AGE + timedelta(days=n) for n in (1, 50, 200, 900, 3000)]
-    assert aged.get_dfs(dates) == pytest.approx(curve.get_dfs(dates) / curve.get_df(AGE))
+    assert aged.get_dfs(dates) == pytest.approx(
+        curve.get_dfs(dates) / curve.get_df(AGE)
+    )
 
 
-@pytest.mark.parametrize("bad", [T, T - timedelta(days=1), PILLARS[-1], PILLARS[-1] + timedelta(days=1)])
+@pytest.mark.parametrize(
+    "bad", [T, T - timedelta(days=1), PILLARS[-1], PILLARS[-1] + timedelta(days=1)]
+)
 def test_aging_outside_the_curve_raises(bad):
     with pytest.raises(ValueError):
         _curve().get_aged_curve(bad)
@@ -156,5 +164,7 @@ def test_df_t1_times_aged_df_t2_is_df_t2_and_aged_df_is_the_forward_df():
     t1 = AGE
     aged = curve.get_aged_curve(t1)
     for t2 in [t1 + timedelta(days=n) for n in (1, 50, 200, 900, 3000)]:
-        assert curve.get_df(t1) * aged.get_df(t2) == pytest.approx(curve.get_df(t2), rel=1e-12)
+        assert curve.get_df(t1) * aged.get_df(t2) == pytest.approx(
+            curve.get_df(t2), rel=1e-12
+        )
         assert aged.get_df(t2) == pytest.approx(curve.get_df_fwd(t1, t2), rel=1e-12)

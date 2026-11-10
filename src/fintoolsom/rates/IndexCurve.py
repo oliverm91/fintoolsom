@@ -251,7 +251,10 @@ class IndexCurve(DailyGridCurve):
         if self.interpolation_method is InterpolationMethod.Linear:
             first = len(self.knot_dates) - (len(knots) - 1)
             forwards = np.array(
-                [self.forward_rates[max(i - 1, 0)] for i in range(first, len(self.knot_dates))]
+                [
+                    self.forward_rates[max(i - 1, 0)]
+                    for i in range(first, len(self.knot_dates))
+                ]
             )
         else:
             log_dfs = np.log(self.get_dfs(knots))
