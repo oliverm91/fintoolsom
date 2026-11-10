@@ -232,6 +232,40 @@ class IndexCurve(DailyGridCurve):
             precalculate=self.precalculate,
         )
 
+    def get_aged_curve(self, date: date) -> IndexCurve:
+        """The curve from `date`: knots are `date` and the knots after it.
+
+        The spot rate is dropped: the first knot is the new curve date. If `date`
+        falls before the effective date, the first forward is the average one over
+        ``[date, effective_date]``.
+
+        * ``PiecewiseConstant``: exact; a segment cut by `date` keeps its forward.
+        * ``CubicSpline``: the dfs at the knots are exact (average forwards), but the
+          natural spline is refitted on the new knots, so it differs between them.
+        * ``Linear``: each remaining knot keeps its forward, so later segments are
+          exact. The first one becomes flat at its end forward, since the forward at
+          `date` cannot be stored.
+        """
+        self._check_aging_date(date)
+        knots = [date, *(k for k in self.knot_dates if k > date)]
+        if self.interpolation_method is InterpolationMethod.Linear:
+            first = len(self.knot_dates) - (len(knots) - 1)
+            forwards = np.array(
+                [self.forward_rates[max(i - 1, 0)] for i in range(first, len(self.knot_dates))]
+            )
+        else:
+            log_dfs = np.log(self.get_dfs(knots))
+            forwards = -np.diff(log_dfs) / np.diff(year_fractions(date, knots))
+        return IndexCurve(
+            date,
+            self.index,
+            knots,
+            forwards,
+            None,
+            self.interpolation_method,
+            precalculate=self.precalculate,
+        )
+
     def copy(self) -> IndexCurve:
         return IndexCurve(
             self.curve_date,

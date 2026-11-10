@@ -105,6 +105,28 @@ class Curve(ABC):
         """Copy with every continuously compounded zero rate shifted by `bps`."""
 
     @abstractmethod
+    def get_aged_curve(self, date: date) -> Self:
+        """The curve as seen from `date`: ``df_aged(t) = df(t) / df(date)``.
+
+        `date` must be after ``curve_date`` and before :attr:`last_date`. The pillars
+        or knots at or before `date` drop out. A new curve is returned, the original
+        is not modified. Dfs at the remaining pillars are those of the original
+        curve's forward discount factors; between them, the aged curve matches the
+        original exactly only if the interpolation depends on the pillars locally
+        (see each subclass).
+        """
+
+    def _check_aging_date(self, date: date) -> None:
+        if date <= self.curve_date:
+            raise ValueError(
+                f"Date {date} must be posterior to curve date {self.curve_date}."
+            )
+        if date >= self.last_date:
+            raise ValueError(
+                f"Date {date} must be previous to the curve's last date {self.last_date}."
+            )
+
+    @abstractmethod
     def copy(self) -> Self: ...
 
     def __copy__(self) -> Self:

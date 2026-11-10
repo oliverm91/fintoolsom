@@ -170,6 +170,26 @@ class DiscountCurve(DailyGridCurve):
             precalculate=self.precalculate,
         )
 
+    def get_aged_curve(self, date: date) -> DiscountCurve:
+        """The curve from `date`: pillars after it, with dfs ``df(pillar) / df(date)``.
+
+        Exact for ``LogLinear``. ``HermiteCubicSpline`` and ``CubicSpline`` are
+        refitted on the remaining pillars and the implicit ``df = 1`` at `date`, so
+        they match the original at the pillars but not between them.
+        """
+        self._check_aging_date(date)
+        pillars = [d for d in self.pillar_dates if d > date]
+        dfs = self.get_dfs(pillars) / self.get_df(date)
+        return DiscountCurve(
+            date,
+            self.currency,
+            self.risk_free_index,
+            pillars,
+            dfs,
+            self.interpolation_method,
+            precalculate=self.precalculate,
+        )
+
     def copy(self) -> DiscountCurve:
         return DiscountCurve(
             self.curve_date,
