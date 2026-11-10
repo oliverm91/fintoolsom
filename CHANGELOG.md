@@ -1,3 +1,20 @@
+## v1.0.0b5 (2026-11-09)
+
+### Feat
+
+- **rates**: `IndexCurve` and `DiscountCurve` store the discount factor of every day up to their last knot or pillar on creation. The keyword-only `precalculate` argument (default `True`) turns this off, and `precalculate_dfs()` builds the grid later. `copy()` and `parallel_bump_bps()` keep the setting. After changing a curve's data in place, call `precalculate_dfs()` again.
+
+### Perf
+
+- **derivatives**: swap legs store their dates as integer ordinals, so a valuation converts no dates. Swap valuation is 55-68% faster and an all-quotes portfolio 56% faster.
+- **derivatives**: option valuation uses `scipy.special` and no longer imports `scipy.stats`.
+- **curve_builder**: curves with local interpolation skip the daily grid while solving and get it when the build ends, and cubic-spline curves keep it throughout. Each quote's instrument is built once. Builds are 36-58% faster.
+- **rates**: `IndexCurve` no longer clips segment indexes or recomputes its last forward on every call, and `ZeroCouponCurve.get_dfs` uses a tuple as its cache key.
+- **fixedIncome**: `Coupons.get_remaining_flows` and `get_remaining_end_dates` bisect the stored flows and end dates.
+- **dates**: `Tenor` reuses its `relativedelta` steps, making schedule generation about a third faster.
+
+Creating or bumping a curve is slower because of the grid: about 120 µs instead of 11 µs for a piecewise-constant index curve. Pass `precalculate=False` for curves created many times and read little.
+
 ## v1.0.0b4 (2026-11-09)
 
 ### BREAKING CHANGE
