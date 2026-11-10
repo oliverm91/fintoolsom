@@ -57,6 +57,11 @@ def year_fractions(curve_date: date, dates: Sequence[date]) -> np.ndarray:
     return np.array([(d - curve_date).days for d in dates], dtype=float) / DAY_BASE
 
 
+def date_ordinals(dates: Sequence[date]) -> np.ndarray:
+    """Proleptic Gregorian ordinals of `dates`, as integers."""
+    return np.array([d.toordinal() for d in dates], dtype=np.int64)
+
+
 class Curve(ABC):
     """A discount curve: maps a date to a discount factor from ``curve_date``.
 
@@ -112,6 +117,10 @@ class Curve(ABC):
 
     # ── Derived ──────────────────────────────────────────────────────────────
 
+    def _dfs_at_ordinals(self, ordinals: np.ndarray) -> np.ndarray:
+        """:meth:`get_dfs` for dates already held as integer ordinals."""
+        return self.get_dfs([date.fromordinal(int(o)) for o in ordinals])
+
     def get_df(self, d: date) -> float:
         """Discount factor from ``curve_date`` to `d`."""
         return float(self.get_dfs([d])[0])
@@ -163,3 +172,73 @@ class Curve(ABC):
                 )
             ),
         )
+
+
+class DailyGridCurve(Curve):
+    """Curve that can store its df for every day up to its last pillar or knot.
+
+    With the grid a df is an array lookup, whatever the interpolation; dates outside
+    ``[curve_date, last_date]`` still use the formula. The grid is a snapshot of the
+    curve when it was computed: call :meth:`precalculate_dfs` again after changing
+    the curve's data in place.
+
+    Subclasses hold a ``precalculate`` flag and implement :meth:`_dfs_from_days`.
+    """
+
+    precalculate: bool
+    _grid: np.ndarray | None = None
+    _grid_horizon: int = -1
+
+    @abstractmethod
+    def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
+        """Discount factors from the curve's formula at day offsets from ``curve_date``."""
+
+    def precalculate_dfs(self) -> None:
+        """Compute the daily df grid, replacing any existing one.
+
+        For a curve created with ``precalculate=False``. Copies and bumped curves of
+        this curve then have a grid too.
+        """
+        horizon = (self.last_date - self.curve_date).days
+        self._grid = self._dfs_from_days(np.arange(horizon + 1, dtype=np.int64))
+        self._grid_horizon = horizon
+        self.precalculate = True
+
+    def _dfs_at_days(self, days: np.ndarray) -> np.ndarray:
+        """Discount factors at int64 day offsets from ``curve_date``."""
+        grid = self._grid
+        if grid is None:
+            return self._dfs_from_days(days)
+        # Unsigned, a negative offset is huge: one comparison checks both ends.
+        unsigned = days.view(np.uint64)
+        if not days.size or unsigned.max() <= self._grid_horizon:
+            return grid[days]
+        inside = unsigned <= self._grid_horizon
+        out = np.empty(len(days))
+        out[inside] = grid[days[inside]]
+        out[~inside] = self._dfs_from_days(days[~inside])
+        return out
+
+    def _dfs_at_ordinals(self, ordinals: np.ndarray) -> np.ndarray:
+        return self._dfs_at_days(ordinals - self.curve_date.toordinal())
+
+    def get_dfs(self, dates: Sequence[date]) -> np.ndarray:
+        curve_date = self.curve_date
+        return self._dfs_at_days(
+            np.array([(d - curve_date).days for d in dates], dtype=np.int64)
+        )
+
+    def get_df(self, d: date) -> float:
+        i = (d - self.curve_date).days
+        if self._grid is not None and 0 <= i <= self._grid_horizon:
+            return float(self._grid[i])
+        return super().get_df(d)
+
+    def get_df_fwd(self, start: date, end: date) -> float:
+        grid = self._grid
+        if grid is not None:
+            i = (start - self.curve_date).days
+            j = (end - self.curve_date).days
+            if 0 <= i <= self._grid_horizon and 0 <= j <= self._grid_horizon:
+                return float(grid[j] / grid[i])
+        return super().get_df_fwd(start, end)

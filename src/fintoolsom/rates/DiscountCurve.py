@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import TYPE_CHECKING, ClassVar, Sequence
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
-from .Curve import Curve, InterpolationMethod, year_fractions
+from .Curve import DAY_BASE, DailyGridCurve, InterpolationMethod, year_fractions
 
 if TYPE_CHECKING:
     from ..market.currencies import Currency
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class DiscountCurve(Curve):
+class DiscountCurve(DailyGridCurve):
     """Discount curve of `currency` seen from `risk_free_index` (e.g. USD under ICP).
 
     Only for a currency other than the risk-free index's: that one discounts on the
@@ -42,6 +42,11 @@ class DiscountCurve(Curve):
         Discount-factor methods only; ``LogLinear`` by default. ``CubicSpline`` is a
         natural spline on ``log(df)``, so the forward joins the flat extrapolation
         smoothly at the last pillar.
+    precalculate : bool, optional
+        Keyword only. Store the df of every day up to the last pillar on creation (the
+        default). Creation is slower and lookups faster; False skips it for a curve
+        that is created many times and read little. :meth:`precalculate_dfs` builds
+        the grid later.
     """
 
     allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset(
@@ -58,6 +63,7 @@ class DiscountCurve(Curve):
     pillar_dates: list[date]
     dfs: np.ndarray
     interpolation_method: InterpolationMethod = InterpolationMethod.LogLinear
+    precalculate: bool = field(default=True, kw_only=True, repr=False, compare=False)
 
     _tau: np.ndarray = field(init=False, repr=False)
     _log_dfs: np.ndarray = field(init=False, repr=False)
@@ -105,6 +111,8 @@ class DiscountCurve(Curve):
                 self._tau, self._log_dfs, bc_type="natural"
             )
             self._last_forward = -float(self._log_df_spline(self._tau[-1], 1))
+        if self.precalculate:
+            self.precalculate_dfs()
 
     @classmethod
     def from_zero_coupon_curve(
@@ -134,8 +142,8 @@ class DiscountCurve(Curve):
         """``(date, df)`` pillars, sorted."""
         return list(zip(self.pillar_dates, (float(df) for df in self.dfs)))
 
-    def get_dfs(self, dates: Sequence[date]) -> np.ndarray:
-        tau = year_fractions(self.curve_date, list(dates))
+    def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
+        tau = days / DAY_BASE
         last = self._tau[-1]
         inside = tau <= last
         out = np.empty(len(tau))
@@ -159,6 +167,7 @@ class DiscountCurve(Curve):
             list(self.pillar_dates),
             self.dfs * np.exp(-shift * self._tau[1:]),
             self.interpolation_method,
+            precalculate=self.precalculate,
         )
 
     def copy(self) -> DiscountCurve:
@@ -169,6 +178,7 @@ class DiscountCurve(Curve):
             list(self.pillar_dates),
             self.dfs.copy(),
             self.interpolation_method,
+            precalculate=self.precalculate,
         )
 
     def __str__(self) -> str:

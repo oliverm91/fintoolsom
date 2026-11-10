@@ -5,9 +5,10 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.stats import norm
+from scipy.special import ndtr, ndtri
 
 from ..rates import Curve, RateConvention, ExponentialInterestConvention
+from ..rates.Curve import date_ordinals
 from ..dates import ActualDayCountConvention
 from .forwards.forwards import Forward, NDF
 from .options.options import Option
@@ -23,6 +24,13 @@ _default_option_rate_convention = RateConvention(
     day_count_convention=ActualDayCountConvention,
     time_fraction_base=365,
 )
+
+_SQRT_2PI = math.sqrt(2 * math.pi)
+
+
+def _norm_pdf(x: float) -> float:
+    """Standard normal density."""
+    return math.exp(-x * x / 2) / _SQRT_2PI
 
 
 class Calculator:
@@ -241,8 +249,8 @@ class Calculator:
             option._sign
             * option.notional
             * (
-                spot * math.exp(-q * yf) * norm.cdf(option._sign * d1)
-                - option.strike * math.exp(-r * yf) * norm.cdf(option._sign * d2)
+                spot * math.exp(-q * yf) * ndtr(option._sign * d1)
+                - option.strike * math.exp(-r * yf) * ndtr(option._sign * d2)
             )
         )
         return mtm
@@ -265,10 +273,7 @@ class Calculator:
             option, t, spot, volatility, domestic_curve, foreign_curve, rate_convention
         )
         delta = (
-            option._sign
-            * option.notional
-            * math.exp(-q * yf)
-            * norm.cdf(option._sign * d1)
+            option._sign * option.notional * math.exp(-q * yf) * ndtr(option._sign * d1)
         )
         return delta
 
@@ -297,7 +302,7 @@ class Calculator:
             return_vol_sqrt_yf=True,
         )
         gamma = (
-            option.notional * math.exp(-q * yf) * norm.pdf(d1) / (spot * vol_sqrt_yf)
+            option.notional * math.exp(-q * yf) * _norm_pdf(d1) / (spot * vol_sqrt_yf)
         )
         return gamma
 
@@ -318,7 +323,9 @@ class Calculator:
         d1 = Calculator._get_option_d1(
             option, t, spot, volatility, domestic_curve, foreign_curve, rate_convention
         )
-        vega = option.notional * spot * math.exp(-q * yf) * math.sqrt(yf) * norm.pdf(d1)
+        vega = (
+            option.notional * spot * math.exp(-q * yf) * math.sqrt(yf) * _norm_pdf(d1)
+        )
         return vega
 
     @staticmethod
@@ -344,7 +351,7 @@ class Calculator:
 
         k = spot * np.exp(
             -(
-                sign * norm.ppf(sign * delta * (1 / df_q)) * volatility * np.sqrt(yf)
+                sign * ndtri(sign * delta * (1 / df_q)) * volatility * np.sqrt(yf)
                 - (r - q + volatility * volatility / 2) * yf
             )
         )
@@ -433,13 +440,12 @@ class Calculator:
         KeyError
             If a realised fixing is needed and is missing from the index history.
         """
-        from .swaps.legs import FixedLeg as _FixedLeg, TermRateLeg as _TermRateLeg
-
-        future_payment = np.array([t > market.t for t in leg.payment_dates], dtype=bool)
+        t = market.t.toordinal()
+        future_payment = leg._payment_ordinals > t
         if not future_payment.any():
             return future_payment, np.zeros(0)
 
-        if isinstance(leg, _FixedLeg):
+        if isinstance(leg, FixedLeg):
             return future_payment, leg.flows[future_payment]
 
         flows = np.zeros(int(future_payment.sum()))
@@ -447,11 +453,9 @@ class Calculator:
         # index's own curve.
         proj_curve = market.get_index_curve(leg.index)
 
-        if isinstance(leg, _TermRateLeg):
+        if isinstance(leg, TermRateLeg):
             # Once fixing_date <= t the rate is locked, wherever start_date falls.
-            fixed_mask = future_payment & np.array(
-                [d <= market.t for d in leg.fixing_dates], dtype=bool
-            )
+            fixed_mask = future_payment & (leg._fixing_ordinals <= t)
             to_proj_mask = future_payment & ~fixed_mask
 
             if fixed_mask.any():
@@ -467,9 +471,9 @@ class Calculator:
                 flows[fixed_mask[future_payment]] = np.array(fixed_flows)
 
             if to_proj_mask.any():
-                starts = [s for s, f in zip(leg.start_dates, to_proj_mask) if f]
-                ends = [e for e, f in zip(leg.end_dates, to_proj_mask) if f]
-                accruals = proj_curve.get_accrual(starts, ends)
+                accruals = proj_curve._accrual_at_ordinals(
+                    leg._start_ordinals[to_proj_mask], leg._end_ordinals[to_proj_mask]
+                )
                 flows[to_proj_mask[future_payment]] = (
                     leg.residuals[to_proj_mask] * accruals
                     + leg.spreads_values[to_proj_mask]
@@ -477,14 +481,14 @@ class Calculator:
                 )
 
         else:
-            future_start = np.array([s > market.t for s in leg.start_dates], dtype=bool)
+            future_start = leg._start_ordinals > t
             pure_future = future_payment & future_start
             current_mask = future_payment & ~future_start
 
             if pure_future.any():
-                starts = [s for s, f in zip(leg.start_dates, pure_future) if f]
-                ends = [e for e, f in zip(leg.end_dates, pure_future) if f]
-                accruals = proj_curve.get_accrual(starts, ends)
+                accruals = proj_curve._accrual_at_ordinals(
+                    leg._start_ordinals[pure_future], leg._end_ordinals[pure_future]
+                )
                 # amortizations: the notional repaid with the final coupon (final
                 # exchange). Same-currency legs cancel it; cross-currency legs exchange it.
                 flows[pure_future[future_payment]] = (
@@ -545,8 +549,9 @@ class Calculator:
         future_payment, flows = Calculator._leg_flows(leg, market)
         if not future_payment.any():
             return 0.0
-        pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
-        dfs = market.get_dfs(leg.currency, pay_dates, collateral=collateral)
+        dfs = market._dfs_at_ordinals(
+            leg.currency, leg._payment_ordinals[future_payment], collateral=collateral
+        )
         return float(np.dot(flows, dfs))
 
     @staticmethod
@@ -590,20 +595,36 @@ class Calculator:
         KeyError
             If a known fixing, or the rate at ``L``, is not loaded.
         """
+        return Calculator._fx_fixings_at_ordinals(
+            base_currency, quote_currency, date_ordinals(fixing_dates), market
+        )
+
+    @staticmethod
+    def _fx_fixings_at_ordinals(
+        base_currency: Currency,
+        quote_currency: Currency,
+        fixings: np.ndarray,
+        market: Market,
+    ) -> np.ndarray:
+        """:meth:`get_fx_fixings` for dates already held as integer ordinals."""
         from ..market.currencies import CurrencyPair as _CurrencyPair
 
         cp = _CurrencyPair(base_currency, quote_currency)
         known_until = market.get_fx_known_until(cp)
-        known = np.array([d <= known_until for d in fixing_dates], dtype=bool)
-        fx = np.empty(len(fixing_dates))
+        last_known = known_until.toordinal()
+        known = fixings <= last_known
+        fx = np.empty(len(fixings))
         for i in np.where(known)[0]:
-            fx[i] = market.get_fx_rate(fixing_dates[i], cp).value
+            fx[i] = market.get_fx_rate(date.fromordinal(int(fixings[i])), cp).value
         if (~known).any():
             anchor = market.get_fx_rate(known_until, cp).value
-            projected = [d for d, k in zip(fixing_dates, known) if not k]
-            dates = [known_until] + projected
-            df_base = market.get_discount_curve(base_currency).get_dfs(dates)
-            df_quote = market.get_discount_curve(quote_currency).get_dfs(dates)
+            ordinals = np.concatenate(([last_known], fixings[~known]))
+            df_base = market.get_discount_curve(base_currency)._dfs_at_ordinals(
+                ordinals
+            )
+            df_quote = market.get_discount_curve(quote_currency)._dfs_at_ordinals(
+                ordinals
+            )
             fx[~known] = (
                 anchor * (df_base[1:] / df_base[0]) / (df_quote[1:] / df_quote[0])
             )
@@ -640,12 +661,17 @@ class Calculator:
         future_payment, flows = Calculator._leg_flows(leg, market)
         if not future_payment.any():
             return 0.0
-        pay_dates = [d for d, f in zip(leg.payment_dates, future_payment) if f]
-        fixing_dates = [d for d, f in zip(leg.fx_fixing_dates, future_payment) if f]
-        fx = Calculator.get_fx_fixings(
-            leg.currency, settlement_currency, fixing_dates, market
+        fx = Calculator._fx_fixings_at_ordinals(
+            leg.currency,
+            settlement_currency,
+            leg._fx_fixing_ordinals[future_payment],
+            market,
         )
-        dfs = market.get_dfs(settlement_currency, pay_dates, collateral=collateral)
+        dfs = market._dfs_at_ordinals(
+            settlement_currency,
+            leg._payment_ordinals[future_payment],
+            collateral=collateral,
+        )
         return float(np.sum(flows * fx * dfs))
 
     @staticmethod

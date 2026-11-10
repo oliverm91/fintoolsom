@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import date
-from typing import TYPE_CHECKING, ClassVar, Sequence
+from datetime import date, timedelta
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 from scipy.interpolate import BSpline, CubicSpline, make_interp_spline
 
-from .Curve import Curve, DateArg, InterpolationMethod, year_fractions
+from .Curve import (
+    DAY_BASE,
+    DailyGridCurve,
+    DateArg,
+    InterpolationMethod,
+    year_fractions,
+)
 from .Rates import Rate
 
 if TYPE_CHECKING:
@@ -18,7 +24,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class IndexCurve(Curve):
+class IndexCurve(DailyGridCurve):
     """Curve of `index`: it projects the index and can discount with it.
 
     The state is one continuously compounded (Act/365) forward rate per segment
@@ -54,6 +60,11 @@ class IndexCurve(Curve):
         Rate from `curve_date` to the effective date (e.g. today's overnight fixing).
     interpolation_method : InterpolationMethod, optional
         Forward-space methods only; ``PiecewiseConstant`` by default.
+    precalculate : bool, optional
+        Keyword only. Store the df of every day up to the last knot on creation (the
+        default). Creation is slower and lookups faster; False skips it for a curve
+        that is created many times and read little. :meth:`precalculate_dfs` builds
+        the grid later.
     """
 
     allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset(
@@ -70,6 +81,7 @@ class IndexCurve(Curve):
     forward_rates: np.ndarray
     spot_rate: Rate | None = None
     interpolation_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant
+    precalculate: bool = field(default=True, kw_only=True, repr=False, compare=False)
 
     _knot_tau: np.ndarray = field(init=False, repr=False)
     _cum: np.ndarray = field(init=False, repr=False)
@@ -77,6 +89,7 @@ class IndexCurve(Curve):
     _forward_integral: BSpline | CubicSpline | None = field(
         init=False, repr=False, default=None
     )
+    _last_forward: float = field(init=False, repr=False, default=0.0)
 
     def __post_init__(self):
         self._check_method()
@@ -104,6 +117,8 @@ class IndexCurve(Curve):
             ([0.0], np.cumsum(self.forward_rates * np.diff(self._knot_tau)))
         )
         self._forward_integral = self._build_forward_integral()
+        if self._forward_integral is not None:
+            self._last_forward = float(self._forward_integral(self._knot_tau[-1], 1))
         if self.knot_dates[0] == self.curve_date:
             self._log_df_effective = 0.0
         elif self.spot_rate is not None:
@@ -118,6 +133,8 @@ class IndexCurve(Curve):
             self._log_df_effective = -float(self.forward_rates[0]) * float(
                 self._knot_tau[0]
             )
+        if self.precalculate:
+            self.precalculate_dfs()
 
     def _build_forward_integral(self) -> BSpline | CubicSpline | None:
         """Integral of the forward from the first knot, as a scipy spline over the knots.
@@ -160,37 +177,32 @@ class IndexCurve(Curve):
     def last_date(self) -> date:
         return self.knot_dates[-1]
 
-    def get_dfs(self, dates: Sequence[date]) -> np.ndarray:
-        dates = list(dates)
-        tau = year_fractions(self.curve_date, dates)
+    def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
+        tau = days / DAY_BASE
         dfs = np.exp(self._log_df_effective - self._integrate_forward(tau))
         if self.spot_rate is not None and self.knot_dates[0] > self.curve_date:
             spot = tau < self._knot_tau[0]
             if spot.any():
                 dfs[spot] = self.spot_rate.get_discount_factor(
-                    self.curve_date, [d for d, s in zip(dates, spot) if s]
+                    self.curve_date,
+                    [self.curve_date + timedelta(days=int(n)) for n in days[spot]],
                 )
         return dfs
 
     def _integrate_forward(self, tau: np.ndarray) -> np.ndarray:
         """Integral of the forward from the first knot to each of `tau`, flat outside."""
         if self._forward_integral is None:
-            # Segment of each date: the first forward before the effective date, the
-            # last one past the last knot.
-            idx = np.clip(
-                np.searchsorted(self._knot_tau, tau, side="right") - 1,
-                0,
-                len(self.forward_rates) - 1,
-            )
+            # Segment of each date, searched among the inner knots only: before the
+            # first one is the first forward, past the last one the last forward.
+            idx = np.searchsorted(self._knot_tau[1:-1], tau, side="right")
             return self._cum[idx] + self.forward_rates[idx] * (
                 tau - self._knot_tau[idx]
             )
         first, last = self._knot_tau[0], self._knot_tau[-1]
-        last_forward = float(self._forward_integral(last, 1))
         return (
             self._forward_integral(np.clip(tau, first, last))
             + self.forward_rates[0] * np.minimum(tau - first, 0.0)
-            + last_forward * np.maximum(tau - last, 0.0)
+            + self._last_forward * np.maximum(tau - last, 0.0)
         )
 
     def parallel_bump_bps(self, bps: float) -> IndexCurve:
@@ -217,6 +229,7 @@ class IndexCurve(Curve):
             self.forward_rates + shift,
             spot,
             self.interpolation_method,
+            precalculate=self.precalculate,
         )
 
     def copy(self) -> IndexCurve:
@@ -227,6 +240,7 @@ class IndexCurve(Curve):
             self.forward_rates.copy(),
             None if self.spot_rate is None else self.spot_rate.copy(),
             self.interpolation_method,
+            precalculate=self.precalculate,
         )
 
     # ── Projection ───────────────────────────────────────────────────────────
@@ -234,6 +248,10 @@ class IndexCurve(Curve):
     def get_accrual(self, start: DateArg, end: DateArg) -> float | np.ndarray:
         """Interest per unit notional over ``[start, end]``: wealth factor - 1."""
         return self.get_wealth_factor(start, end) - 1
+
+    def _accrual_at_ordinals(self, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
+        """:meth:`get_accrual` for aligned dates already held as integer ordinals."""
+        return 1.0 / (self._dfs_at_ordinals(ends) / self._dfs_at_ordinals(starts)) - 1
 
     def __str__(self) -> str:
         points = ", ".join(

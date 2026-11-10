@@ -10,6 +10,7 @@ from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
 from ..rates import Rate, Curve, IndexCurve, LegacyCurve
+from ..rates.Curve import date_ordinals
 from ..dates import Calendar, get_calendar
 
 if TYPE_CHECKING:
@@ -190,20 +191,36 @@ class Market:
         -------
         numpy.ndarray
         """
+        return self._dfs_at_ordinals(
+            currency,
+            date_ordinals(dates),
+            collateral=collateral,
+            risk_free_index=risk_free_index,
+        )
+
+    def _dfs_at_ordinals(
+        self,
+        currency: Currency,
+        ordinals: np.ndarray,
+        *,
+        collateral: Index | None = None,
+        risk_free_index: Index | None = None,
+    ) -> np.ndarray:
+        """:meth:`get_dfs` for dates already held as integer ordinals."""
         if collateral is None:
             return self.get_discount_curve(
                 currency, risk_free_index=risk_free_index
-            ).get_dfs(dates)
+            )._dfs_at_ordinals(ordinals)
         if collateral.currency == currency:
-            return self.get_index_curve(collateral).get_dfs(dates)
+            return self.get_index_curve(collateral)._dfs_at_ordinals(ordinals)
         return (
-            self.get_discount_curve(currency, risk_free_index=risk_free_index).get_dfs(
-                dates
-            )
-            * self.get_index_curve(collateral).get_dfs(dates)
+            self.get_discount_curve(
+                currency, risk_free_index=risk_free_index
+            )._dfs_at_ordinals(ordinals)
+            * self.get_index_curve(collateral)._dfs_at_ordinals(ordinals)
             / self.get_discount_curve(
                 collateral.currency, risk_free_index=risk_free_index
-            ).get_dfs(dates)
+            )._dfs_at_ordinals(ordinals)
         )
 
     def get_df(

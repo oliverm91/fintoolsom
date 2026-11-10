@@ -64,7 +64,7 @@ class ZeroCouponCurve(LegacyCurve):
     days: np.ndarray = field(init=False, default=None)
     dates: list[date] = field(init=False, default=None)
     rates: list[Rate] = field(init=False, default=None)
-    _cashed_dfs: dict[str, np.ndarray] = field(init=False, default=None)
+    _cashed_dfs: dict[tuple[date, ...], np.ndarray] = field(init=False, default=None)
     _str_dates_rates: str = field(init=False, default=None)
 
     def __post_init__(self):
@@ -97,7 +97,7 @@ class ZeroCouponCurve(LegacyCurve):
                 f"'df_interpolation_method' must be InterpolationMethod.LogLinear or HermiteCubicSpline. Received type '{type(self.df_interpolation_method)}' with value '{self.df_interpolation_method}'."
             )
 
-        self._cashed_dfs: dict[str, np.ndarray] = {}
+        self._cashed_dfs = {}
         self.sort()
 
     def set_df_curve(self):
@@ -152,9 +152,9 @@ class ZeroCouponCurve(LegacyCurve):
         return self.get_dfs([date])[0]
 
     def get_dfs(self, dates_t: list[date]) -> np.ndarray:
-        hashed_inputs = "|".join(map(str, dates_t))
-        if hashed_inputs in self._cashed_dfs:
-            return self._cashed_dfs[hashed_inputs]
+        cache_key = tuple(dates_t)
+        if cache_key in self._cashed_dfs:
+            return self._cashed_dfs[cache_key]
         tenors = ActualDayCountConvention.get_day_count(self.curve_date, dates_t)
         min_tenor = min(self.days)
         max_tenor = max(self.days)
@@ -190,7 +190,7 @@ class ZeroCouponCurve(LegacyCurve):
             )
         dfs[small_tenors_amount : len(tenors) - greater_tenors_amount] = interp_dfs
         # End of interpolation part
-        self._cashed_dfs[hashed_inputs] = dfs
+        self._cashed_dfs[cache_key] = dfs
         return dfs
 
     def get_df_fwd(self, start_date: date, end_date: date) -> float:

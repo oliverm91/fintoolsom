@@ -75,7 +75,7 @@ def _instrument_of(quote: InstrumentQuote, market: Market):
 
 
 def _curves_needed(
-    quote: InstrumentQuote, risk_free_index: Index
+    quote: InstrumentQuote, risk_free_index: Index, instrument=None
 ) -> frozenset[CurveKey]:
     """Every curve `quote` reads to be valued; quotes are grouped by this set.
 
@@ -92,12 +92,15 @@ def _curves_needed(
         Quote considered.
     risk_free_index : Index
         Market funding index.
+    instrument : Forward, NDF or Swap, optional
+        The quote's instrument, if already built; only its legs and currencies are read.
 
     Returns
     -------
     frozenset of Index or Currency
     """
-    instrument = quote.get_instrument()
+    if instrument is None:
+        instrument = quote.get_instrument()
     collateral: Index | None = getattr(quote, "collateral_index", None)
     keys: set[CurveKey] = set()
 
@@ -124,15 +127,18 @@ def _curves_needed(
     return frozenset(keys)
 
 
-def _primary_candidates(quote: InstrumentQuote, pinned: frozenset) -> tuple:
+def _primary_candidates(
+    quote: InstrumentQuote, pinned: frozenset, instrument=None
+) -> tuple:
     """Curves `quote` may take its one pillar on, preferred first.
 
     FX forwards and cross-currency swaps: the non-risk-free funding curve they pin
     (the cross-currency basis). Single-currency swaps: their floating index curve;
     a float-float basis swap lists both indexes (the builder keeps the one no IRS
-    already pins).
+    already pins). `instrument` is the quote's instrument, if already built.
     """
-    instrument = quote.get_instrument()
+    if instrument is None:
+        instrument = quote.get_instrument()
     funding = sorted((k for k in pinned if isinstance(k, Currency)), key=str)
     if not isinstance(instrument, Swap):
         return tuple(funding) or tuple(sorted(pinned, key=str))

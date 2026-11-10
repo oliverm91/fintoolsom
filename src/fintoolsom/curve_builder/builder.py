@@ -135,8 +135,16 @@ class _CurveBuilder:
                     f"the available quotes: {[set(g) for g in pending]}."
                 )
         self._solve_splines_jointly()
+        self._precalculate_built_curves()
         self._check_repricing()
         self._warn_ditched()
+
+    def _precalculate_built_curves(self) -> None:
+        """Give the curves of this build the daily grid the solve skipped."""
+        for key in self._free_dates:
+            curve = _built(self.market, key)
+            if not curve.precalculate:
+                curve.precalculate_dfs()
 
     def _solve_group(
         self,

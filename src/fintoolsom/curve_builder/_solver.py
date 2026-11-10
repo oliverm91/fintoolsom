@@ -192,7 +192,12 @@ class _GroupSolve:
         return len(self.y0)
 
     def apply(self, y) -> None:
-        """Rebuild every group curve from its fixed part plus the unknowns `y`."""
+        """Rebuild every group curve from its fixed part plus the unknowns `y`.
+
+        Local curves are read at few dates per rebuild, so a daily grid would cost more
+        than it saves. A spline curve is read everywhere and pays for its grid.
+        """
+        precalculate = not self.local
         for curve, (s, e) in self.curve_slice.items():
             fixed = self.fixed_pillars[curve]
             if isinstance(curve, Index):
@@ -203,6 +208,7 @@ class _GroupSolve:
                     [*fixed.forwards, *(float(v) for v in y[s:e])],
                     fixed.spot_rate,
                     self.methods[curve],
+                    precalculate=precalculate,
                 )
             else:
                 dates = [d for d, _ in fixed] + list(self.free_dates[curve])
@@ -214,6 +220,7 @@ class _GroupSolve:
                     dates,
                     dfs,
                     self.methods[curve],
+                    precalculate=precalculate,
                 )
             self.market.set_curve(built)
 

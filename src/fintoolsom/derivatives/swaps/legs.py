@@ -7,6 +7,7 @@ from typing import cast
 
 import numpy as np
 
+from fintoolsom.rates.Curve import date_ordinals
 from fintoolsom.rates.Rates import Rate, RateConvention
 
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
@@ -59,6 +60,12 @@ class SwapLeg:
     payment_dates: list[date] = field(init=False)
     fx_fixing_dates: list[date] = field(init=False)
 
+    # The dates above as integer ordinals, so a valuation needs no date conversion.
+    _payment_ordinals: np.ndarray = field(init=False, repr=False)
+    _start_ordinals: np.ndarray = field(init=False, repr=False)
+    _end_ordinals: np.ndarray = field(init=False, repr=False)
+    _fx_fixing_ordinals: np.ndarray = field(init=False, repr=False)
+
     def __post_init__(self):
         self.residuals = np.array([c.residual for c in self.coupons])
         self.amortizations = np.array([c.amortization for c in self.coupons])
@@ -66,6 +73,10 @@ class SwapLeg:
         self.end_dates = [c.end_date for c in self.coupons]
         self.payment_dates = [c.payment_date for c in self.coupons]
         self.fx_fixing_dates = [c.fx_fixing_date for c in self.coupons]
+        self._payment_ordinals = date_ordinals(self.payment_dates)
+        self._start_ordinals = date_ordinals(self.start_dates)
+        self._end_ordinals = date_ordinals(self.end_dates)
+        self._fx_fixing_ordinals = date_ordinals(self.fx_fixing_dates)
 
     @property
     def n_coupons(self) -> int:
@@ -309,8 +320,11 @@ class TermRateLeg(FloatingLeg):
 
     fixing_dates: list[date] = field(default_factory=list)
 
+    _fixing_ordinals: np.ndarray = field(init=False, repr=False)
+
     def __post_init__(self):
         super().__post_init__()
+        self._fixing_ordinals = date_ordinals(self.fixing_dates)
         calendar = getattr(self.index, "calendar", None)
         if calendar is None:
             return

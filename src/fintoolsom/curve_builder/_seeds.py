@@ -45,7 +45,7 @@ class _IndexFixed:
         """``(knot, df)`` of the fixed knots after `t`."""
         if len(self.knots) >= 2:
             dfs = IndexCurve(
-                t, index, self.knots, self.forwards, self.spot_rate
+                t, index, self.knots, self.forwards, self.spot_rate, precalculate=False
             ).get_dfs(self.knots)
             return [(k, float(df)) for k, df in zip(self.knots, dfs) if k > t]
         eff = self.knots[0]

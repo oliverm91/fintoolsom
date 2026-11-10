@@ -1,3 +1,4 @@
+from bisect import bisect_right
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import date
@@ -161,7 +162,7 @@ class Coupons:
         return np.array([c.flow for c in self.coupons])
 
     def get_remaining_flows(self, date: date) -> np.ndarray:
-        return np.array([c.flow for c in self.coupons if date < c.end_date])
+        return self.flows[bisect_right(self.end_dates, date) :].copy()
 
     def get_flows_between_dates(self, t1, t2) -> np.ndarray:
         return np.array([c.flow for c in self.coupons if t1 < c.end_date <= t2])
@@ -170,7 +171,7 @@ class Coupons:
         return [c.end_date for c in self.coupons]
 
     def get_remaining_end_dates(self, date: date) -> list[date]:
-        return [c.end_date for c in self.coupons if date < c.end_date]
+        return self.end_dates[bisect_right(self.end_dates, date) :]
 
     def get_flows_maturities(self, date: date):
         return dates.ActualDayCountConvention.get_day_count(date, self.end_dates)

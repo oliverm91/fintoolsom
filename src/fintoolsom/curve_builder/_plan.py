@@ -52,12 +52,15 @@ class _Planner:
         self.t = market.t
         self.risk_free_index: Index = market.risk_free_index  # type: ignore[assignment]
         self.seeder = seeder
-        self.pinned = {q: _curves_needed(q, self.risk_free_index) for q in quotes}
+        self.instrument = {q: _instrument_of(q, market) for q in quotes}
+        self.pinned = {
+            q: _curves_needed(q, self.risk_free_index, self.instrument[q])
+            for q in quotes
+        }
         self.groups: dict[Group, list[InstrumentQuote]] = defaultdict(list)
         for q in quotes:
             self.groups[self.pinned[q]].append(q)
         self._order = {g: i for i, g in enumerate(self.groups)}
-        self.instrument = {q: _instrument_of(q, market) for q in quotes}
         self.candidates = self._resolve_candidates(quotes)
 
     def _resolve_candidates(self, quotes) -> dict:
@@ -68,7 +71,10 @@ class _Planner:
         redundant quote never takes a pillar that belongs to another quote type
         (e.g. a short XCCY on the SOFR curve of the OIS).
         """
-        raw = {q: _primary_candidates(q, self.pinned[q]) for q in quotes}
+        raw = {
+            q: _primary_candidates(q, self.pinned[q], self.instrument[q])
+            for q in quotes
+        }
         single = {c[0] for c in raw.values() if len(c) == 1}
         first = {
             q: next((k for k in c if k not in single), c[0]) for q, c in raw.items()

@@ -53,14 +53,12 @@ class Tenor:
             )
 
         if self.tenor_unit != "d":
+            step = self._rel_mapper["multiplier"] * self.tenor_value
+            forward_step = relativedelta(**{self._rel_mapper["kwarg"]: step})
+            backward_step = relativedelta(**{self._rel_mapper["kwarg"]: -step})
 
             def f(t: date, forward: bool = True) -> date:
-                kwargs = {
-                    self._rel_mapper["kwarg"]: self._rel_mapper["multiplier"]
-                    * self.tenor_value
-                    * (1 if forward else -1)
-                }
-                return t + relativedelta(**kwargs)
+                return t + (forward_step if forward else backward_step)
 
         self._get_umaturity_func = f  # TEST THAT F LIVES AFTER INIT
 
