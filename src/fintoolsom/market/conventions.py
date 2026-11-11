@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from enum import Enum
 
 
@@ -33,12 +33,17 @@ class LegSpec:
         Business-day adjustment of the schedule dates.
     time_fraction : TimeFractionBase
         Day-count basis of the accrual.
+    payment_lag : int, default 0
+        Business days between each period end date and its payment date
+        (keyword-only).
     """
 
     currency: Currency
     payment_frequency: PaymentFrequency
     adj_convention: AdjustmentDateConventionBase
     time_fraction: TimeFractionBase
+    _: KW_ONLY
+    payment_lag: int = 0
 
 
 @dataclass

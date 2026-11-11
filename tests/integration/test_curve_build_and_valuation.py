@@ -133,3 +133,25 @@ def test_one_bp_on_the_basis_spread_moves_mtm_by_a_fixed_leg_dv01(built, term):
     )
     assert change < 0
     assert change == pytest.approx(dv01, rel=0.05)
+
+
+def test_irs_quotes_with_a_payment_lag_reprice_and_pin_the_lagged_pillar():
+    _, base_quotes = built_market()
+    lagged = [
+        replace(
+            q,
+            fixed_leg=replace(q.fixed_leg, payment_lag=2),
+            floating_leg=replace(q.floating_leg, payment_lag=2),
+        )
+        if isinstance(q, IRSQuote)
+        else q
+        for q in base_quotes
+    ]
+    market, quotes = built_market(lagged)
+    for q in quotes:
+        if not isinstance(q, IRSQuote):
+            continue
+        swap = q.get_instrument()
+        mtm = Calculator.valuate(swap, market, CLP)
+        assert abs(mtm) < 1e-8 * QUOTE_NOTIONAL_CLP, f"IRS {q.term}: {mtm}"
+        assert max(swap.receive_leg.payment_dates) > max(swap.receive_leg.end_dates)

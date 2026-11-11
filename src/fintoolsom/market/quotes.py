@@ -401,6 +401,7 @@ class IRSQuote(_SwapQuote):
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
+            payment_lag=self.fixed_leg.payment_lag,
         )
         floating = floating_leg(
             notional=_NOTIONAL,
@@ -413,6 +414,7 @@ class IRSQuote(_SwapQuote):
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
+            payment_lag=self.floating_leg.payment_lag,
         )
         if self.quoted_side == QuotedSide.RECEIVE:
             return Swap(
@@ -494,6 +496,7 @@ class IRBasisQuote(_SwapQuote):
                 stub_first=self.stub_first,
                 long_stub=self.long_stub,
                 maturity_date=mat,
+                payment_lag=spec.payment_lag,
             )
 
         return Swap(
@@ -580,6 +583,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
+            payment_lag=self.fixed_leg.payment_lag,
             fx_fixing_lag=self.fx_fixing_lag,
         )
         floating = floating_leg(
@@ -594,6 +598,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             stub_first=self.stub_first,
             long_stub=self.long_stub,
             maturity_date=mat,
+            payment_lag=self.floating_leg.payment_lag,
             fx_fixing_lag=self.fx_fixing_lag,
         )
         receive, pay = (
@@ -703,6 +708,7 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
                 stub_first=self.stub_first,
                 long_stub=self.long_stub,
                 maturity_date=mat,
+                payment_lag=spec.payment_lag,
                 fx_fixing_lag=self.fx_fixing_lag,
             )
 

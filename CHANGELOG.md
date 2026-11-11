@@ -1,3 +1,10 @@
+## v1.0.0b10 (2026-11-11)
+
+### Feat
+
+- **swaps**: every leg builder (`fixed_leg`, `term_rate_leg`, `overnight_leg`, `xccy_floating_leg`, `floating_leg`) and `from_term` takes `payment_lag`, the business days between each period end date and its payment date. It defaults to 0, so existing legs are unchanged. Accrual and projection stay on the period dates, and `fx_fixing_lag` is now measured back from the lagged payment date. A negative lag raises `ValueError`.
+- **market**: `FixedLegSpec` and `FloatingLegSpec` take a keyword-only `payment_lag`, which the IRS, basis and cross-currency quotes pass to their legs. `build_curves` pins each funding curve at the lagged payment date, with no change to the builder itself.
+
 ## v1.0.0b9 (2026-11-11)
 
 ### BREAKING CHANGE

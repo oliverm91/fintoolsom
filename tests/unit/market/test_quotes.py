@@ -287,3 +287,28 @@ def test_forward_points_divisor_must_be_positive():
         ForwardPointsQuote(
             currency_pair=USDCLP, value=1.0, is_buy=True, points_divisor=0
         )
+
+
+def test_leg_spec_payment_lag_defaults_to_zero_and_is_keyword_only():
+    assert _fixed_spec(CLP).payment_lag == 0
+    assert _float_spec(SOFR).payment_lag == 0
+
+
+def test_swap_quote_passes_each_leg_spec_payment_lag_to_its_leg():
+    fixed = _fixed_spec(CLP)
+    fixed.payment_lag = 1
+    floating = _float_spec(SOFR)
+    floating.payment_lag = 2
+    swap = CrossCurrencyFixedFloatQuote(
+        quoted_side=QuotedSide.RECEIVE,
+        term=Term(2, TermUnit.Y, ADJ_CLP),
+        quote_date=VAL_DATE,
+        adj_convention=ADJ_CLP,
+        fixed_leg=fixed,
+        floating_leg=floating,
+    ).get_instrument()
+    calendar = ADJ_CLP.calendar
+    for leg, lag in ((swap.receive_leg, 1), (swap.pay_leg, 2)):
+        assert leg.payment_dates == [
+            calendar.add_business_days(d, lag) for d in leg.end_dates
+        ]

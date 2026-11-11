@@ -135,6 +135,26 @@ class SwapLeg:
         )
 
     @staticmethod
+    def _payment_dates(
+        end_dates: list[date],
+        adj_convention: AdjustmentDateConventionBase,
+        payment_lag: int,
+    ) -> list[date]:
+        """Payment dates `payment_lag` business days after each period end date.
+
+        Raises
+        ------
+        ValueError
+            If `payment_lag` is negative.
+        """
+        if payment_lag < 0:
+            raise ValueError(f"payment_lag must be >= 0. Got {payment_lag}.")
+        if payment_lag == 0:
+            return list(end_dates)
+        calendar = adj_convention.calendar
+        return [calendar.add_business_days(d, payment_lag) for d in end_dates]
+
+    @staticmethod
     def _fx_fixing_dates(
         payment_dates: list[date],
         adj_convention: AdjustmentDateConventionBase,
@@ -202,6 +222,7 @@ class FixedLeg(SwapLeg):
         long_stub: bool = False,
         maturity_date: date | None = None,
         fx_fixing_lag: int = 0,
+        payment_lag: int = 0,
     ) -> FixedLeg:
         """Bullet fixed leg generated from a start date and a term.
 
@@ -229,6 +250,8 @@ class FixedLeg(SwapLeg):
             Explicit maturity overriding `term`.
         fx_fixing_lag : int, default 0
             Business days between each FX fixing and its payment date.
+        payment_lag : int, default 0
+            Business days between each period end date and its payment date.
 
         Returns
         -------
@@ -244,14 +267,15 @@ class FixedLeg(SwapLeg):
             maturity_date,
         )
         maturity = max(schedule)
-        fx_dates = cls._fx_fixing_dates(schedule[1:], adj_convention, fx_fixing_lag)
+        pay_dates = cls._payment_dates(schedule[1:], adj_convention, payment_lag)
+        fx_dates = cls._fx_fixing_dates(pay_dates, adj_convention, fx_fixing_lag)
         coupons = [
             FixedCoupon(
                 residual=notional,
                 amortization=0.0 if schedule[i + 1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
-                payment_date=schedule[i + 1],
+                payment_date=pay_dates[i],
                 fx_fixing_date=fx_dates[i],
                 rate=rate,
             )
@@ -352,6 +376,7 @@ class TermRateLeg(FloatingLeg):
         long_stub: bool = False,
         maturity_date: date | None = None,
         fx_fixing_lag: int = 0,
+        payment_lag: int = 0,
     ) -> TermRateLeg:
         """Bullet term-rate leg generated from a start date and a term.
 
@@ -366,7 +391,7 @@ class TermRateLeg(FloatingLeg):
         fixing_lag : int, optional
             Business days between each rate fixing and its accrual start;
             defaults to the index ``spot_lag``.
-        stub_first, long_stub, maturity_date, fx_fixing_lag
+        stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
             As in :meth:`FixedLeg.from_term`.
 
         Returns
@@ -391,14 +416,15 @@ class TermRateLeg(FloatingLeg):
             calendar.add_business_days(schedule[i], -fixing_lag) for i in range(n)
         ]
         maturity = max(schedule)
-        fx_dates = cls._fx_fixing_dates(schedule[1:], adj_convention, fx_fixing_lag)
+        pay_dates = cls._payment_dates(schedule[1:], adj_convention, payment_lag)
+        fx_dates = cls._fx_fixing_dates(pay_dates, adj_convention, fx_fixing_lag)
         coupons = [
             TermRateCoupon(
                 residual=notional,
                 amortization=0.0 if schedule[i + 1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
-                payment_date=schedule[i + 1],
+                payment_date=pay_dates[i],
                 fx_fixing_date=fx_dates[i],
                 spread=spread,
                 fixing_date=fixing_dates[i],
@@ -430,6 +456,7 @@ class OvernightLeg(FloatingLeg):
         long_stub: bool = False,
         maturity_date: date | None = None,
         fx_fixing_lag: int = 0,
+        payment_lag: int = 0,
     ) -> OvernightLeg:
         """Bullet overnight leg generated from a start date and a term.
 
@@ -441,7 +468,7 @@ class OvernightLeg(FloatingLeg):
             Overnight rate or interest price index.
         spread : Rate, optional
             Spread over the index; zero when omitted.
-        stub_first, long_stub, maturity_date, fx_fixing_lag
+        stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
             As in :meth:`FixedLeg.from_term`.
 
         Returns
@@ -461,6 +488,7 @@ class OvernightLeg(FloatingLeg):
             long_stub,
             maturity_date,
             fx_fixing_lag,
+            payment_lag,
         )
 
     @classmethod
@@ -478,6 +506,7 @@ class OvernightLeg(FloatingLeg):
         long_stub,
         maturity_date,
         fx_fixing_lag,
+        payment_lag=0,
     ):
         """Bullet daily-compounded leg of `coupon_cls` coupons (shared by subclasses)."""
         schedule = cls._build_schedule(
@@ -491,14 +520,15 @@ class OvernightLeg(FloatingLeg):
         )
         spread = _zero_spread() if spread is None else spread
         maturity = max(schedule)
-        fx_dates = cls._fx_fixing_dates(schedule[1:], adj_convention, fx_fixing_lag)
+        pay_dates = cls._payment_dates(schedule[1:], adj_convention, payment_lag)
+        fx_dates = cls._fx_fixing_dates(pay_dates, adj_convention, fx_fixing_lag)
         coupons = [
             coupon_cls(
                 residual=notional,
                 amortization=0.0 if schedule[i + 1] != maturity else notional,
                 start_date=schedule[i],
                 end_date=schedule[i + 1],
-                payment_date=schedule[i + 1],
+                payment_date=pay_dates[i],
                 fx_fixing_date=fx_dates[i],
                 spread=spread,
             )
@@ -532,6 +562,7 @@ class XCCYFloatingLeg(OvernightLeg):
         long_stub: bool = False,
         maturity_date: date | None = None,
         fx_fixing_lag: int = 0,
+        payment_lag: int = 0,
     ) -> XCCYFloatingLeg:
         """Bullet cross-currency floating leg.
 
@@ -554,4 +585,5 @@ class XCCYFloatingLeg(OvernightLeg):
             long_stub,
             maturity_date,
             fx_fixing_lag,
+            payment_lag,
         )

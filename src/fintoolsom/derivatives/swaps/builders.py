@@ -22,6 +22,9 @@ maturity_date : date, optional
 fx_fixing_lag : int, default 0
     Business days between each FX fixing and its payment date; used only when the
     leg settles non-deliverably in another currency (keyword-only).
+payment_lag : int, default 0
+    Business days between each period end date and its payment date; the FX
+    fixing is measured back from the lagged payment date (keyword-only).
 """
 
 from __future__ import annotations
@@ -49,6 +52,7 @@ def fixed_leg(
     long_stub: bool = False,
     maturity_date: date | None = None,
     fx_fixing_lag: int = 0,
+    payment_lag: int = 0,
 ) -> FixedLeg:
     """Fixed-rate leg.
 
@@ -60,7 +64,7 @@ def fixed_leg(
         Fixed rate of every coupon.
     currency : Currency
         Currency of the flows.
-    stub_first, long_stub, maturity_date, fx_fixing_lag
+    stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
     Returns
@@ -79,6 +83,7 @@ def fixed_leg(
         long_stub=long_stub,
         maturity_date=maturity_date,
         fx_fixing_lag=fx_fixing_lag,
+        payment_lag=payment_lag,
     )
 
 
@@ -96,6 +101,7 @@ def term_rate_leg(
     long_stub: bool = False,
     maturity_date: date | None = None,
     fx_fixing_lag: int = 0,
+    payment_lag: int = 0,
 ) -> TermRateLeg:
     """Floating leg on a term-rate index: one fixing per coupon.
 
@@ -110,7 +116,7 @@ def term_rate_leg(
     fixing_lag : int, optional
         Business days between each rate fixing and its accrual start; defaults to
         the index ``spot_lag``.
-    stub_first, long_stub, maturity_date, fx_fixing_lag
+    stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
     Returns
@@ -130,6 +136,7 @@ def term_rate_leg(
         long_stub=long_stub,
         maturity_date=maturity_date,
         fx_fixing_lag=fx_fixing_lag,
+        payment_lag=payment_lag,
     )
 
 
@@ -146,6 +153,7 @@ def overnight_leg(
     long_stub: bool = False,
     maturity_date: date | None = None,
     fx_fixing_lag: int = 0,
+    payment_lag: int = 0,
 ) -> OvernightLeg:
     """Floating leg on an overnight index, compounded daily.
 
@@ -157,7 +165,7 @@ def overnight_leg(
         Overnight rate or interest price index; its currency is the leg currency.
     spread : Rate, optional
         Spread over the index; zero when omitted.
-    stub_first, long_stub, maturity_date, fx_fixing_lag
+    stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
     Returns
@@ -176,6 +184,7 @@ def overnight_leg(
         long_stub=long_stub,
         maturity_date=maturity_date,
         fx_fixing_lag=fx_fixing_lag,
+        payment_lag=payment_lag,
     )
 
 
@@ -192,6 +201,7 @@ def xccy_floating_leg(
     long_stub: bool = False,
     maturity_date: date | None = None,
     fx_fixing_lag: int = 0,
+    payment_lag: int = 0,
 ) -> XCCYFloatingLeg:
     """Cross-currency floating leg on an overnight index, compounded daily.
 
@@ -203,7 +213,7 @@ def xccy_floating_leg(
         Overnight index; its currency is the leg currency.
     spread : Rate, optional
         Spread over the index; zero when omitted.
-    stub_first, long_stub, maturity_date, fx_fixing_lag
+    stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
     Returns
@@ -222,6 +232,7 @@ def xccy_floating_leg(
         long_stub=long_stub,
         maturity_date=maturity_date,
         fx_fixing_lag=fx_fixing_lag,
+        payment_lag=payment_lag,
     )
 
 
@@ -239,6 +250,7 @@ def floating_leg(
     long_stub: bool = False,
     maturity_date: date | None = None,
     fx_fixing_lag: int = 0,
+    payment_lag: int = 0,
 ) -> TermRateLeg | OvernightLeg:
     """Floating leg of the kind the index calls for.
 
@@ -256,7 +268,7 @@ def floating_leg(
         Spread over the index; zero when omitted.
     cross_currency : bool, default False
         Build an :class:`XCCYFloatingLeg` for an overnight index.
-    stub_first, long_stub, maturity_date, fx_fixing_lag
+    stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
     Returns
@@ -275,6 +287,7 @@ def floating_leg(
         long_stub=long_stub,
         maturity_date=maturity_date,
         fx_fixing_lag=fx_fixing_lag,
+        payment_lag=payment_lag,
     )
     if not isinstance(index, OvernightIndex):
         return term_rate_leg(**common)
