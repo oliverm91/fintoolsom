@@ -18,7 +18,6 @@ from fintoolsom.market import (
 )
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.market.quotes import ForwardPriceQuote
-from fintoolsom.rates import DiscountCurve
 from tests.factories.quote_factory import (
     ICP,
     SOFR,
@@ -30,6 +29,7 @@ from tests.factories.quote_factory import (
     term_basis_quotes,
     term_irs_quotes,
 )
+from tests.factories.curve_factory import discount_curve_from_dfs
 
 USD = Currency.USD
 
@@ -118,7 +118,7 @@ def test_a_quote_falls_back_when_its_preferred_curve_is_built():
     market = Market(
         t=t,
         risk_free_index=riskless,
-        curves=[DiscountCurve(t, USD, riskless, [pay], [0.98])],
+        curves=[discount_curve_from_dfs(t, USD, riskless, [pay], [0.98])],
     )
     usdclp = CurrencyPair(USD, Currency.CLP)
     market.add_fx_rate(t, FX_Rate(usdclp, 900.0))

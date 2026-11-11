@@ -1,13 +1,14 @@
 """Curves used for pricing, the market and the curve builder.
 
-:class:`Curve` is the discounting interface every curve implements. Two concrete
-roles derive from it:
+:class:`Curve` is the discounting interface every curve implements. Its families are
+:class:`ModelCurve` (parametric, not implemented yet) and
+:class:`~fintoolsom.rates.PillarCurve` (interpolated between dates), with two roles:
 
 * :class:`~fintoolsom.rates.IndexCurve` — the curve of an interest index, stored as
   forward rates; it discounts and projects that index.
 * :class:`~fintoolsom.rates.DiscountCurve` — the discount curve of a currency that
   has no index of its own under the market's risk-free index (e.g. USD in Chile
-  under ICP), stored as discount factors.
+  under ICP), also stored as forward rates.
 
 Time is measured in Act/365 year fractions from the curve date; forward and zero
 rates are continuously compounded on that basis unless a ``RateConvention`` is given.
@@ -18,7 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 from enum import Enum
-from typing import ClassVar, Self, Sequence
+from typing import Self, Sequence
 
 import numpy as np
 
@@ -31,25 +32,31 @@ DateArg = date | Sequence[date]
 
 
 class InterpolationMethod(Enum):
-    """How a curve fills the gaps between its pillars or knots.
+    """How a :class:`~fintoolsom.rates.PillarCurve` fills the gaps between its knots.
 
-    Each curve class accepts only the methods of its own space (see
-    ``allowed_methods``):
+    It only chooses the function integrated between knots; every pillar curve accepts
+    every method except ``LogLinear``:
 
-    * ``LogLinear`` (discount factors): linear in ``log(df)``, i.e. piecewise-constant
-      forwards between pillars;
-    * ``HermiteCubicSpline`` (discount factors): monotone cubic (PCHIP) on the dfs;
-    * ``PiecewiseConstant`` (forward rates): one constant forward per segment;
-    * ``Linear`` (forward rates): forwards linear in time between knots;
-    * ``CubicSpline`` (discount and index curves): natural C2 cubic spline on
-      ``log(df)``. A pillar moves the whole curve.
+    * ``PiecewiseConstant``: one constant forward per segment, i.e. linear in
+      ``log(df)`` between knots;
+    * ``HermiteCubicSpline``: monotone cubic (PCHIP) on the dfs at the knots;
+    * ``PiecewiseLinear``: forwards continuous and linear in time between knots. They
+      zig-zag, so the first curve created with it warns; see Hagan & West (2006),
+      "Interpolation Methods for Curve Construction", p. 97;
+    * ``CubicSpline``: natural C2 cubic spline on ``log(df)``. A knot moves the whole
+      curve;
+    * ``ConvexMonotone``: continuous forwards, quadratic by pieces, from the monotone
+      convex method of Hagan & West (2006) as enhanced in QuantLib. A knot moves only
+      the segments next to it;
+    * ``LogLinear``: only for the legacy ``ZeroCouponCurve``, which stores dfs.
     """
 
     LogLinear = 1
     HermiteCubicSpline = 2
     PiecewiseConstant = 3
-    Linear = 4
+    PiecewiseLinear = 4
     CubicSpline = 5
+    ConvexMonotone = 6
 
 
 def year_fractions(curve_date: date, dates: Sequence[date]) -> np.ndarray:
@@ -68,22 +75,9 @@ class Curve(ABC):
     ----------
     curve_date : date
         Date the dfs are measured from (df = 1 there).
-    interpolation_method : InterpolationMethod
-        Must be one of the class's ``allowed_methods``.
     """
 
-    allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset()
     curve_date: date
-    interpolation_method: InterpolationMethod
-
-    def _check_method(self) -> None:
-        if self.interpolation_method not in self.allowed_methods:
-            allowed = ", ".join(sorted(m.name for m in self.allowed_methods))
-            raise ValueError(
-                f"{type(self).__name__} does not support interpolation "
-                f"'{getattr(self.interpolation_method, 'name', self.interpolation_method)}'; "
-                f"allowed: {allowed}."
-            )
 
     # ── Required ─────────────────────────────────────────────────────────────
 
@@ -189,6 +183,13 @@ class Curve(ABC):
                 )
             ),
         )
+
+
+class ModelCurve(Curve):
+    """Curve given by a parametric model rather than by pillars.
+
+    Not implemented yet: it stays abstract until a model implements :class:`Curve`.
+    """
 
 
 class DailyGridCurve(Curve):

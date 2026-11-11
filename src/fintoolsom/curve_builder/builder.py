@@ -27,8 +27,9 @@ from ..market.index import Index
 from ..market.conventions import FixedLegSpec, FloatingLegSpec
 from ..market.market import Market
 from ..rates import InterpolationMethod, Rate
+from ..rates.PillarCurve import MIN_KNOTS
 from ._errors import InsufficientQuotesError, RedundantQuoteWarning, RepricingError
-from ._keys import CurveKey, _built, _instrument_of
+from ._keys import CurveKey, _built, _curve_id, _instrument_of
 from ._plan import _Planner
 from ._seeds import _Seeder
 from ._solver import _GroupSolve, _solve_unknowns
@@ -57,7 +58,7 @@ class _CurveBuilder:
     market : Market
         Market to build into; needs a `risk_free_index`.
     discount_interp_method : InterpolationMethod, optional
-        Interpolation of the discount curves it creates (log-linear by default).
+        Interpolation of the discount curves it creates (``PiecewiseConstant`` by default).
     index_interp_method : InterpolationMethod, optional
         Interpolation of the index curves it creates (piecewise-constant forwards
         by default).
@@ -76,7 +77,7 @@ class _CurveBuilder:
         self,
         quotes: list,
         market: Market,
-        discount_interp_method: InterpolationMethod = InterpolationMethod.LogLinear,
+        discount_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
         index_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
     ):
         if market.risk_free_index is None:
@@ -198,6 +199,13 @@ class _CurveBuilder:
         )
         if solve.n_unknowns != len(residual_instruments):
             return "defer"  # duplicate pillars: over-determined.
+        for curve, dates in free_dates.items():
+            if len(fixed_pillars[curve].knots) + len(dates) < MIN_KNOTS:
+                raise InsufficientQuotesError(
+                    f"Curve {_curve_id(curve, self.market.risk_free_index)} would have "
+                    "a single segment: a curve needs at least 2 pillars, so it needs "
+                    "more quotes in this build."
+                )
 
         y = _solve_unknowns(
             solve,
@@ -216,23 +224,24 @@ class _CurveBuilder:
         return "solved"
 
     def _solve_splines_jointly(self) -> None:
-        """Re-solve every pillar of this build at once if a curve is a cubic spline.
+        """Re-solve every pillar of this build at once if a curve is a cubic spline or
+        monotone convex.
 
         Groups are solved in sequence on the premise that a later pillar leaves what
-        was already fitted alone. A spline pillar moves the whole curve, so the quotes
-        fitted before it drift; the sequential result only warm-starts this solve.
+        was already fitted alone. A pillar of those methods moves the curve before it
+        too, so the quotes fitted earlier drift; the sequential result only warm-starts
+        this solve.
         """
         built = {c: _built(self.market, c) for c in self._free_dates}
         if all(
-            curve.interpolation_method is not InterpolationMethod.CubicSpline
+            curve.interpolation_method
+            not in (InterpolationMethod.CubicSpline, InterpolationMethod.ConvexMonotone)
             for curve in built.values()
         ):
             return
         # New pillars are always appended, so each curve's are its last values.
         seeds = {
-            c: (built[c].forward_rates if isinstance(c, Index) else built[c].dfs)[
-                -len(dates) :
-            ]
+            c: built[c].forward_rates[-len(dates) :]
             for c, dates in self._free_dates.items()
         }
         solve = _GroupSolve.from_free_pillars(
@@ -392,7 +401,7 @@ def build_curves(
     quotes: list,
     market: Market,
     *,
-    discount_interp_method: InterpolationMethod = InterpolationMethod.LogLinear,
+    discount_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
     index_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
 ) -> None:
     """Bootstrap the curves that reprice `quotes` into `market`, in place.
@@ -408,12 +417,11 @@ def build_curves(
     market : Market
         Market as of the quote date, with the FX and fixings valuation needs.
     discount_interp_method : InterpolationMethod, optional
-        Interpolation of the discount curves this build creates: ``LogLinear``
-        (default, solved date by date), ``HermiteCubicSpline`` or ``CubicSpline``. A
-        curve already in the market keeps its own method when the build extends it.
+        Interpolation of the discount curves this build creates:
+        ``PiecewiseConstant`` forwards by default, or any other pillar-curve method. A curve already in the market keeps its own method when the build extends it.
     index_interp_method : InterpolationMethod, optional
         Interpolation of the index curves this build creates: ``PiecewiseConstant``
-        forwards (default), ``Linear`` forwards or ``CubicSpline``; an extended one
+        forwards by default, or any other pillar-curve method; an extended one
         keeps its own. With a ``CubicSpline`` curve every pillar is finally solved
         jointly, since a spline pillar moves the whole curve.
 

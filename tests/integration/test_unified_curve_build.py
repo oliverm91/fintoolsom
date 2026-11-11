@@ -200,9 +200,11 @@ def test_non_local_interpolation_skips_the_sweep_and_still_reprices(real, monkey
 
 def test_linear_forwards_are_local_and_still_sweep(real, monkeypatch):
     sizes = _spy_block_sizes(monkeypatch)
-    market = _build(real, index_interp_method=InterpolationMethod.Linear)
+    market = _build(real, index_interp_method=InterpolationMethod.PiecewiseLinear)
     assert len(sizes) > 50 and max(sizes) <= 2
-    assert market.curves["ICP"].interpolation_method is InterpolationMethod.Linear
+    assert (
+        market.curves["ICP"].interpolation_method is InterpolationMethod.PiecewiseLinear
+    )
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
 
 
@@ -217,7 +219,7 @@ def test_linear_forwards_are_local_and_still_sweep(real, monkeypatch):
         },
         {
             "discount_interp_method": InterpolationMethod.CubicSpline,
-            "index_interp_method": InterpolationMethod.Linear,
+            "index_interp_method": InterpolationMethod.PiecewiseLinear,
         },
     ],
 )
@@ -227,12 +229,39 @@ def test_a_cubic_spline_curve_still_reprices_every_quote_after_the_build(real, m
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
 
 
-def test_cubic_spline_solves_every_pillar_jointly_at_the_end(real, monkeypatch):
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.CubicSpline, InterpolationMethod.ConvexMonotone]
+)
+def test_non_local_methods_solve_every_pillar_jointly_at_the_end(
+    real, monkeypatch, method
+):
     sizes = _spy_block_sizes(monkeypatch)
-    _build(real, index_interp_method=InterpolationMethod.CubicSpline)
+    _build(real, index_interp_method=method)
     assert sizes[-1] == max(sizes) and sizes[-1] > 50
 
 
-def test_linear_is_rejected_for_discount_curves(real):
-    with pytest.raises(ValueError, match="does not support interpolation 'Linear'"):
-        _build(real, discount_interp_method=InterpolationMethod.Linear)
+@pytest.mark.parametrize(
+    "methods",
+    [
+        {"discount_interp_method": InterpolationMethod.PiecewiseLinear},
+        {"index_interp_method": InterpolationMethod.HermiteCubicSpline},
+        {
+            "discount_interp_method": InterpolationMethod.HermiteCubicSpline,
+            "index_interp_method": InterpolationMethod.PiecewiseLinear,
+        },
+        {"discount_interp_method": InterpolationMethod.ConvexMonotone},
+        {"index_interp_method": InterpolationMethod.ConvexMonotone},
+        {
+            "discount_interp_method": InterpolationMethod.ConvexMonotone,
+            "index_interp_method": InterpolationMethod.ConvexMonotone,
+        },
+    ],
+)
+def test_any_method_works_for_either_curve_role(real, methods):
+    market = _build(real, **methods)
+    assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
+
+
+def test_log_linear_is_rejected_for_new_curves(real):
+    with pytest.raises(ValueError, match="does not support interpolation 'LogLinear'"):
+        _build(real, discount_interp_method=InterpolationMethod.LogLinear)

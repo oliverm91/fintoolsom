@@ -55,6 +55,7 @@ from fintoolsom.rates import (
     Rate,
     RateConvention,
 )
+from tests.factories.curve_factory import discount_curve_from_dfs
 
 # ── Dates ──────────────────────────────────────────────────────────────────
 
@@ -334,12 +335,14 @@ _PILLARS = [
 
 def _flat_index_curve(index, rate: float) -> IndexCurve:
     """Flat continuously compounded act/365 `rate` from the valuation date."""
-    return IndexCurve(VAL_DATE, index, [VAL_DATE, _PILLARS[-1]], [rate])
+    return IndexCurve(
+        VAL_DATE, index, [VAL_DATE, _PILLARS[0], _PILLARS[-1]], [rate, rate]
+    )
 
 
 def _flat_discount_curve(currency, rate: float) -> DiscountCurve:
     dfs = [math.exp(-rate * (d - VAL_DATE).days / 365) for d in _PILLARS]
-    return DiscountCurve(VAL_DATE, currency, RISKLESS, list(_PILLARS), dfs)
+    return discount_curve_from_dfs(VAL_DATE, currency, RISKLESS, list(_PILLARS), dfs)
 
 
 def _history_days() -> list[date]:

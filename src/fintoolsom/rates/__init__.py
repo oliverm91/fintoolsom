@@ -6,7 +6,8 @@ from .Rates import (
     CompoundedInterestConvention,
     ExponentialInterestConvention,
 )
-from .Curve import Curve, InterpolationMethod, DAY_BASE
+from .Curve import Curve, ModelCurve, InterpolationMethod, DAY_BASE
+from .PillarCurve import PillarCurve
 from .IndexCurve import IndexCurve
 from .DiscountCurve import DiscountCurve
 from .LegacyCurve import LegacyCurve

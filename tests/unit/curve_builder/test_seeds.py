@@ -54,8 +54,12 @@ def test_basis_seed_shifts_the_index_curve_by_the_spread():
         t=t,
         risk_free_index=RISKLESS,
         curves=[
-            IndexCurve(t, RISKLESS, [t, maturity], [0.06]),
-            IndexCurve(t, sofr, [t, maturity], [z_sofr]),
+            IndexCurve(
+                t, RISKLESS, [t, t + (maturity - t) / 2, maturity], [0.06, 0.06]
+            ),
+            IndexCurve(
+                t, sofr, [t, t + (maturity - t) / 2, maturity], [z_sofr, z_sofr]
+            ),
         ],
     )
     clp_leg = SimpleNamespace(
@@ -99,7 +103,7 @@ def test_index_anchor_supports_price_based_overnight_index():
         fixed.knots == [icp.get_maturity(t)] and fixed.forwards == []
     )  # effective: next business day
     assert fixed.spot_rate is not None and fixed.spot_rate.rate > 0.0
-    ((anchor_date, df),) = fixed.knot_dfs(t, icp)
+    ((anchor_date, df),) = fixed.knot_dfs(t)
     assert anchor_date == icp.get_maturity(t) and 0.0 < df < 1.0
     assert guess > 0.0
 

@@ -1,15 +1,15 @@
-"""Discount curve of a currency under a risk-free index, stored as discount factors."""
+"""Discount curve of a currency under a risk-free index, stored as forward rates."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.interpolate import CubicSpline, PchipInterpolator
 
-from .Curve import DAY_BASE, DailyGridCurve, InterpolationMethod, year_fractions
+from .Curve import InterpolationMethod
+from .PillarCurve import PillarCurve
 
 if TYPE_CHECKING:
     from ..market.currencies import Currency
@@ -17,13 +17,13 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class DiscountCurve(DailyGridCurve):
+class DiscountCurve(PillarCurve):
     """Discount curve of `currency` seen from `risk_free_index` (e.g. USD under ICP).
 
     Only for a currency other than the risk-free index's: that one discounts on the
-    index's own :class:`IndexCurve`. Built from discount factors at pillars; an
-    implicit pillar ``df = 1`` sits at the curve date. Past the last pillar the last
-    segment's forward is extended flat.
+    index's own :class:`IndexCurve`. Its parameters are forward rates from the curve
+    date, as in any :class:`PillarCurve`. Past the last knot the last forward is
+    extended flat.
 
     Parameters
     ----------
@@ -34,158 +34,51 @@ class DiscountCurve(DailyGridCurve):
     risk_free_index : Index
         Numeraire the curve is built under; with `currency` it gives the curve id
         ``"<currency>_<index>"``.
-    pillar_dates : list of date
-        Pillars after `curve_date` (sorted on construction).
-    dfs : array-like
-        Discount factors at `pillar_dates`.
+    knot_dates : list of date
+        Strictly increasing, the first one equal to `curve_date`.
+    forward_rates : array-like
+        One forward per segment: ``len(knot_dates) - 1`` values.
     interpolation_method : InterpolationMethod, optional
-        Discount-factor methods only; ``LogLinear`` by default. ``CubicSpline`` is a
-        natural spline on ``log(df)``, so the forward joins the flat extrapolation
-        smoothly at the last pillar.
+        ``PiecewiseConstant`` by default. ``CubicSpline`` is a natural spline on
+        ``log(df)``, so the forward joins the flat extrapolation smoothly at the last
+        knot.
     precalculate : bool, optional
-        Keyword only. Store the df of every day up to the last pillar on creation (the
+        Keyword only. Store the df of every day up to the last knot on creation (the
         default). Creation is slower and lookups faster; False skips it for a curve
         that is created many times and read little. :meth:`precalculate_dfs` builds
         the grid later.
     """
 
-    allowed_methods: ClassVar[frozenset[InterpolationMethod]] = frozenset(
-        {
-            InterpolationMethod.LogLinear,
-            InterpolationMethod.HermiteCubicSpline,
-            InterpolationMethod.CubicSpline,
-        }
-    )
-
-    curve_date: date
     currency: "Currency"
     risk_free_index: "Index"
-    pillar_dates: list[date]
-    dfs: np.ndarray
-    interpolation_method: InterpolationMethod = InterpolationMethod.LogLinear
-    precalculate: bool = field(default=True, kw_only=True, repr=False, compare=False)
-
-    _tau: np.ndarray = field(init=False, repr=False)
-    _log_dfs: np.ndarray = field(init=False, repr=False)
-    _last_forward: float = field(init=False, repr=False)
-    _pchip: PchipInterpolator | None = field(init=False, repr=False, default=None)
-    _log_df_spline: CubicSpline | None = field(init=False, repr=False, default=None)
+    knot_dates: list[date]
+    forward_rates: np.ndarray
+    interpolation_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant
 
     def __post_init__(self):
-        self._check_method()
+        super().__post_init__()
         if self.currency == getattr(self.risk_free_index, "currency", None):
             raise ValueError(
                 f"{self.currency} is the currency of the risk-free index '{self.risk_free_index.name}': "
                 "it discounts on that index's IndexCurve, not on a DiscountCurve."
             )
-        pairs = sorted(
-            zip(self.pillar_dates, np.asarray(self.dfs, dtype=float)),
-            key=lambda p: p[0],
-        )
-        if not pairs:
-            raise ValueError("A DiscountCurve needs at least one pillar.")
-        if any(b == a for (a, _), (b, _) in zip(pairs, pairs[1:])):
-            raise ValueError(f"Duplicate pillar dates: {[d for d, _ in pairs]}.")
-        if pairs[0][0] <= self.curve_date:
+        if self.knot_dates[0] != self.curve_date:
             raise ValueError(
-                f"Pillars must be after the curve date {self.curve_date}; got {pairs[0][0]}."
+                f"The first knot {self.knot_dates[0]} must be the curve date {self.curve_date}."
             )
-        if any(df <= 0 for _, df in pairs):
-            raise ValueError("Discount factors must be positive.")
-        self.pillar_dates = [d for d, _ in pairs]
-        self.dfs = np.array([df for _, df in pairs])
-        self._tau = np.concatenate(
-            ([0.0], year_fractions(self.curve_date, self.pillar_dates))
-        )
-        self._log_dfs = np.concatenate(([0.0], np.log(self.dfs)))
-        self._last_forward = -(self._log_dfs[-1] - self._log_dfs[-2]) / (
-            self._tau[-1] - self._tau[-2]
-        )
-        if (
-            self.interpolation_method is InterpolationMethod.HermiteCubicSpline
-            and len(self._tau) > 2
-        ):
-            self._pchip = PchipInterpolator(self._tau, np.exp(self._log_dfs))
-        if self.interpolation_method is InterpolationMethod.CubicSpline:
-            self._log_df_spline = CubicSpline(
-                self._tau, self._log_dfs, bc_type="natural"
-            )
-            self._last_forward = -float(self._log_df_spline(self._tau[-1], 1))
-        if self.precalculate:
-            self.precalculate_dfs()
-
-    @classmethod
-    def from_zero_coupon_curve(
-        cls, zcc, currency: "Currency", risk_free_index: "Index"
-    ) -> DiscountCurve:
-        """The same pillars and dfs as a legacy ZeroCouponCurve, with its method."""
-        return cls(
-            zcc.curve_date,
-            currency,
-            risk_free_index,
-            list(zcc.dates),
-            np.array(zcc.dfs, dtype=float),
-            zcc.df_interpolation_method,
-        )
 
     # ── Curve ────────────────────────────────────────────────────────────────
 
     def get_id(self) -> str:
         return f"{self.currency.value}_{self.risk_free_index.name}"
 
-    @property
-    def last_date(self) -> date:
-        return self.pillar_dates[-1]
-
-    @property
-    def pillars(self) -> list[tuple[date, float]]:
-        """``(date, df)`` pillars, sorted."""
-        return list(zip(self.pillar_dates, (float(df) for df in self.dfs)))
-
-    def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
-        tau = days / DAY_BASE
-        last = self._tau[-1]
-        inside = tau <= last
-        out = np.empty(len(tau))
-        if self._pchip is not None:
-            out[inside] = self._pchip(tau[inside])
-        elif self._log_df_spline is not None:
-            out[inside] = np.exp(self._log_df_spline(tau[inside]))
-        else:
-            out[inside] = np.exp(np.interp(tau[inside], self._tau, self._log_dfs))
-        out[~inside] = np.exp(
-            self._log_dfs[-1] - self._last_forward * (tau[~inside] - last)
-        )
-        return out
-
     def parallel_bump_bps(self, bps: float) -> DiscountCurve:
-        shift = bps / 10_000
         return DiscountCurve(
             self.curve_date,
             self.currency,
             self.risk_free_index,
-            list(self.pillar_dates),
-            self.dfs * np.exp(-shift * self._tau[1:]),
-            self.interpolation_method,
-            precalculate=self.precalculate,
-        )
-
-    def get_aged_curve(self, date: date) -> DiscountCurve:
-        """The curve from `date`: pillars after it, with dfs ``df(pillar) / df(date)``.
-
-        Exact for ``LogLinear``. ``HermiteCubicSpline`` and ``CubicSpline`` are
-        refitted on the remaining pillars and the implicit ``df = 1`` at `date`, so
-        they match the original at the pillars but not between them.
-        """
-        self._check_aging_date(date)
-        pillars = [d for d in self.pillar_dates if d > date]
-        dfs = self.get_dfs(pillars) / self.get_df(date)
-        return DiscountCurve(
-            date,
-            self.currency,
-            self.risk_free_index,
-            pillars,
-            dfs,
+            list(self.knot_dates),
+            self.forward_rates + bps / 10_000,
             self.interpolation_method,
             precalculate=self.precalculate,
         )
@@ -195,12 +88,14 @@ class DiscountCurve(DailyGridCurve):
             self.curve_date,
             self.currency,
             self.risk_free_index,
-            list(self.pillar_dates),
-            self.dfs.copy(),
+            list(self.knot_dates),
+            self.forward_rates.copy(),
             self.interpolation_method,
             precalculate=self.precalculate,
         )
 
     def __str__(self) -> str:
-        points = ", ".join(f"({d}|{df:.8f})" for d, df in self.pillars)
+        points = ", ".join(
+            f"({d}|{f:.6f})" for d, f in zip(self.knot_dates[1:], self.forward_rates)
+        )
         return f"DiscountCurve {self.get_id()} ({self.interpolation_method.name}) date {self.curve_date} [{points}]"

@@ -9,7 +9,6 @@ from fintoolsom.curve_builder import _solver, build_curves
 from fintoolsom.curve_builder._keys import _built
 from fintoolsom.market import Currency
 from fintoolsom.rates import (
-    DiscountCurve,
     IndexCurve,
     InterpolationMethod,
     Rate,
@@ -17,6 +16,7 @@ from fintoolsom.rates import (
 )
 from tests.factories import quote_factory
 from tests.factories.quote_factory import ICP
+from tests.factories.curve_factory import discount_curve_from_dfs
 
 T = date(2026, 6, 29)
 PILLARS = [T + timedelta(days=d) for d in (30, 91, 365, 730, 1825)]
@@ -31,16 +31,16 @@ def _index(method, spot=None, **kwargs):
 
 
 def _discount(method, **kwargs):
-    return DiscountCurve(T, Currency.USD, ICP, PILLARS, DFS, method, **kwargs)
+    return discount_curve_from_dfs(T, Currency.USD, ICP, PILLARS, DFS, method, **kwargs)
 
 
 SPOT = Rate(RateConvention(), 0.05)
 MAKERS = {
     "index_piecewise": lambda **k: _index(METHOD.PiecewiseConstant, **k),
-    "index_linear": lambda **k: _index(METHOD.Linear, **k),
+    "index_linear": lambda **k: _index(METHOD.PiecewiseLinear, **k),
     "index_cubic": lambda **k: _index(METHOD.CubicSpline, **k),
     "index_spot": lambda **k: _index(METHOD.PiecewiseConstant, SPOT, **k),
-    "discount_loglinear": lambda **k: _discount(METHOD.LogLinear, **k),
+    "discount_piecewise": lambda **k: _discount(METHOD.PiecewiseConstant, **k),
     "discount_hermite": lambda **k: _discount(METHOD.HermiteCubicSpline, **k),
     "discount_cubic": lambda **k: _discount(METHOD.CubicSpline, **k),
 }

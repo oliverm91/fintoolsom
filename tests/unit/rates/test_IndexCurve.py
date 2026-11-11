@@ -18,6 +18,7 @@ from fintoolsom.rates import (
     RateConvention,
     ZeroCouponCurve,
 )
+from tests.factories.curve_factory import index_curve_from_zero_coupon_curve
 
 T = date(2026, 6, 29)
 SOFR = OvernightRateIndex("SOFR", currency=Currency(CurrencyName.USD))
@@ -123,7 +124,7 @@ def test_parallel_bump_shifts_every_continuous_zero_rate_and_returns_a_copy(spot
 
 def test_matches_a_log_linear_zero_coupon_curve_on_the_same_pillars():
     zcc = ZeroCouponCurve(T, date_dfs=[(k, _curve().get_df(k)) for k in KNOTS[1:]])
-    converted = IndexCurve.from_zero_coupon_curve(zcc, SOFR)
+    converted = index_curve_from_zero_coupon_curve(zcc, SOFR)
     dates = [T + timedelta(days=n) for n in (1, 45, 200, 500, 729)]
     assert converted.get_dfs(dates) == pytest.approx(zcc.get_dfs(dates), rel=1e-12)
     assert converted.forward_rates == pytest.approx(FWDS, rel=1e-10)
@@ -146,15 +147,27 @@ def _linear_integral(d: date) -> float:
     return sum((f0 + f1) / 2 * (t1 - t0) for (t0, f0), (t1, f1) in zip(ends, ends[1:]))
 
 
+def _linear_curve() -> IndexCurve:
+    """Linear curve whose forwards at the knots after the first are FWDS."""
+    averages = np.concatenate((FWDS[:1], (FWDS[:-1] + FWDS[1:]) / 2))
+    return IndexCurve(
+        T,
+        SOFR,
+        KNOTS,
+        averages,
+        interpolation_method=InterpolationMethod.PiecewiseLinear,
+    )
+
+
 @pytest.mark.parametrize("days", [45, 90, 135, 180, 250, 365, 500, 730])
 def test_linear_integrates_forwards_linear_between_knots(days):
-    curve = _curve(interpolation_method=InterpolationMethod.Linear)
+    curve = _linear_curve()
     d = T + timedelta(days=days)
     assert curve.get_df(d) == pytest.approx(math.exp(-_linear_integral(d)), rel=1e-13)
 
 
 def test_linear_extends_the_last_forward_flat():
-    curve = _curve(interpolation_method=InterpolationMethod.Linear)
+    curve = _linear_curve()
     beyond = KNOTS[-1] + timedelta(days=365)
     assert curve.get_df(beyond) == pytest.approx(
         curve.get_df(KNOTS[-1]) * math.exp(-FWDS[-1]), rel=1e-13
@@ -178,7 +191,7 @@ def test_cubic_spline_forward_joins_the_flat_extrapolation_smoothly():
 
 
 @pytest.mark.parametrize(
-    "method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline]
+    "method", [InterpolationMethod.PiecewiseLinear, InterpolationMethod.CubicSpline]
 )
 def test_parallel_bump_and_copy_keep_the_shape(method):
     curve = _curve(interpolation_method=method)
@@ -192,26 +205,22 @@ def test_parallel_bump_and_copy_keep_the_shape(method):
     assert curve.copy().get_dfs(dates) == pytest.approx(curve.get_dfs(dates))
 
 
-@pytest.mark.parametrize(
-    "method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline]
-)
-def test_a_single_segment_is_a_constant_forward(method):
-    one = IndexCurve(T, SOFR, KNOTS[:2], FWDS[:1], interpolation_method=method)
-    beyond = KNOTS[1] + timedelta(days=100)
-    assert one.get_df(beyond) == pytest.approx(
-        math.exp(-FWDS[0] * _tau(beyond)), rel=1e-13
-    )
-
-
 def test_validation_errors():
-    with pytest.raises(ValueError, match="at least 2 knots"):
+    with pytest.raises(ValueError, match="at least 2 segments"):
         IndexCurve(T, SOFR, [T], [])
+    with pytest.raises(ValueError, match="at least 2 segments"):
+        IndexCurve(T, SOFR, KNOTS[:2], FWDS[:1])
     with pytest.raises(ValueError, match="one entry per segment"):
         IndexCurve(T, SOFR, KNOTS, [0.05, 0.05])
     with pytest.raises(ValueError, match="strictly increasing"):
         IndexCurve(T, SOFR, [T, T, T + timedelta(days=10)], [0.05, 0.05])
     with pytest.raises(ValueError, match="before the curve date"):
-        IndexCurve(T, SOFR, [T - timedelta(days=1), T + timedelta(days=10)], [0.05])
+        IndexCurve(
+            T,
+            SOFR,
+            [T - timedelta(days=1), T + timedelta(days=10), T + timedelta(days=20)],
+            [0.05, 0.05],
+        )
     with pytest.raises(ValueError, match="does not support interpolation 'LogLinear'"):
         IndexCurve(
             T, SOFR, KNOTS, FWDS, interpolation_method=InterpolationMethod.LogLinear
@@ -219,7 +228,7 @@ def test_validation_errors():
 
 
 # ── aging ───────────────────────────────────────────────────────────────────
-AGE_DATES = [T + timedelta(days=n) for n in (30, 90, 120, 400)]
+AGE_DATES = [T + timedelta(days=n) for n in (30, 90, 120, 300)]
 
 
 def test_piecewise_constant_aged_curve_is_exact():
@@ -236,20 +245,22 @@ def test_piecewise_constant_aged_curve_is_exact():
 
 
 @pytest.mark.parametrize(
-    "method", [InterpolationMethod.Linear, InterpolationMethod.CubicSpline]
+    "method",
+    [
+        InterpolationMethod.PiecewiseLinear,
+        InterpolationMethod.CubicSpline,
+        InterpolationMethod.HermiteCubicSpline,
+    ],
 )
-def test_other_methods_keep_the_dfs_or_forwards_at_the_knots(method):
+def test_other_methods_keep_the_dfs_at_the_knots(method):
     curve = _curve(interpolation_method=method)
     age = T + timedelta(days=120)
     aged = curve.get_aged_curve(age)
     kept = [k for k in KNOTS if k > age]
     assert aged.knot_dates == [age, *kept]
-    if method is InterpolationMethod.CubicSpline:
-        assert aged.get_dfs(kept) == pytest.approx(
-            curve.get_dfs(kept) / curve.get_df(age), rel=1e-12
-        )
-    else:  # Linear keeps each remaining knot's forward; the first segment is flat
-        assert list(aged.forward_rates) == list(FWDS[1:])
+    assert aged.get_dfs(kept) == pytest.approx(
+        curve.get_dfs(kept) / curve.get_df(age), rel=1e-12
+    )
 
 
 def test_aged_before_the_effective_date_averages_the_spot_forward():
