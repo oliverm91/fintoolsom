@@ -97,7 +97,7 @@ class _GroupSolve:
     t : date
         Curve date.
     method : InterpolationMethod
-        Interpolation of new discount curves. A curve already in the market keeps
+        Interpolation of new curves, discount and index alike. A curve already in the market keeps
         its own method when extended, so its existing part still interpolates as
         when it was solved.
     fixed_pillars : dict
@@ -108,8 +108,6 @@ class _GroupSolve:
         Curve key to its ``(start, end)`` slice of the unknown vector.
     y0 : list of float
         Initial guesses: segment forwards.
-    index_method : InterpolationMethod, optional
-        Interpolation of new index curves; an existing one keeps its own.
     """
 
     market: Market
@@ -119,7 +117,6 @@ class _GroupSolve:
     free_dates: dict
     curve_slice: dict
     y0: list[float]
-    index_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant
     _snapshot: dict = field(init=False, default=None)
     methods: dict = field(init=False, default=None)
 
@@ -132,13 +129,12 @@ class _GroupSolve:
         fixed_pillars: dict,
         free_dates: dict,
         free_seeds: dict,
-        index_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
     ) -> _GroupSolve:
         """Lay out the unknown vector from the free dates and their seeds.
 
         Parameters
         ----------
-        market, t, method, fixed_pillars, free_dates, index_method
+        market, t, method, fixed_pillars, free_dates
             As in the class.
         free_seeds : dict
             Curve key to the initial segment forwards of its free dates.
@@ -154,17 +150,13 @@ class _GroupSolve:
             curve_slice[curve] = (start, start + len(dates))
             y0 += list(free_seeds[curve])
             start += len(dates)
-        return cls(
-            market, t, method, fixed_pillars, free_dates, curve_slice, y0, index_method
-        )
+        return cls(market, t, method, fixed_pillars, free_dates, curve_slice, y0)
 
     def __post_init__(self):
         self._snapshot = {c: _built(self.market, c) for c in self.curve_slice}
         # Interpolation of each rebuilt curve: an existing curve keeps its own.
         self.methods = {
-            c: prev.interpolation_method
-            if prev is not None
-            else (self.index_method if isinstance(c, Index) else self.method)
+            c: prev.interpolation_method if prev is not None else self.method
             for c, prev in self._snapshot.items()
         }
 

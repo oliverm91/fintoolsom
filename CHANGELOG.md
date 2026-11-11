@@ -1,3 +1,9 @@
+## v1.0.0b9 (2026-11-11)
+
+### BREAKING CHANGE
+
+- **curve_builder**: `build_curves` takes one `interp_method`, used for discount and index curves alike, in place of `discount_interp_method` and `index_interp_method`. Non-local methods now make every group solve jointly, since index curves no longer sweep date by date next to them.
+
 ## v1.0.0b8 (2026-11-10)
 
 ### BREAKING CHANGE

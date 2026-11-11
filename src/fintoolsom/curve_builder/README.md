@@ -8,12 +8,11 @@ from fintoolsom.curve_builder import build_curves
 from fintoolsom.rates import InterpolationMethod
 
 build_curves(quotes, market)  # fills market.curves in place
-build_curves(quotes, market, discount_interp_method=InterpolationMethod.HermiteCubicSpline)
+build_curves(quotes, market, interp_method=InterpolationMethod.HermiteCubicSpline)
 build_curves(
     quotes,
     market,
-    discount_interp_method=InterpolationMethod.PiecewiseConstant,
-    index_interp_method=InterpolationMethod.PiecewiseConstant,
+    interp_method=InterpolationMethod.PiecewiseConstant,
 )
 ```
 
@@ -23,9 +22,8 @@ build_curves(
   `IndexCurve` under its name, such as `"ICP"` or `"SOFR"`.
 - **Discount curves.** Every currency other than the risk-free index's gets a
   `DiscountCurve` under `"<ccy>_<risk-free index>"`, such as `"USD_ICP"`.
-- **Interpolation.** New curves use `discount_interp_method` and
-  `index_interp_method`: `PiecewiseConstant` forwards by default, and any other
-  pillar-curve method for either. A
+- **Interpolation.** New curves, discount and index alike, use `interp_method`:
+  `PiecewiseConstant` forwards by default, or any other pillar-curve method. A
   curve already in the market keeps its own method when the build extends it past
   its last date.
 - **Minimum quotes.** A curve needs at least 2 pillars. A solve that would leave a
@@ -91,8 +89,7 @@ quotes += [
 
 build_curves(
     quotes, market,
-    discount_interp_method=InterpolationMethod.PiecewiseConstant,
-    index_interp_method=InterpolationMethod.PiecewiseConstant,
+    interp_method=InterpolationMethod.PiecewiseConstant,
 )
 list(market.curves)  # ['ICP', 'SOFR', 'USD_ICP']
 ```

@@ -124,8 +124,7 @@ def test_build_skips_the_grid_while_solving_local_curves(monkeypatch):
 def test_build_keeps_the_grid_while_solving_cubic_curves(monkeypatch):
     market, flags = _build(
         monkeypatch,
-        discount_interp_method=METHOD.CubicSpline,
-        index_interp_method=METHOD.CubicSpline,
+        interp_method=METHOD.CubicSpline,
     )
     assert flags and all(flags)
     assert all(c._grid is not None for c in market.curves.values())

@@ -127,8 +127,7 @@ def run(
         build_curves(
             inputs.quotes,
             market,
-            discount_interp_method=InterpolationMethod.LogLinear,
-            index_interp_method=InterpolationMethod.PiecewiseConstant,
+            interp_method=InterpolationMethod.PiecewiseConstant,
         )
     for w in caught:
         if issubclass(w.category, (UserWarning, RuntimeWarning)):

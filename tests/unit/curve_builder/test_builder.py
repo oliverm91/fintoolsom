@@ -231,7 +231,7 @@ def test_curves_default_to_the_builders_interpolation():
     )
     assert (
         discount.interpolation_method
-        is params["discount_interp_method"].default
+        is params["interp_method"].default
         is InterpolationMethod.PiecewiseConstant
     )
     index = IndexCurve(
@@ -239,7 +239,7 @@ def test_curves_default_to_the_builders_interpolation():
     )
     assert (
         index.interpolation_method
-        is params["index_interp_method"].default
+        is params["interp_method"].default
         is InterpolationMethod.PiecewiseConstant
     )
 
@@ -262,7 +262,7 @@ def test_an_extended_curve_keeps_its_own_interpolation():
     build_curves(
         icp_irs + forwards,
         market,
-        discount_interp_method=InterpolationMethod.HermiteCubicSpline,
+        interp_method=InterpolationMethod.HermiteCubicSpline,
     )
     usd = market.get_discount_curve(Currency.USD)
     between = [

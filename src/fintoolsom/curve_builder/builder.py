@@ -57,10 +57,8 @@ class _CurveBuilder:
         Quotes to reprice.
     market : Market
         Market to build into; needs a `risk_free_index`.
-    discount_interp_method : InterpolationMethod, optional
-        Interpolation of the discount curves it creates (``PiecewiseConstant`` by default).
-    index_interp_method : InterpolationMethod, optional
-        Interpolation of the index curves it creates (piecewise-constant forwards
+    interp_method : InterpolationMethod, optional
+        Interpolation of the discount and index curves it creates (``PiecewiseConstant``
         by default).
 
     Raises
@@ -77,15 +75,13 @@ class _CurveBuilder:
         self,
         quotes: list,
         market: Market,
-        discount_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
-        index_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
+        interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
     ):
         if market.risk_free_index is None:
             raise ValueError("Market has no risk_free_index; curve building needs one.")
         self.market = market
         self.t = market.t
-        self.discount_interp_method = discount_interp_method
-        self.index_interp_method = index_interp_method
+        self.interp_method = interp_method
         self.seeder = _Seeder(market, market.risk_free_index)
         self.plan = _Planner(quotes, market, self.seeder)
         self._pinning: list = []  # (instrument, report currency) of every quote that owned a pillar
@@ -191,11 +187,10 @@ class _CurveBuilder:
         solve = _GroupSolve.from_free_pillars(
             self.market,
             self.t,
-            self.discount_interp_method,
+            self.interp_method,
             fixed_pillars,
             free_dates,
             free_seeds,
-            self.index_interp_method,
         )
         if solve.n_unknowns != len(residual_instruments):
             return "defer"  # duplicate pillars: over-determined.
@@ -244,11 +239,10 @@ class _CurveBuilder:
         solve = _GroupSolve.from_free_pillars(
             self.market,
             self.t,
-            self.discount_interp_method,
+            self.interp_method,
             self._fixed,
             dict(self._free_dates),
             seeds,
-            self.index_interp_method,
         )
         y = _solve_unknowns(
             solve,
@@ -398,8 +392,7 @@ def build_curves(
     quotes: list,
     market: Market,
     *,
-    discount_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
-    index_interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
+    interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
 ) -> None:
     """Bootstrap the curves that reprice `quotes` into `market`, in place.
 
@@ -413,14 +406,12 @@ def build_curves(
         Quotes sharing one quote date, equal to ``market.t``.
     market : Market
         Market as of the quote date, with the FX and fixings valuation needs.
-    discount_interp_method : InterpolationMethod, optional
-        Interpolation of the discount curves this build creates:
-        ``PiecewiseConstant`` forwards by default, or any other pillar-curve method. A curve already in the market keeps its own method when the build extends it.
-    index_interp_method : InterpolationMethod, optional
-        Interpolation of the index curves this build creates: ``PiecewiseConstant``
-        forwards by default, or any other pillar-curve method; an extended one
-        keeps its own. With a ``CubicSpline`` curve every pillar is finally solved
-        jointly, since a spline pillar moves the whole curve.
+    interp_method : InterpolationMethod, optional
+        Interpolation of the discount and index curves this build creates:
+        ``PiecewiseConstant`` forwards by default, or any other pillar-curve method.
+        A curve already in the market keeps its own method when the build extends it.
+        With a ``CubicSpline`` curve every pillar is finally solved jointly, since
+        a spline pillar moves the whole curve.
 
     Raises
     ------
@@ -463,6 +454,5 @@ def build_curves(
     _CurveBuilder(
         quotes,
         market,
-        discount_interp_method=discount_interp_method,
-        index_interp_method=index_interp_method,
+        interp_method=interp_method,
     ).build()
