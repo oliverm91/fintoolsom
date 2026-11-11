@@ -20,7 +20,7 @@ from ..derivatives.swaps import FixedLeg, FloatingLeg, Swap
 from ..market.index import Index, OvernightIndex
 from ..market.index_history import OvernightHistory
 from ..market.market import Market
-from ..rates import DAY_BASE, IndexCurve, Rate
+from ..rates import DAY_BASE, Rate
 from ._errors import InsufficientQuotesError
 from ._keys import CurveKey, _built, _curve_currency, _funding_key, _get_maturity
 
@@ -30,39 +30,39 @@ _FLAT_GUESS = 0.04
 
 
 @dataclass
-class _IndexFixed:
-    """Fixed part of an index curve being solved: its knots, forwards and spot rate.
+class _FixedSegments:
+    """Fixed part of a curve being solved: its knots, forwards and spot rate.
 
-    ``knots[0]`` is the effective date; ``forwards`` has one entry per segment
-    (none for a new overnight curve, whose first segment is the first unknown).
+    ``knots[0]`` is the first knot (the effective date of an index curve, the curve
+    date of a discount curve); ``forwards`` has one entry per segment (none for a new
+    curve, whose first segment is the first unknown).
     """
 
     knots: list[date]
     forwards: list[float]
     spot_rate: Rate | None = None
 
-    def knot_dfs(self, t: date, index: Index) -> list[tuple[date, float]]:
+    def knot_dfs(self, t: date) -> list[tuple[date, float]]:
         """``(knot, df)`` of the fixed knots after `t`."""
-        if len(self.knots) >= 2:
-            dfs = IndexCurve(
-                t, index, self.knots, self.forwards, self.spot_rate, precalculate=False
-            ).get_dfs(self.knots)
-            return [(k, float(df)) for k, df in zip(self.knots, dfs) if k > t]
-        eff = self.knots[0]
-        if eff <= t:
-            return []
-        df = (
-            1.0
-            if self.spot_rate is None
-            else float(self.spot_rate.get_discount_factor(t, eff))
-        )
-        return [(eff, df)]
+        first = self.knots[0]
+        if self.spot_rate is not None and first > t:
+            log_first = math.log(float(self.spot_rate.get_discount_factor(t, first)))
+        elif self.forwards:
+            log_first = -self.forwards[0] * (first - t).days / _DAY_BASE
+        else:
+            log_first = 0.0
+        tau = np.array([(k - t).days for k in self.knots], dtype=float) / _DAY_BASE
+        accrued = np.cumsum(np.array(self.forwards, dtype=float) * np.diff(tau))
+        log_dfs = log_first - np.concatenate(([0.0], accrued))
+        return [
+            (k, float(np.exp(log_df)))
+            for k, log_df in zip(self.knots, log_dfs)
+            if k > t
+        ]
 
-    def forwards_to(
-        self, t: date, index: Index, dates: list[date], dfs: list[float]
-    ) -> list[float]:
+    def forwards_to(self, t: date, dates: list[date], dfs: list[float]) -> list[float]:
         """Segment forwards, from the last fixed knot through `dates`, matching `dfs`."""
-        points = self.knot_dfs(t, index)
+        points = self.knot_dfs(t)
         prev_d, prev_log = self.knots[-1], math.log(points[-1][1]) if points else 0.0
         out = []
         for d, df in zip(dates, dfs):
@@ -318,7 +318,7 @@ class _Seeder:
         points.update({self.tau(d): z for d, z in implied[curve].items()})
         return sorted(points.items())
 
-    def index_anchor(self, index: Index) -> tuple[_IndexFixed, float]:
+    def index_anchor(self, index: Index) -> tuple[_FixedSegments, float]:
         """Fixed short end of a new index curve, and a flat rate to seed it with.
 
         * Overnight history: effective date the next business day, today's overnight
@@ -340,11 +340,11 @@ class _Seeder:
             try:
                 spot = history.spot_overnight_rate(self.t).copy()
             except KeyError:  # not enough fixings to imply today's rate
-                return _IndexFixed([self.t], []), _FLAT_GUESS
+                return _FixedSegments([self.t], []), _FLAT_GUESS
             effective = index.get_maturity(self.t)  # overnight: next business day.
             annual = spot.copy()
             annual.convert_rate_convention(RateConvention(), self.t, effective)
-            return _IndexFixed([effective], [], spot), annual.rate
+            return _FixedSegments([effective], [], spot), annual.rate
         if hasattr(history, "get_rate"):
             effective = index.calendar.add_business_days(
                 self.t, getattr(index, "spot_lag", 0)
@@ -352,9 +352,9 @@ class _Seeder:
             end = index.get_maturity(effective)
             wf = history.get_rate(self.t).get_wealth_factor(effective, end)  # type: ignore[union-attr]
             forward = math.log(wf) / ((end - effective).days / _DAY_BASE)
-            return _IndexFixed([effective, end], [forward]), forward
+            return _FixedSegments([effective, end], [forward]), forward
         if isinstance(index, OvernightIndex):
-            return _IndexFixed([self.t], []), _FLAT_GUESS
+            return _FixedSegments([self.t], []), _FLAT_GUESS
         raise InsufficientQuotesError(
             f"Index '{index.name}' has no rate history to anchor its short end."
         )

@@ -232,7 +232,7 @@ def test_quote_order_does_not_change_the_cycle_build(cycle):
     a, b = _build(cycle), _build(shuffled)
     assert set(a.curves) == set(b.curves)
     for key, curve in a.curves.items():
-        dates = list(getattr(curve, "pillar_dates", None) or curve.knot_dates)
+        dates = list(curve.knot_dates)
         assert curve.get_dfs(dates) == pytest.approx(
             b.curves[key].get_dfs(dates), rel=1e-9
         )

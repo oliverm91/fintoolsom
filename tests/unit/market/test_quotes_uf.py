@@ -6,6 +6,7 @@ from fintoolsom.market import Currency, Market, OvernightRateIndex, uf
 from fintoolsom.market.currencies import CurrencyPair
 from fintoolsom.market.quotes import ForwardPointsQuote, ForwardPriceQuote
 from fintoolsom.rates import DiscountCurve, IndexCurve
+from tests.factories.curve_factory import discount_curve_from_dfs
 
 
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
@@ -39,9 +40,14 @@ def _flat_curve(
 ) -> IndexCurve | DiscountCurve:
     """Flat continuous zero rate: the risk-free index curve, or `currency`'s discount curve."""
     if currency is None:
-        return IndexCurve(T, RISKLESS, [T, T + timedelta(days=1825)], [rate])
+        return IndexCurve(
+            T,
+            RISKLESS,
+            [T, T + timedelta(days=30), T + timedelta(days=1825)],
+            [rate, rate],
+        )
     pillars = [T + timedelta(days=d) for d in (1, 7, 30, 91, 365, 730, 1825)]
-    return DiscountCurve(
+    return discount_curve_from_dfs(
         T,
         currency,
         RISKLESS,

@@ -7,7 +7,6 @@ rebuilds its curves from it; :func:`_solve_unknowns` bootstraps them date by dat
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
@@ -29,9 +28,8 @@ _SWEEP_TOL = 1e-6
 # Interpolations where a pillar only moves the curve between its neighbours.
 _LOCAL_METHODS = frozenset(
     {
-        InterpolationMethod.LogLinear,
         InterpolationMethod.PiecewiseConstant,
-        InterpolationMethod.Linear,
+        InterpolationMethod.PiecewiseLinear,
     }
 )
 _MAX_SWEEPS = 4
@@ -89,10 +87,8 @@ class _GroupSolve:
     """Free-pillar layout of one curve-group solve.
 
     Holds the free dates of each curve, their slice of the unknown vector, the
-    fixed part, and an atomic apply / rollback over ``market.curves``. A currency's
-    discount curve is solved in ``log(df)`` at its new pillars (which removes the
-    collinearity between near-1 short dfs and small long dfs); an index curve in the
-    forward rate of each new segment.
+    fixed part, and an atomic apply / rollback over ``market.curves``. Every curve is
+    solved in the forward rate of each new segment.
 
     Parameters
     ----------
@@ -105,14 +101,13 @@ class _GroupSolve:
         its own method when extended, so its existing part still interpolates as
         when it was solved.
     fixed_pillars : dict
-        Curve key to its fixed part: ``(date, df)`` pillars (currency), or an
-        :class:`_IndexFixed` (index: knots, forwards and spot rate).
+        Curve key to its :class:`_FixedSegments` (knots, forwards and spot rate).
     free_dates : dict
         Curve key to free pillar dates.
     curve_slice : dict
         Curve key to its ``(start, end)`` slice of the unknown vector.
     y0 : list of float
-        Initial guesses: ``log(df)``, or segment forwards for an index curve.
+        Initial guesses: segment forwards.
     index_method : InterpolationMethod, optional
         Interpolation of new index curves; an existing one keeps its own.
     """
@@ -146,8 +141,7 @@ class _GroupSolve:
         market, t, method, fixed_pillars, free_dates, index_method
             As in the class.
         free_seeds : dict
-            Curve key to initial values of its free dates: dfs (currency) or
-            segment forwards (index).
+            Curve key to the initial segment forwards of its free dates.
 
         Returns
         -------
@@ -158,12 +152,7 @@ class _GroupSolve:
         start = 0
         for curve, dates in free_dates.items():
             curve_slice[curve] = (start, start + len(dates))
-            seeds = free_seeds[curve]
-            y0 += (
-                list(seeds)
-                if isinstance(curve, Index)
-                else [math.log(df) for df in seeds]
-            )
+            y0 += list(free_seeds[curve])
             start += len(dates)
         return cls(
             market, t, method, fixed_pillars, free_dates, curve_slice, y0, index_method
@@ -181,9 +170,9 @@ class _GroupSolve:
 
     @property
     def local(self) -> bool:
-        """Whether every curve solved interpolates locally (log-linear dfs,
-        piecewise-constant or linear forwards): an instrument then depends only on
-        pillars up to its own maturity."""
+        """Whether every curve solved interpolates locally (piecewise-constant or
+        linear forwards): an instrument then depends only on pillars up to its own
+        maturity."""
         return all(m in _LOCAL_METHODS for m in self.methods.values())
 
     @property
@@ -200,25 +189,25 @@ class _GroupSolve:
         precalculate = not self.local
         for curve, (s, e) in self.curve_slice.items():
             fixed = self.fixed_pillars[curve]
+            knots = [*fixed.knots, *self.free_dates[curve]]
+            forwards = [*fixed.forwards, *(float(v) for v in y[s:e])]
             if isinstance(curve, Index):
                 built = IndexCurve(
                     self.t,
                     curve,
-                    [*fixed.knots, *self.free_dates[curve]],
-                    [*fixed.forwards, *(float(v) for v in y[s:e])],
+                    knots,
+                    forwards,
                     fixed.spot_rate,
                     self.methods[curve],
                     precalculate=precalculate,
                 )
             else:
-                dates = [d for d, _ in fixed] + list(self.free_dates[curve])
-                dfs = [df for _, df in fixed] + [math.exp(v) for v in y[s:e]]
                 built = DiscountCurve(
                     self.t,
                     curve,
                     self.market.risk_free_index,
-                    dates,
-                    dfs,
+                    knots,
+                    forwards,
                     self.methods[curve],
                     precalculate=precalculate,
                 )
@@ -246,8 +235,7 @@ def _solve_unknowns(
 ) -> np.ndarray:
     """Bootstrap the free pillars date by date, falling back to one joint solve.
 
-    With local interpolation (log-linear dfs, piecewise-constant or linear forwards)
-    an instrument depends only on pillars up to its own last free pillar, so
+    With local interpolation (piecewise-constant or linear forwards) an instrument depends only on pillars up to its own last free pillar, so
     ascending dates give small square blocks, one per pillar date. The joint
     solve runs, warm-started from the sweep, when the interpolation is not local,
     a block is not square, or the sweep leaves a residual above ``_SWEEP_TOL``.

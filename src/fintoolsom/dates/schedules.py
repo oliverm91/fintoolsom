@@ -34,9 +34,9 @@ class Tenor:
         self._rel_mapper = {}
         if self.tenor_unit == "d":
 
-            def f(t: date, forward: bool = True) -> date:
+            def f(t: date, forward: bool = True, periods: int = 1) -> date:
                 return self.adj_conv.calendar.add_business_days(
-                    t, self.tenor_value * (1 if forward else -1)
+                    t, self.tenor_value * periods * (1 if forward else -1)
                 )
         elif self.tenor_unit == "m":
             self._rel_mapper["kwarg"] = "months"
@@ -57,13 +57,15 @@ class Tenor:
             forward_step = relativedelta(**{self._rel_mapper["kwarg"]: step})
             backward_step = relativedelta(**{self._rel_mapper["kwarg"]: -step})
 
-            def f(t: date, forward: bool = True) -> date:
-                return t + (forward_step if forward else backward_step)
+            def f(t: date, forward: bool = True, periods: int = 1) -> date:
+                return t + (forward_step if forward else backward_step) * periods
 
         self._get_umaturity_func = f  # TEST THAT F LIVES AFTER INIT
 
-    def get_unadjusted_maturity(self, t: date, forward: bool = True) -> date:
-        return self._get_umaturity_func(t, forward=forward)
+    def get_unadjusted_maturity(
+        self, t: date, forward: bool = True, periods: int = 1
+    ) -> date:
+        return self._get_umaturity_func(t, forward=forward, periods=periods)
 
     def get_adjusted_maturity(self, t: date, forward: bool = True) -> date:
         u_mat = self.get_unadjusted_maturity(t, forward=forward)
@@ -90,50 +92,54 @@ class ScheduleGenerator:
                 f"Frequency tenor accepted values are: {accepted_frequency_tenors}."
             )
         freq_tenor = Tenor(frequency_tenor, adj_conv)
-        if end_date is not None:
-            umat = end_date
-            adj_mat = end_date
-        else:
-            if maturity_adj_conv is None:
-                maturity_adj_conv = adj_conv
+        if maturity_adj_conv is None:
+            maturity_adj_conv = adj_conv
+        if end_date is None:
             tenor = Tenor(maturity_tenor, maturity_adj_conv)
             umat = tenor.get_unadjusted_maturity(start_date)
             adj_mat = maturity_adj_conv.adjust(umat)
-
-        if stub_first:
-            starting_date = umat
-            stop_date = start_date
-            relativedelta_sign = -1
         else:
-            starting_date = start_date
-            stop_date = umat
-            relativedelta_sign = 1
+            umat = end_date
+            adj_mat = end_date
+            if maturity_tenor:
+                # An end date that is just the tenor's maturity after adjustment still
+                # rolls from the unadjusted date; any other end date rolls from itself.
+                tenor = Tenor(maturity_tenor, maturity_adj_conv)
+                tenor_umat = tenor.get_unadjusted_maturity(start_date)
+                if maturity_adj_conv.adjust(tenor_umat) == end_date:
+                    umat = tenor_umat
 
-        u_schedule = [starting_date]
-
-        just_in_case_counter = 0
         max_iterations = 10 + int((umat - start_date).days / 30)
 
-        # This should make a list so that if stub_first is True then starting_date should end being <= stop_date (final to start). Else it stops being >= stop_date (start to final)
-        # Check for EOM adj. If start_date== march/31 and maturity tenor is 3M, maturity will be june/30. If freq is 3M or 1M, last added date back to front will be march/30. It should be adjusted.
-        # Backward (stub first) until reaching start_date; forward (stub last) until
-        # reaching umat. An exact hit leaves no stub.
-        def before_stop(d: date) -> bool:
-            return d > stop_date if relativedelta_sign == -1 else d < stop_date
+        def roll(anchor: date, stop: date, forward: bool) -> list[date]:
+            """`anchor` and ``anchor +/- k * frequency``, until reaching or passing `stop`.
 
-        while before_stop(starting_date):
-            starting_date = freq_tenor.get_unadjusted_maturity(
-                starting_date, forward=(1 == relativedelta_sign)
-            )
-            u_schedule.append(starting_date)
-            just_in_case_counter += 1
-            if just_in_case_counter > max_iterations:
-                raise Exception(
-                    f"Could not generate a schedule. Max iterations reached ({max_iterations}). start_date: {start_date}, maturity_tenor: {maturity_tenor}, frequency_tenor: {frequency_tenor}, stub_first: {stub_first}, long_stub: {long_stub}. Unadjusted Schedule list was. {u_schedule}"
+            Every date comes from `anchor`, so a short month cannot shift the later ones.
+            """
+            dates = [anchor]
+            periods = 0
+            while dates[-1] < stop if forward else dates[-1] > stop:
+                periods += 1
+                dates.append(
+                    freq_tenor.get_unadjusted_maturity(
+                        anchor, forward=forward, periods=periods
+                    )
                 )
+                if periods > max_iterations:
+                    raise Exception(
+                        f"Could not generate a schedule. Max iterations reached ({max_iterations}). start_date: {start_date}, maturity_tenor: {maturity_tenor}, frequency_tenor: {frequency_tenor}, stub_first: {stub_first}, long_stub: {long_stub}. Unadjusted Schedule list was. {dates}"
+                    )
+            return dates
 
-        u_schedule.sort()
-        if stop_date != starting_date:  # If is the same, no need for stub adjusting.
+        # A whole number of periods has no stub. Rolling from the start detects it even
+        # when `umat` was clamped to a shorter month (31 Aug + 18M = 29 Feb).
+        u_schedule = roll(start_date, umat, forward=True)
+        if stub_first and u_schedule[-1] != umat:
+            u_schedule = sorted(roll(umat, start_date, forward=False))
+
+        if (
+            u_schedule[0] != start_date or u_schedule[-1] != umat
+        ):  # An exact hit: no stub.
             if stub_first:
                 u_schedule = u_schedule[1:]  # removes date past starting_date
                 u_schedule.insert(0, start_date)
@@ -154,7 +160,13 @@ class ScheduleGenerator:
                             -2
                         )  # Removes penultimate date so tenor between u_schedule[-2] and u_schedule[-1] is long (long_stub)
 
-        adj_schedule = [u_date for u_date in u_schedule[:-1]]
+        # Adjust only now, so a holiday never moves the dates rolled from it. The start
+        # date is kept as given.
+        adj_schedule = u_schedule[:-1][:1]
+        for adj_date in map(adj_conv.adjust, u_schedule[1:-1]):
+            # Adjustment can land a date on its neighbour: keep one of them.
+            if adj_schedule[-1] < adj_date < adj_mat:
+                adj_schedule.append(adj_date)
         adj_schedule.append(adj_mat)
 
         return adj_schedule

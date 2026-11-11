@@ -8,7 +8,8 @@ import pytest
 from fintoolsom.market import Market
 from fintoolsom.market.currencies import Currency, CurrencyName
 from fintoolsom.market.index import OvernightRateIndex
-from fintoolsom.rates import DiscountCurve, IndexCurve, ZeroCouponCurve
+from fintoolsom.rates import IndexCurve, ZeroCouponCurve
+from tests.factories.curve_factory import discount_curve_from_dfs
 
 T = date(2024, 7, 8)
 CLP, USD = Currency(CurrencyName.CLP), Currency(CurrencyName.USD)
@@ -19,11 +20,11 @@ DATES = [T + timedelta(days=n) for n in (30, 365, 1800)]
 
 
 def _index_curve(index, rate):
-    return IndexCurve(T, index, [T, END], [rate])
+    return IndexCurve(T, index, [T, T + (END - T) / 2, END], [rate, rate])
 
 
 def _market() -> Market:
-    usd_icp = DiscountCurve(T, USD, ICP, [END], [math.exp(-0.03 * 10)])
+    usd_icp = discount_curve_from_dfs(T, USD, ICP, [END], [math.exp(-0.03 * 10)])
     return Market(
         T,
         risk_free_index=ICP,
@@ -88,7 +89,7 @@ def test_index_curve_lookup_and_missing_curves():
 def test_legacy_curves_are_rejected():
     with pytest.warns(DeprecationWarning, match="legacy"):
         zcc = ZeroCouponCurve(T, date_dfs=[(END, 0.6)])
-    with pytest.raises(TypeError, match="from_zero_coupon_curve"):
+    with pytest.raises(TypeError, match="IndexCurve / DiscountCurve"):
         _market().set_curve(zcc)
 
 

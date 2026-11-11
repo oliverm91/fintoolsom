@@ -48,7 +48,7 @@ def _market_with_sofr_discount() -> tuple[
     term3m = TermRateIndex("TERM3M", currency=USD, term=Term(3, TermUnit.M, adj))
 
     # Flat 5% (cont, act/365) SOFR curve.
-    sofr_curve = IndexCurve(T, sofr, [T, T + _days(1095)], [0.05])
+    sofr_curve = IndexCurve(T, sofr, [T, T + _days(365), T + _days(1095)], [0.05, 0.05])
 
     term_hist = TermRateHistory(
         term3m,

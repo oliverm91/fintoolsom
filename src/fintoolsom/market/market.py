@@ -106,7 +106,7 @@ class Market:
         if isinstance(curve, LegacyCurve):
             raise TypeError(
                 f"{type(curve).__name__} is a legacy curve and cannot be stored in a Market; "
-                "use IndexCurve / DiscountCurve (see their from_zero_coupon_curve)."
+                "use IndexCurve / DiscountCurve."
             )
         if not isinstance(curve, Curve):
             raise TypeError(

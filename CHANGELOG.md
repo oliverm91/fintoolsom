@@ -1,3 +1,27 @@
+## v1.0.0b8 (2026-11-10)
+
+### BREAKING CHANGE
+
+- **rates**: `DiscountCurve` is created from `knot_dates` and `forward_rates` instead of pillars and discount factors, and its first knot must be the curve date. `DiscountCurve.from_dfs`, `dfs`, `pillar_dates` and `pillars` are removed, and so is `from_zero_coupon_curve` on both `DiscountCurve` and `IndexCurve`.
+- **rates**: `forward_rates[i]` is the average forward over segment `i` for every interpolation method. An `IndexCurve` using the former `Linear` method read them as forwards at the knots, so the same inputs now give a different curve.
+- **rates**: `InterpolationMethod.Linear` is renamed `PiecewiseLinear`.
+- **rates**: `LogLinear` is accepted only by the legacy `ZeroCouponCurve`. `DiscountCurve` and `build_curves` default to `PiecewiseConstant`, which is the same curve shape.
+- **rates**: `IndexCurve` and `DiscountCurve` need at least 2 segments (3 knots). `get_aged_curve` raises `ValueError` on or after the second-to-last knot.
+- **curve_builder**: a build that would leave a curve with a single segment raises `InsufficientQuotesError`.
+
+### Feat
+
+- **rates**: `PillarCurve` is the new base of `IndexCurve` and `DiscountCurve`. Forward rates are the only parameters of a curve and discount factors are a result of them. Both curves accept every method except `LogLinear`, and share `get_aged_curve`.
+- **rates**: `InterpolationMethod.ConvexMonotone` gives continuous forwards, quadratic by pieces, where a knot moves only the segments next to it. It is the monotone convex method of Hagan & West (2006) with QuantLib's enhancements at quadraticity 0.3 and monotonicity 0.7. Discount factors match QuantLib 1.44 up to the last knot. QuantLib's `forcePositive` floor is not included, so forwards can go negative between knots.
+- **rates**: the first curve created with `PiecewiseLinear` in a process issues a `UserWarning` about its zig-zag, citing Hagan & West (2006).
+- **curve_builder**: the solver always solves forward rates, for index and discount curves alike.
+- **scripts**: restore `scripts/swap_valuation_from_quotes`, without `tweak_valuation.py`, and add `curve_methods.ipynb` to compare build error, build time, valuation error and ICP forwards across interpolation methods. USDCLP forwards are used up to 18 months and cross-currency basis swaps from 2 years, as explicit tenor limits.
+
+### Fix
+
+- **curve_builder**: every non-local interpolation method now gets the final joint solve. `HermiteCubicSpline` did not, and could raise `RepricingError` when a later pillar moved a quote already fitted. Builds with it take about three times as long on the sample quotes.
+- **dates**: schedule dates are rolled from one anchor date, so a short month no longer shifts the later ones, and holidays are adjusted only after rolling. A whole number of periods has no stub even when the maturity is clamped to a shorter month. An end date equal to the adjusted tenor maturity rolls from the unadjusted one. An inner date adjusted onto its neighbour or the maturity is dropped, so no zero-length coupon is created.
+
 ## v1.0.0b7 (2026-11-10)
 
 ### BREAKING CHANGE

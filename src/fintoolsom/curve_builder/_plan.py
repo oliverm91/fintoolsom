@@ -29,7 +29,7 @@ from ._keys import (
     _last_date,
     _primary_candidates,
 )
-from ._seeds import _FLAT_GUESS, _IndexFixed, _Seeder
+from ._seeds import _FLAT_GUESS, _FixedSegments, _Seeder
 
 Group = frozenset  # of curve keys: the curves the group's quotes read
 
@@ -252,8 +252,8 @@ class _Planner:
 
         Fixed: what is already solved, or a new curve's short-end anchor. Free: the
         new unknowns, past the fixed part. Seeds are read off the quotes in df space
-        (see :meth:`_Seeder.seed_free_pillars`); an index curve's are turned into
-        the forwards of its new segments.
+        (see :meth:`_Seeder.seed_free_pillars`), then turned into the forwards of
+        its new segments.
 
         Parameters
         ----------
@@ -268,13 +268,11 @@ class _Planner:
         Returns
         -------
         fixed_pillars : dict
-            Curve key to its fixed part: ``(date, df)`` pillars for a currency's
-            discount curve, an :class:`_IndexFixed` for an index curve.
+            Curve key to its :class:`_FixedSegments`.
         free_dates : dict
             Curve key to free pillar dates.
         free_seeds : dict
-            Curve key to initial values of the free pillars: dfs for a discount
-            curve, segment forwards for an index curve.
+            Curve key to the initial segment forwards of the free pillars.
         """
         fixed_pillars: dict = {}
         free_dates: dict[CurveKey, list[date]] = {}
@@ -289,36 +287,25 @@ class _Planner:
             if not maturities:
                 continue
             built = _built(self.market, curve)
-            if isinstance(curve, Index):
-                if built is None:
-                    fixed, flat_guess[curve] = self.seeder.index_anchor(curve)
-                else:
-                    fixed = _IndexFixed(
-                        list(built.knot_dates),
-                        [float(f) for f in built.forward_rates],
-                        built.spot_rate,
-                    )
-                fixed_pillars[curve] = fixed
-                if new_dates := sorted(m for m in maturities if m > fixed.knots[-1]):
-                    free_dates[curve] = new_dates
-            elif built is None:
-                fixed_pillars[curve], flat_guess[curve] = [], _FLAT_GUESS
-                free_dates[curve] = sorted(maturities)
-            else:  # extend an existing discount curve past its last pillar
-                fixed_pillars[curve] = built.pillars
-                if new_dates := sorted(m for m in maturities if m > built.last_date):
-                    free_dates[curve] = new_dates
-        points = {
-            c: f.knot_dfs(self.t, c) if isinstance(c, Index) else f
-            for c, f in fixed_pillars.items()
-        }
+            if built is not None:  # extend it past its last knot
+                fixed = _FixedSegments(
+                    list(built.knot_dates),
+                    [float(f) for f in built.forward_rates],
+                    built.spot_rate if isinstance(curve, Index) else None,
+                )
+            elif isinstance(curve, Index):
+                fixed, flat_guess[curve] = self.seeder.index_anchor(curve)
+            else:
+                fixed, flat_guess[curve] = _FixedSegments([self.t], []), _FLAT_GUESS
+            fixed_pillars[curve] = fixed
+            if new_dates := sorted(m for m in maturities if m > fixed.knots[-1]):
+                free_dates[curve] = new_dates
+        points = {c: f.knot_dfs(self.t) for c, f in fixed_pillars.items()}
         seed_dfs = self.seeder.seed_free_pillars(
             instruments, points, free_dates, flat_guess
         )
         free_seeds = {
-            c: fixed_pillars[c].forwards_to(self.t, c, dates, seed_dfs[c])
-            if isinstance(c, Index)
-            else seed_dfs[c]
+            c: fixed_pillars[c].forwards_to(self.t, dates, seed_dfs[c])
             for c, dates in free_dates.items()
         }
         return fixed_pillars, free_dates, free_seeds

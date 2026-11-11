@@ -3,7 +3,10 @@ from fintoolsom.derivatives.forwards.forwards import Forward, NDF
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
-from fintoolsom.rates import DiscountCurve, IndexCurve
+from tests.factories.curve_factory import (
+    index_curve_from_zero_coupon_curve,
+    discount_curve_from_zero_coupon_curve,
+)
 
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
@@ -19,10 +22,10 @@ def _market(curve_date, zero_coupon_curve, spot: float) -> Market:
         t=curve_date,
         risk_free_index=RISKLESS,
         curves=[
-            IndexCurve.from_zero_coupon_curve(
+            index_curve_from_zero_coupon_curve(
                 zero_coupon_curve, RISKLESS
             ),  # CLP: the riskless index's own curve
-            DiscountCurve.from_zero_coupon_curve(
+            discount_curve_from_zero_coupon_curve(
                 zero_coupon_curve, Currency.USD, RISKLESS
             ),  # USD: uncollateralised
         ],

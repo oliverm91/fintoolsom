@@ -12,7 +12,7 @@ build_curves(quotes, market, discount_interp_method=InterpolationMethod.HermiteC
 build_curves(
     quotes,
     market,
-    discount_interp_method=InterpolationMethod.LogLinear,
+    discount_interp_method=InterpolationMethod.PiecewiseConstant,
     index_interp_method=InterpolationMethod.PiecewiseConstant,
 )
 ```
@@ -23,11 +23,13 @@ build_curves(
   `IndexCurve` under its name, such as `"ICP"` or `"SOFR"`.
 - **Discount curves.** Every currency other than the risk-free index's gets a
   `DiscountCurve` under `"<ccy>_<risk-free index>"`, such as `"USD_ICP"`.
-- **Interpolation.** New curves use `discount_interp_method` (`LogLinear` by
-  default, `HermiteCubicSpline` or `CubicSpline`) and `index_interp_method`
-  (`PiecewiseConstant` forwards by default, `Linear` forwards or `CubicSpline`). A
+- **Interpolation.** New curves use `discount_interp_method` and
+  `index_interp_method`: `PiecewiseConstant` forwards by default, and any other
+  pillar-curve method for either. A
   curve already in the market keeps its own method when the build extends it past
   its last date.
+- **Minimum quotes.** A curve needs at least 2 pillars. A solve that would leave a
+  curve with one segment raises `InsufficientQuotesError`.
 
 ## What the market needs
 
@@ -89,7 +91,7 @@ quotes += [
 
 build_curves(
     quotes, market,
-    discount_interp_method=InterpolationMethod.LogLinear,
+    discount_interp_method=InterpolationMethod.PiecewiseConstant,
     index_interp_method=InterpolationMethod.PiecewiseConstant,
 )
 list(market.curves)  # ['ICP', 'SOFR', 'USD_ICP']
