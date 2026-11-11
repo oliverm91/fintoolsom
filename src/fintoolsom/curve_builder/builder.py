@@ -32,7 +32,7 @@ from ._errors import InsufficientQuotesError, RedundantQuoteWarning, RepricingEr
 from ._keys import CurveKey, _built, _curve_id, _instrument_of
 from ._plan import _Planner
 from ._seeds import _Seeder
-from ._solver import _GroupSolve, _solve_unknowns
+from ._solver import _LOCAL_METHODS, _GroupSolve, _solve_unknowns
 
 # Curve-solve residuals are valued in one reporting currency; a par/MTM==0 residual
 # is zero in any currency, so the choice is arbitrary — CLP by convention.
@@ -224,19 +224,16 @@ class _CurveBuilder:
         return "solved"
 
     def _solve_splines_jointly(self) -> None:
-        """Re-solve every pillar of this build at once if a curve is a cubic spline or
-        monotone convex.
+        """Re-solve every pillar of this build at once if a curve's method is not local.
 
         Groups are solved in sequence on the premise that a later pillar leaves what
-        was already fitted alone. A pillar of those methods moves the curve before it
-        too, so the quotes fitted earlier drift; the sequential result only warm-starts
-        this solve.
+        was already fitted alone. A pillar of a non-local method moves the curve before
+        it too, so the quotes fitted earlier drift; the sequential result only
+        warm-starts this solve.
         """
         built = {c: _built(self.market, c) for c in self._free_dates}
         if all(
-            curve.interpolation_method
-            not in (InterpolationMethod.CubicSpline, InterpolationMethod.ConvexMonotone)
-            for curve in built.values()
+            curve.interpolation_method in _LOCAL_METHODS for curve in built.values()
         ):
             return
         # New pillars are always appended, so each curve's are its last values.

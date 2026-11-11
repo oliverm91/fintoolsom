@@ -191,10 +191,11 @@ def test_joint_solve_runs_one_root_per_group(real, monkeypatch):
 def test_non_local_interpolation_skips_the_sweep_and_still_reprices(real, monkeypatch):
     sizes = _spy_block_sizes(monkeypatch)
     market = _build(real, discount_interp_method=InterpolationMethod.HermiteCubicSpline)
-    # A spline pillar moves the whole discount curve: the two USD groups solve jointly,
-    # while the index curves (piecewise-constant forwards) still sweep date by date.
+    # The two USD groups solve jointly, the index curves (piecewise-constant forwards)
+    # still sweep date by date, and a last solve takes every pillar of the build.
     big = [n for n in sizes if n > 2]
-    assert len(big) == 2 and len(sizes) > len(big)
+    assert len(big) == 3 and len(sizes) > len(big)
+    assert sizes[-1] == max(sizes) == big[-1] > sum(big[:2])
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
 
 
@@ -230,7 +231,12 @@ def test_a_cubic_spline_curve_still_reprices_every_quote_after_the_build(real, m
 
 
 @pytest.mark.parametrize(
-    "method", [InterpolationMethod.CubicSpline, InterpolationMethod.ConvexMonotone]
+    "method",
+    [
+        InterpolationMethod.CubicSpline,
+        InterpolationMethod.ConvexMonotone,
+        InterpolationMethod.HermiteCubicSpline,
+    ],
 )
 def test_non_local_methods_solve_every_pillar_jointly_at_the_end(
     real, monkeypatch, method
