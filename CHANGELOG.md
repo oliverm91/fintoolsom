@@ -1,3 +1,27 @@
+## v1.0.0b11 (2026-11-12)
+
+### BREAKING CHANGE
+
+- **market**: `VolatilitySurface` takes `(days, deltas, vols, foreign_curve, interpolation_method)` instead of `(vol_surface_df, spot, domestic_curve, foreign_curve)`. `days` are integer days to maturity, `deltas` are spot put deltas in percent (`25`, not `0.25`) or `"atm"`, and `vols` is a `(len(days), len(deltas))` matrix. The `vol_surface_df`, `vol_surface_np`, `spot` and curve attributes are removed: spot and the domestic rate cancel in the pillar log-moneyness, and no curve is kept.
+- **market**: `InterpolationMethod` and `InterpolationModel` are renamed `VolatilitySurfaceInterpolationMethod` and `VolatilitySurfaceInterpolationModel`. `DoubleCubicSpline` is replaced by `DoubleMonotoneCubic` (PCHIP), and the default method is `VannaVolga`.
+- **market**: the two-step methods interpolate total variance in time at constant delta, with flat vol outside the tenors, and recompute each strike from its delta at the queried tenor. Values between tenors change, and so do eSSVI values, which now use ACT/365 like the option pricer instead of days/360.
+- **swaps**: a deliverable `Swap` with a `CLF` leg raises `ValueError`, and so does a cross-currency quote with a `CLF` leg left deliverable (the default). The UF cannot be delivered: use `is_deliverable=False, payment_currency=Currency.CLP`.
+- **deps**: pandas is no longer a dependency.
+
+### Feat
+
+- **market**: `VolatilitySurfaceInterpolationMethod.VannaVolga` is the Castagna-Mercurio second-order smile around the ATM quote, with no calibration. It goes through every quote. With more than three, the segments next to ATM use the 25-delta pair and each outer segment uses its own two quotes and ATM. The smile is flat beyond the outer quotes. `vanna_volga_volatility` is public.
+- **market**: `VolatilitySurfaceInterpolationMethod.SVI` fits a raw SVI smile at each queried tenor, cached by days. Total variance is never negative and the wing slopes stay within Lee's moment bound. It needs five or more quotes and matches them exactly only when they are SVI-shaped, otherwise in the least-squares sense. `SVIParameters`, `svi_volatility`, `svi_total_variance` and `calibrate_svi` are public.
+- **market**: `VolatilitySurface` validates its grid (integer, positive and unique days; deltas in `[1, 100)` or `"atm"`; finite, positive vols) and sorts its rows on a copy. A put delta above the foreign discount factor raises `ValueError` instead of giving NaN.
+- **market**: `Market.get_future_fx_rate(t, currency_pair)` returns the FX fixing at `t`. It is the loaded rate up to `get_fx_known_until`, published UF levels included, and is projected on the funding curves after that. It raises `ValueError` unless `t` is after the market date. `Market.convert_value_currency` converts an amount at spot and `Market.convert_future_value_currency` at the fixing of a date, without building a `CurrencyPair`.
+- **forwards**: `Forward` and `NDF` take a keyword-only `collateral_index` (default `None`), which discounts their flows under that CSA as swaps do. The NDF's FX projection does not depend on the CSA, so forward points are unchanged.
+
+### Refactor
+
+- **derivatives**: `derivatives/calculator.py` is now the `derivatives.calculator` package (`_fx`, `_forwards`, `_options`, `_swap_pv`, `_swap_risk`). `Calculator` keeps every method as a staticmethod alias, so `from fintoolsom.derivatives.calculator import Calculator` keeps working. Patching a `Calculator` method no longer changes the internal calls of the other functions.
+- **derivatives**: NDFs, non-deliverable and UF swap legs and the curve builder project and convert FX through `Market`. `Calculator._convert`, `get_fx_fixings` and `_fx_fixings_at_ordinals` delegate to it, and valuations are unchanged.
+- **scripts**: the `swap_valuation_from_quotes` scripts, their SQLite snapshot and the curve methods notebook are removed.
+
 ## v1.0.0b10 (2026-11-11)
 
 ### Feat
