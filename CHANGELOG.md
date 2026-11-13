@@ -1,3 +1,20 @@
+## v1.0.0b13 (2026-11-13)
+
+### BREAKING CHANGE
+
+- **market**: `quote_date` is a required, keyword-only field of `InstrumentQuote`, inherited by every quote. Forward quotes no longer accept `quote_date=None`, and swap quotes (`IRSQuote`, `IRBasisQuote`, `CrossCurrencyFixedFloatQuote`, `CrossCurrencyFloatFloatQuote`) no longer take it as their third positional argument: `adj_convention` is now third. Pass `quote_date=...` by keyword.
+- **market**: `ForwardPriceQuote.to_outright` is removed: it ignored the spot and returned `value`. Only `ForwardPointsQuote.to_outright(spot)` remains.
+- **market**: `uf.last_published_date` no longer takes a `calendar` argument. The CPI release calendar is always the Chilean one.
+
+### Feat
+
+- **dates**: `last_known_uf_date(t)` returns the last date whose UF is published as of `t`: the 9th of the current month before this month's CPI release, the 9th of next month from the release day on. `next_cpi_publication_date(t)` returns the next CPI release, one Chilean business day before `last_known_uf_date(t)`. `uf.last_published_date` calls `last_known_uf_date`.
+- **market**: `UFForward(value, is_buy, next_n_cpi_settlements, quote_date=...)` quotes a UF forward as the outright UF level. It builds a `CLF/CLP` NDF that fixes and pays, with no payment lag, on `next_cpi_publication_date(quote_date + relativedelta(months=n))`, where `n` is from 1 to 24. It takes no `term`, `payment_date`, `fixing_date` or currency pair.
+
+### Fix
+
+- **curve_builder**: a group of quotes that reads a curve past its built end is solved after the ready group that extends that curve there. Before, UF forwards past the last uncollateralised ICP pillar were fitted on the extrapolated ICP curve, and the SOFR-collateralised CLP swaps solved after them moved them, so `build_curves` raised `RepricingError`.
+
 ## v1.0.0b12 (2026-11-13)
 
 ### BREAKING CHANGE
