@@ -35,6 +35,7 @@ from .quotes import (
     InstrumentQuote,
     ForwardPriceQuote,
     ForwardPointsQuote,
+    UFForward,
     QuotedSide,
     IRSQuote,
     IRBasisQuote,

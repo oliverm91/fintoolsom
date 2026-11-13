@@ -73,7 +73,7 @@ def _market() -> Market:
 def test_uf_forward_quotes_build_ndfs_when_a_fixing_date_is_given():
     pmt = date(2025, 1, 10)
     price = ForwardPriceQuote(
-        CLFCLP, 38_150.25, True, payment_date=pmt, fixing_date=pmt
+        CLFCLP, 38_150.25, True, quote_date=T, payment_date=pmt, fixing_date=pmt
     ).get_instrument()
     assert (
         isinstance(price, NDF)
@@ -98,7 +98,7 @@ def test_uf_forward_quotes_build_ndfs_when_a_fixing_date_is_given():
 def test_non_ndf_forward_quote_with_clf_is_rejected(pair):
     pmt = date(2025, 1, 10)
     with pytest.raises(ValueError, match="cannot be delivered.*NDF"):
-        ForwardPriceQuote(pair, 38_150.25, True, payment_date=pmt)
+        ForwardPriceQuote(pair, 38_150.25, True, quote_date=T, payment_date=pmt)
     with pytest.raises(ValueError, match="cannot be delivered.*NDF"):
         ForwardPointsQuote(
             currency_pair=pair, value=1.0, is_buy=True, payment_date=pmt, quote_date=T

@@ -283,19 +283,23 @@ def test_forward_price_quote_from_a_term_fixes_after_spot_and_pays_a_day_later()
     assert isinstance(ndf, NDF)
     assert ndf.fixing_date == term.advance(spot)
     assert ndf.payment_date == ADJ_CLP.calendar.add_business_days(ndf.fixing_date, 1)
-    assert quote.to_outright(FX_Rate(USDCLP, 900.0)) == 950.0
 
 
 def test_forward_price_quote_with_a_payment_date_is_deliverable():
     fwd = ForwardPriceQuote(
-        USDCLP, 950.0, False, payment_date=date(2024, 10, 8)
+        USDCLP, 950.0, False, quote_date=VAL_DATE, payment_date=date(2024, 10, 8)
     ).get_instrument()
     assert type(fwd) is Forward and fwd.strike == 950.0 and not fwd.is_buy
 
 
 def test_forward_quote_without_dates_cannot_build():
     with pytest.raises(ValueError, match="payment_date"):
-        ForwardPriceQuote(USDCLP, 950.0, True).get_instrument()
+        ForwardPriceQuote(USDCLP, 950.0, True, quote_date=VAL_DATE).get_instrument()
+
+
+def test_every_quote_needs_a_quote_date():
+    with pytest.raises(TypeError, match="quote_date"):
+        ForwardPriceQuote(USDCLP, 950.0, True, payment_date=date(2024, 10, 8))
 
 
 def test_forward_points_add_to_the_spot_in_either_quotation():
@@ -305,6 +309,7 @@ def test_forward_points_add_to_the_spot_in_either_quotation():
         is_buy=True,
         points_divisor=100,
         payment_date=date(2024, 10, 8),
+        quote_date=VAL_DATE,
     )
     assert quote.to_outright(FX_Rate(USDCLP, 900.0)) == pytest.approx(902.5)
     assert quote.to_outright(
@@ -318,7 +323,11 @@ def test_forward_points_add_to_the_spot_in_either_quotation():
 def test_forward_points_divisor_must_be_positive():
     with pytest.raises(ValueError):
         ForwardPointsQuote(
-            currency_pair=USDCLP, value=1.0, is_buy=True, points_divisor=0
+            currency_pair=USDCLP,
+            value=1.0,
+            is_buy=True,
+            points_divisor=0,
+            quote_date=VAL_DATE,
         )
 
 

@@ -6,6 +6,7 @@ from datetime import date
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from dateutil.relativedelta import relativedelta
 
 from .conventions import FixedLegSpec, FloatingLegSpec
 from .currencies import Currency, CurrencyPair, FX_Rate
@@ -15,6 +16,7 @@ from ..dates import (
     AdjustmentDateConventionBase,
     ModifiedFollowingConvention,
     get_calendar,
+    next_cpi_publication_date,
 )
 from ..dates.term import Term
 
@@ -26,8 +28,18 @@ if TYPE_CHECKING:
 # ── Private: ABC and module constants ──────────────────────────────────────
 
 
+@dataclass
 class InstrumentQuote(ABC):
-    """Market quote of an instrument; every concrete quote builds its instrument."""
+    """Market quote of an instrument; every concrete quote builds its instrument.
+
+    Parameters
+    ----------
+    quote_date : date
+        Date the quote is observed on (keyword-only).
+    """
+
+    _: KW_ONLY
+    quote_date: date
 
     __hash__ = object.__hash__
 
@@ -96,7 +108,6 @@ class _ForwardQuote(InstrumentQuote):
         default=None
     )  # set → NDF, None → deliverable Forward
     term: Term | None = field(default=None)
-    quote_date: date | None = field(default=None)
     spot_lag: int = field(default=2)
     payment_lag: int = field(default=1)
 
@@ -107,29 +118,14 @@ class _ForwardQuote(InstrumentQuote):
         ):
             raise ValueError(
                 f"{pair} holds a currency that cannot be delivered (CLF), so its "
-                f"forward quote must be an NDF: provide fixing_date, or term and "
-                f"quote_date."
+                f"forward quote must be an NDF: provide fixing_date or term."
             )
-
-    @abstractmethod
-    def to_outright(self, spot: FX_Rate) -> float:
-        """Outright forward price implied by the quote.
-
-        Parameters
-        ----------
-        spot : FX_Rate
-            Spot of the pair (or its inverse).
-
-        Returns
-        -------
-        float
-        """
 
     def _effective_fixing_date(self) -> date | None:
         """Explicit fixing date, else spot date + `term`; None for a deliverable forward."""
         if self.fixing_date is not None:
             return self.fixing_date
-        if self.term is not None and self.quote_date is not None:
+        if self.term is not None:
             cal = self.term.adj_convention.calendar
             spot_date = cal.add_business_days(self.quote_date, self.spot_lag)
             return self.term.advance(spot_date)
@@ -150,7 +146,7 @@ class _ForwardQuote(InstrumentQuote):
             cal = self.term.adj_convention.calendar if self.term else get_calendar()
             return cal.add_business_days(fixing, self.payment_lag)
         raise ValueError(
-            "Cannot derive payment_date: provide payment_date, or term+quote_date."
+            "Cannot derive payment_date: provide payment_date, fixing_date or term."
         )
 
     def _build(self, strike: float) -> Forward | NDF:
@@ -201,7 +197,7 @@ class _SwapQuote(InstrumentQuote):
     term : Term
         Swap tenor.
     quote_date : date
-        Quote date; the start is `spot_lag` business days later.
+        Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
         Schedule adjustment; defaults to modified following, weekend calendar.
     locality : Locality, optional
@@ -220,7 +216,6 @@ class _SwapQuote(InstrumentQuote):
 
     quoted_side: QuotedSide
     term: Term
-    quote_date: date
     adj_convention: AdjustmentDateConventionBase = field(
         default_factory=ModifiedFollowingConvention
     )
@@ -295,16 +290,13 @@ class ForwardPriceQuote(_ForwardQuote):
         Market locality (keyword-only).
     term : Term, optional
         Tenor from the spot date (keyword-only).
-    quote_date : date, optional
+    quote_date : date
         Quote date (keyword-only).
     spot_lag : int, default 2
         Business days from `quote_date` to spot (keyword-only).
     payment_lag : int, default 1
         Business days from fixing to payment (keyword-only).
     """
-
-    def to_outright(self, spot: FX_Rate) -> float:
-        return self.value
 
     def get_instrument(self) -> Forward | NDF:
         return self._build(self.value)
@@ -339,6 +331,22 @@ class ForwardPointsQuote(_ForwardQuote):
             )
 
     def to_outright(self, spot: FX_Rate) -> float:
+        """Outright forward price: spot plus the points over `points_divisor`.
+
+        Parameters
+        ----------
+        spot : FX_Rate
+            Spot of the pair (or its inverse).
+
+        Returns
+        -------
+        float
+
+        Raises
+        ------
+        ValueError
+            If `spot` is on another pair.
+        """
         if spot.currency_pair == self.currency_pair:
             effective_spot = spot.value
         elif spot.currency_pair == self.currency_pair.invert():
@@ -363,6 +371,69 @@ class ForwardPointsQuote(_ForwardQuote):
 
 
 @dataclass
+class UFForward(InstrumentQuote):
+    """UF forward: a ``CLF/CLP`` NDF quoted as the outright UF level.
+
+    It settles on a CPI release, not on a tenor: the fixing and payment date
+    (payment lag 0) is
+    ``next_cpi_publication_date(quote_date + relativedelta(months=n))``, with
+    ``n = next_n_cpi_settlements``. ``n = 1`` is the first release whose UF is not
+    yet known on `quote_date`.
+
+    Parameters
+    ----------
+    value : float
+        Outright UF level (CLP per UF).
+    is_buy : bool
+        True to buy UF.
+    next_n_cpi_settlements : int
+        CPI release the forward settles on, from 1 to 24.
+    quote_date : date
+        Quote date (keyword-only).
+
+    Raises
+    ------
+    ValueError
+        If `next_n_cpi_settlements` is not an int from 1 to 24.
+    """
+
+    value: float
+    is_buy: bool
+    next_n_cpi_settlements: int
+
+    currency_pair: CurrencyPair = field(
+        init=False, default_factory=lambda: CurrencyPair(Currency.CLF, Currency.CLP)
+    )
+
+    def __post_init__(self):
+        n = self.next_n_cpi_settlements
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 24:
+            raise ValueError(
+                f"next_n_cpi_settlements must be an int from 1 to 24; got {n!r}."
+            )
+
+    @property
+    def settlement_date(self) -> date:
+        """Fixing and payment date: the CPI release after ``quote_date + n`` months."""
+        return next_cpi_publication_date(
+            self.quote_date + relativedelta(months=self.next_n_cpi_settlements)
+        )
+
+    def get_instrument(self) -> NDF:
+        from ..derivatives.forwards.forwards import NDF
+
+        settlement = self.settlement_date
+        return NDF(
+            notional=_NOTIONAL,
+            strike=self.value,
+            payment_date=settlement,
+            is_buy=self.is_buy,
+            currency_pair=self.currency_pair,
+            fixing_date=settlement,
+        )
+
+
+@dataclass
 class IRSQuote(_SwapQuote):
     """IRS or OIS quote: fixed vs floating leg in one currency.
 
@@ -373,7 +444,7 @@ class IRSQuote(_SwapQuote):
     term : Term
         Swap tenor.
     quote_date : date
-        Quote date; the start is `spot_lag` business days later.
+        Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
         Schedule adjustment; defaults to modified following, weekend calendar.
     locality : Locality, optional
@@ -468,7 +539,7 @@ class IRBasisQuote(_SwapQuote):
     term : Term
         Swap tenor.
     quote_date : date
-        Quote date; the start is `spot_lag` business days later.
+        Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
         Schedule adjustment; defaults to modified following, weekend calendar.
     locality : Locality, optional
@@ -544,7 +615,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
     term : Term
         Swap tenor.
     quote_date : date
-        Quote date; the start is `spot_lag` business days later.
+        Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
         Schedule adjustment; defaults to modified following, weekend calendar.
     locality : Locality, optional
@@ -678,7 +749,7 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
     term : Term
         Swap tenor.
     quote_date : date
-        Quote date; the start is `spot_lag` business days later.
+        Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
         Schedule adjustment; defaults to modified following, weekend calendar.
     locality : Locality, optional

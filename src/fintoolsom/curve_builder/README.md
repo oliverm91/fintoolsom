@@ -75,7 +75,7 @@ market.add_fx_rate(t, FX_Rate(usdclp, 945.0))
 def ois(years, level, currency, adj, index, frequency, collateral):
     specs = (currency, frequency, adj, TF_Actual360())
     return IRSQuote(
-        QuotedSide.RECEIVE, Term(years, TermUnit.Y, adj), t, adj, collateral_index=collateral,
+        QuotedSide.RECEIVE, Term(years, TermUnit.Y, adj), adj, quote_date=t, collateral_index=collateral,
         fixed_leg=FixedLegSpec(*specs, Rate(convention, level)),
         floating_leg=FloatingLegSpec(*specs, index, Rate(convention, 0.0)),
     )
