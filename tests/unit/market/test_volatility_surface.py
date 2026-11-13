@@ -1,11 +1,13 @@
-"""VolatilitySurface: two-step interpolation, SABR smile and conventions shared
-with the option pricer (Calculator / derivatives.calculator._options)."""
+"""VolatilitySurface: two-step interpolation, vanna-volga and SVI smiles, and the
+conventions shared with the option pricer (Calculator /
+derivatives.calculator._options)."""
 
 from datetime import timedelta
 
 import numpy as np
 import pytest
-from scipy.special import ndtri
+from scipy.optimize import brentq
+from scipy.special import ndtr, ndtri
 
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.derivatives.options.options import Put
@@ -15,13 +17,17 @@ from fintoolsom.market.volatility_surface import (
     DAYS_IN_YEAR,
     DoubleInterpolationLinear,
     DoubleInterpolationMonotoneCubic,
-    DoubleInterpolationSABR,
-    SABRParameters,
+    DoubleInterpolationSVI,
+    DoubleInterpolationVannaVolga,
+    SVIParameters,
     VolatilitySurface,
     VolatilitySurfaceInterpolationMethod as Method,
-    calibrate_sabr,
+    _vanna_volga_anchors,
+    calibrate_svi,
     eSSVI,
-    sabr_volatility,
+    svi_total_variance,
+    svi_volatility,
+    vanna_volga_volatility,
 )
 from tests.factories.curve_factory import flat_zero_coupon_curve
 
@@ -40,8 +46,13 @@ VOLS = np.array(
 THREE_DELTAS = [25, "atm", 75]
 THREE_VOLS = VOLS[:, [1, 2, 3]]
 
-TWO_STEP = [Method.DoubleLinear, Method.DoubleMonotoneCubic, Method.SABR]
-LOCAL_SMILES = [Method.DoubleLinear, Method.DoubleMonotoneCubic]
+TWO_STEP = [
+    Method.DoubleLinear,
+    Method.DoubleMonotoneCubic,
+    Method.VannaVolga,
+    Method.SVI,
+]
+INTERPOLATING = [Method.DoubleLinear, Method.DoubleMonotoneCubic, Method.VannaVolga]
 
 
 @pytest.fixture
@@ -54,7 +65,7 @@ def domestic(curve_date):
     return flat_zero_coupon_curve(curve_date, R)
 
 
-def _surface(foreign, method=Method.SABR, deltas=DELTAS, vols=VOLS, days=DAYS):
+def _surface(foreign, method=Method.VannaVolga, deltas=DELTAS, vols=VOLS, days=DAYS):
     return VolatilitySurface(days, deltas, vols, foreign, method)
 
 
@@ -65,10 +76,10 @@ def _closed_form_k(delta_pct, vol, t, df_q):
 # --- method selection ----------------------------------------------------
 
 
-def test_sabr_is_the_default_method(foreign):
+def test_vanna_volga_is_the_default_method(foreign):
     surface = VolatilitySurface(DAYS, DELTAS, VOLS, foreign)
-    assert surface.interpolation_method is Method.SABR
-    assert isinstance(surface._interpolation_model, DoubleInterpolationSABR)
+    assert surface.interpolation_method is Method.VannaVolga
+    assert isinstance(surface._interpolation_model, DoubleInterpolationVannaVolga)
 
 
 @pytest.mark.parametrize(
@@ -76,7 +87,8 @@ def test_sabr_is_the_default_method(foreign):
     [
         (Method.DoubleLinear, DoubleInterpolationLinear),
         (Method.DoubleMonotoneCubic, DoubleInterpolationMonotoneCubic),
-        (Method.SABR, DoubleInterpolationSABR),
+        (Method.VannaVolga, DoubleInterpolationVannaVolga),
+        (Method.SVI, DoubleInterpolationSVI),
     ],
 )
 def test_each_method_builds_its_model(foreign, method, model):
@@ -86,10 +98,11 @@ def test_each_method_builds_its_model(foreign, method, model):
 @pytest.mark.parametrize(
     "method, deltas, vols",
     [
-        (Method.SABR, [25, 75], VOLS[:, [1, 3]]),
+        (Method.VannaVolga, [25, 75], VOLS[:, [1, 3]]),
+        (Method.SVI, [10, 25, 75, 90], VOLS[:, [0, 1, 3, 4]]),
         (Method.DoubleMonotoneCubic, [25], VOLS[:, [1]]),
     ],
-    ids=["sabr-two-columns", "monotone-cubic-one-column"],
+    ids=["vanna-volga-two-columns", "svi-four-columns", "monotone-cubic-one-column"],
 )
 def test_too_few_delta_columns_are_rejected(foreign, method, deltas, vols):
     with pytest.raises(ValueError, match="at least"):
@@ -168,16 +181,21 @@ def test_foreign_log_df_is_exact_for_a_flat_rate(foreign, t):
 # --- step 3: smiles --------------------------------------------------------
 
 
-@pytest.mark.parametrize("method", LOCAL_SMILES)
-def test_local_smiles_reproduce_every_quote(foreign, method):
-    surface = _surface(foreign, method)
+@pytest.mark.parametrize("deltas, vols", [(DELTAS, VOLS), (THREE_DELTAS, THREE_VOLS)])
+@pytest.mark.parametrize("method", INTERPOLATING)
+def test_interpolating_smiles_reproduce_every_quote(foreign, method, deltas, vols):
+    surface = _surface(foreign, method, deltas, vols)
     for i, days in enumerate(DAYS):
-        vols = surface.get_volatility(surface.log_moneyness[i], days)
-        np.testing.assert_allclose(vols, VOLS[i], rtol=0, atol=1e-14)
+        got = surface.get_volatility(surface.log_moneyness[i], days)
+        np.testing.assert_allclose(got, vols[i], rtol=0, atol=1e-14)
+    k_nodes, vol_nodes = surface._interpolation_model.get_smile_nodes(200)
+    np.testing.assert_allclose(
+        surface.get_volatility(k_nodes, 200), vol_nodes, rtol=0, atol=1e-14
+    )
 
 
-@pytest.mark.parametrize("method", LOCAL_SMILES)
-def test_local_smiles_are_flat_beyond_the_outer_nodes(foreign, method):
+@pytest.mark.parametrize("method", INTERPOLATING)
+def test_interpolating_smiles_are_flat_beyond_the_outer_nodes(foreign, method):
     surface = _surface(foreign, method)
     k_nodes, vol_nodes = surface._interpolation_model.get_smile_nodes(120)
     assert surface.get_volatility(k_nodes[0] - 1.0, 120) == vol_nodes[0]
@@ -199,79 +217,212 @@ def test_monotone_cubic_does_not_overshoot_between_nodes(foreign):
     [
         (Method.DoubleLinear, 1e-15),
         (Method.DoubleMonotoneCubic, 1e-15),
-        (Method.SABR, 1e-6),
+        (Method.VannaVolga, 1e-15),
+        (Method.SVI, 1e-8),
     ],
 )
 def test_flat_quotes_give_a_flat_surface(foreign, method, atol):
-    # A flat smile is degenerate for SABR (vol depends on nu^2 near nu = 0), so the
-    # fit stops at a tiny nu: ~1e-9 at the nodes, up to ~2e-7 far in a 10-day wing.
+    # SVI reaches a flat smile at its slope bound b = 0, to ~1e-9.
     surface = _surface(foreign, method, vols=np.full((3, 5), 0.15))
     for days in (10, 60, 365, 900):
         vols = surface.get_volatility(np.linspace(-0.3, 0.3, 7), days)
         np.testing.assert_allclose(vols, 0.15, rtol=0, atol=atol)
 
 
-# --- SABR -------------------------------------------------------------------
-
-
-def test_sabr_smile_reproduces_three_quotes_at_every_tenor(foreign):
-    surface = _surface(foreign, Method.SABR, THREE_DELTAS, THREE_VOLS)
-    for i, days in enumerate(DAYS):
-        vols = surface.get_volatility(surface.log_moneyness[i], days)
-        np.testing.assert_allclose(vols, THREE_VOLS[i], rtol=0, atol=1e-10)
-    k_nodes, vol_nodes = surface._interpolation_model.get_smile_nodes(200)
-    vols = surface.get_volatility(k_nodes, 200)
-    np.testing.assert_allclose(vols, vol_nodes, rtol=0, atol=1e-10)
-
-
-def _sabr_quotes(params, t, df_q, deltas=(10, 25, 75, 90)):
-    """Vols that a SABR smile gives at the strikes of `deltas` (fixed point)."""
-    vols = np.full(len(deltas), params.alpha)
-    for _ in range(200):
-        k = np.array([_closed_form_k(d, v, t, df_q) for d, v in zip(deltas, vols)])
-        vols = sabr_volatility(k, t, params)
-    k = np.array([_closed_form_k(d, v, t, df_q) for d, v in zip(deltas, vols)])
-    return np.concatenate((k, [0.0])), np.concatenate(
-        (vols, [sabr_volatility(0.0, t, params)])
-    )
-
-
-def test_calibrate_sabr_recovers_the_parameters_of_a_sabr_smile():
-    truth = SABRParameters(alpha=0.12, rho=0.3, nu=0.8)
-    t = 0.5
-    k, vols = _sabr_quotes(truth, t, np.exp(-Q * t))
-    order = np.argsort(k)
-    fitted = calibrate_sabr(k[order], vols[order], t)
-    assert fitted.alpha == pytest.approx(truth.alpha, abs=1e-8)
-    assert fitted.rho == pytest.approx(truth.rho, abs=1e-6)
-    assert fitted.nu == pytest.approx(truth.nu, abs=1e-6)
-
-
-def test_sabr_positive_rho_lifts_the_high_strike_side():
-    params = SABRParameters(alpha=0.12, rho=0.4, nu=0.6)
-    assert sabr_volatility(0.1, 0.5, params) > sabr_volatility(-0.1, 0.5, params)
-
-
-def test_sabr_volatility_is_continuous_at_the_money():
-    params = SABRParameters(alpha=0.12, rho=0.3, nu=0.8)
-    at_k0 = sabr_volatility(0.0, 0.5, params)
-    expected = 0.12 * (1 + (0.3 * 0.8 * 0.12 / 4 + (2 - 3 * 0.09) * 0.64 / 24) * 0.5)
-    assert at_k0 == pytest.approx(expected, abs=1e-15)
-    assert sabr_volatility(1e-9, 0.5, params) == pytest.approx(at_k0, abs=1e-9)
-    assert sabr_volatility(-1e-9, 0.5, params) == pytest.approx(at_k0, abs=1e-9)
-
-
-def test_sabr_parameters_are_exposed_per_tenor(foreign):
-    model = _surface(foreign, Method.SABR)._interpolation_model
-    params = model.get_sabr_parameters(90)
-    assert params.alpha > 0 and -1 < params.rho < 1 and params.nu > 0
-
-
-def test_sabr_smiles_are_cached_by_days(foreign):
-    surface = _surface(foreign, Method.SABR)
+@pytest.mark.parametrize("method", TWO_STEP)
+def test_smiles_are_cached_by_days(foreign, method):
+    surface = _surface(foreign, method)
     surface.get_volatility(0.0, 120)
     surface.get_volatility(0.05, 120)
     assert list(surface._interpolation_model._smiles) == [120]
+
+
+# --- vanna-volga ----------------------------------------------------------------
+
+ANCHOR_K = np.array([-0.06, 0.0, 0.055])
+ANCHOR_VOLS = np.array([0.130, 0.120, 0.125])
+
+
+def _black_call(k, vol, t):
+    """Undiscounted Black call on a unit forward, at log-moneyness k."""
+    std = vol * np.sqrt(t)
+    d1 = (-k + std**2 / 2) / std
+    return ndtr(d1) - np.exp(k) * ndtr(d1 - std)
+
+
+def _black_vega(k, vol, t):
+    std = vol * np.sqrt(t)
+    d1 = (-k + std**2 / 2) / std
+    return np.sqrt(t) * np.exp(-(d1**2) / 2) / np.sqrt(2 * np.pi)
+
+
+def _vanna_volga_price_vol(k, t, ka, va):
+    """Implied vol of the vanna-volga price (Castagna and Mercurio, 2007): Black at
+    the ATM vol plus each anchor's smile premium, weighted by vega(K) / vega(K_i)
+    times the log-strike Lagrange weight y_i(K)."""
+    k1, k2, k3 = ka
+    y = (
+        (k2 - k) * (k3 - k) / ((k2 - k1) * (k3 - k1)),
+        (k - k1) * (k3 - k) / ((k2 - k1) * (k3 - k2)),
+        (k - k1) * (k - k2) / ((k3 - k1) * (k3 - k2)),
+    )
+    atm = va[1]
+    price = _black_call(k, atm, t) + sum(
+        _black_vega(k, atm, t)
+        / _black_vega(k_i, atm, t)
+        * y_i
+        * (_black_call(k_i, v_i, t) - _black_call(k_i, atm, t))
+        for y_i, k_i, v_i in zip(y, ka, va)
+    )
+    return brentq(lambda vol: _black_call(k, vol, t) - price, 1e-4, 3.0, xtol=1e-15)
+
+
+def test_vanna_volga_formula_matches_the_vanna_volga_price():
+    # The closed form is the second-order expansion of the price's implied vol:
+    # exact at the anchors, within ~5e-5 between and just beyond them.
+    t = 0.25
+    k = np.linspace(-0.08, 0.08, 17)
+    expected = [_vanna_volga_price_vol(x, t, ANCHOR_K, ANCHOR_VOLS) for x in k]
+    got = vanna_volga_volatility(k, t, ANCHOR_K, ANCHOR_VOLS)
+    np.testing.assert_allclose(got, expected, rtol=0, atol=1e-4)
+    at_anchors = vanna_volga_volatility(ANCHOR_K, t, ANCHOR_K, ANCHOR_VOLS)
+    np.testing.assert_allclose(at_anchors, ANCHOR_VOLS, rtol=0, atol=1e-15)
+
+
+def test_vanna_volga_does_not_depend_on_the_anchor_order():
+    k = np.linspace(-0.1, 0.1, 9)
+    base = vanna_volga_volatility(k, 0.25, ANCHOR_K, ANCHOR_VOLS, pivot=1)
+    order = [2, 0, 1]  # the ATM anchor moves to position 2
+    permuted = vanna_volga_volatility(
+        k, 0.25, ANCHOR_K[order], ANCHOR_VOLS[order], pivot=2
+    )
+    np.testing.assert_allclose(permuted, base, rtol=0, atol=1e-15)
+
+
+def test_vanna_volga_is_continuous_where_d1_d2_vanishes():
+    t = 0.25
+    k0 = 0.12**2 * t / 2  # d1 = 0 at the ATM vol
+    at_k0 = vanna_volga_volatility(k0, t, ANCHOR_K, ANCHOR_VOLS)
+    for dk in (-1e-9, 1e-9):
+        near = vanna_volga_volatility(k0 + dk, t, ANCHOR_K, ANCHOR_VOLS)
+        assert near == pytest.approx(at_k0, abs=1e-10)
+
+
+@pytest.mark.parametrize(
+    "pivot, n_nodes, expected",
+    [
+        (2, 5, [[0, 1, 2], [1, 2, 3], [1, 2, 3], [2, 3, 4]]),
+        (1, 3, [[0, 1, 2], [0, 1, 2]]),
+        (0, 3, [[0, 1, 2], [0, 1, 2]]),
+        (0, 4, [[0, 1, 2], [0, 1, 2], [0, 2, 3]]),
+        (3, 4, [[0, 1, 3], [1, 2, 3], [1, 2, 3]]),
+    ],
+)
+def test_vanna_volga_anchors_always_include_the_pivot(pivot, n_nodes, expected):
+    anchors = [_vanna_volga_anchors(j, pivot, n_nodes) for j in range(n_nodes - 1)]
+    assert anchors == expected
+
+
+def test_vanna_volga_inner_smile_uses_the_25_delta_pair_only(foreign):
+    five = _surface(foreign, Method.VannaVolga)
+    three = _surface(foreign, Method.VannaVolga, THREE_DELTAS, THREE_VOLS)
+    k_nodes, _ = five._interpolation_model.get_smile_nodes(120)
+    k = np.linspace(k_nodes[1], k_nodes[3], 25)
+    np.testing.assert_allclose(
+        five.get_volatility(k, 120), three.get_volatility(k, 120), rtol=0, atol=1e-15
+    )
+
+
+def test_vanna_volga_five_quote_smile_is_continuous_at_the_nodes(foreign):
+    surface = _surface(foreign, Method.VannaVolga)
+    k_nodes, vol_nodes = surface._interpolation_model.get_smile_nodes(90)
+    for k, vol in zip(k_nodes[1:-1], vol_nodes[1:-1]):
+        sides = surface.get_volatility(np.array([k - 1e-10, k + 1e-10]), 90)
+        np.testing.assert_allclose(sides, vol, rtol=0, atol=1e-9)
+
+
+# --- SVI -----------------------------------------------------------------------
+
+SVI_TRUTH = SVIParameters(a=0.002, b=0.04, rho=-0.3, m=0.01, sigma=0.08)
+
+
+def _svi_truth(t):
+    """An SVI smile with ~12.4% ATM vol whose total variance grows with t."""
+    return SVIParameters(
+        a=0.011 * t, b=0.03 * np.sqrt(t), rho=-0.25, m=0.0, sigma=0.15 * np.sqrt(t)
+    )
+
+
+def _svi_quotes(truth_by_days):
+    """DELTAS quotes lying on the given SVI smile at each tenor (fixed point on k)."""
+    rows = []
+    for days, params in truth_by_days.items():
+        t = days / 365
+        df_q = np.exp(-Q * t)
+        vols = np.full(len(DELTAS), 0.12)
+        for _ in range(200):
+            k = np.array(
+                [
+                    0.0 if d == "atm" else _closed_form_k(d, v, t, df_q)
+                    for d, v in zip(DELTAS, vols)
+                ]
+            )
+            vols = svi_volatility(k, t, params)
+        rows.append(vols)
+    return np.array(rows)
+
+
+def test_calibrate_svi_recovers_the_parameters_of_an_svi_smile():
+    t = 0.5
+    k = np.array([-0.15, -0.06, 0.0, 0.05, 0.12])
+    fitted = calibrate_svi(k, svi_volatility(k, t, SVI_TRUTH), t)
+    for name in ("a", "b", "rho", "m", "sigma"):
+        assert getattr(fitted, name) == pytest.approx(
+            getattr(SVI_TRUTH, name), abs=1e-8
+        )
+
+
+def test_svi_smile_reproduces_svi_shaped_quotes_at_every_tenor(foreign):
+    truth = {days: _svi_truth(days / 365) for days in DAYS}
+    vols = _svi_quotes(truth)
+    surface = _surface(foreign, Method.SVI, vols=vols)
+    k = np.linspace(-0.3, 0.3, 13)
+    for i, days in enumerate(DAYS):
+        got = surface.get_volatility(surface.log_moneyness[i], days)
+        np.testing.assert_allclose(got, vols[i], rtol=0, atol=1e-10)
+        expected = svi_volatility(k, days / 365, truth[days])
+        np.testing.assert_allclose(
+            surface.get_volatility(k, days), expected, rtol=0, atol=1e-8
+        )
+
+
+def test_svi_fits_non_svi_quotes_in_the_least_squares_sense(foreign):
+    # The 30d and 90d rows have a curvature that dips at the money, which no raw
+    # SVI smile has: the fit misses them by a few vol basis points.
+    surface = _surface(foreign, Method.SVI)
+    for i, days in enumerate(DAYS):
+        got = surface.get_volatility(surface.log_moneyness[i], days)
+        np.testing.assert_allclose(got, VOLS[i], rtol=0, atol=5e-4)
+
+
+@pytest.mark.parametrize("days", [10, 30, 90, 200, 365, 900])
+def test_svi_fit_respects_lee_bound_and_non_negative_variance(foreign, days):
+    p = _surface(foreign, Method.SVI)._interpolation_model.get_svi_parameters(days)
+    assert p.b >= 0 and -1 <= p.rho <= 1 and p.sigma > 0
+    assert p.b * (1 + abs(p.rho)) <= 2 + 1e-12
+    assert p.a + p.b * p.sigma * np.sqrt(1 - p.rho**2) >= -1e-15
+
+
+def test_svi_wings_are_linear_in_total_variance():
+    def slope(k):
+        h = 1e-3
+        return (
+            svi_total_variance(k + h, SVI_TRUTH) - svi_total_variance(k, SVI_TRUTH)
+        ) / h
+
+    b, rho = SVI_TRUTH.b, SVI_TRUTH.rho
+    assert slope(50.0) == pytest.approx(b * (1 + rho), rel=1e-5)
+    assert slope(-50.0) == pytest.approx(-b * (1 - rho), rel=1e-5)
 
 
 # --- eSSVI on ACT/365 ----------------------------------------------------------

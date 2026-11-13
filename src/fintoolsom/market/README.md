@@ -16,7 +16,7 @@ pricing (`derivatives`) and curve building (`curve_builder`) read from.
 | `quotes.py` | Quotes that build their instrument: FX forwards (price or points), IRS/OIS, basis, cross-currency swaps |
 | `conventions.py` | `FixedLegSpec`, `FloatingLegSpec`, `PaymentFrequency`: leg structure used by quotes |
 | `uf.py` | UF (`CLF`) mechanics: publication calendar, CPI reajuste, `uf_rate_data(levels)` |
-| `volatility_surface.py` | FX volatility surface: double interpolation or eSSVI |
+| `volatility_surface.py` | FX volatility surface: two-step interpolation (linear, monotone cubic, vanna-volga, SVI) or eSSVI |
 
 ## Indexes and histories
 

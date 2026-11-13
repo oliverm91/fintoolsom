@@ -45,5 +45,5 @@ from .volatility_surface import (
     VolatilitySurface,
     VolatilitySurfaceInterpolationMethod,
     VolatilitySurfaceInterpolationModel,
-    SABRParameters,
+    SVIParameters,
 )

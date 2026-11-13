@@ -31,15 +31,17 @@ DAYS_IN_YEAR = 365
 class VolatilitySurfaceInterpolationMethod(Enum):
     """How a :class:`VolatilitySurface` interpolates between its quotes.
 
-    The ``Double*`` methods and ``SABR`` interpolate in two steps (see
-    :class:`DoubleInterpolationModel`): total variance in time at constant delta,
-    then a smile in log-moneyness. They differ only in the smile. ``eSSVI`` fits
-    one global surface.
+    The ``Double*`` methods, ``VannaVolga`` and ``SVI`` interpolate in two steps
+    (see :class:`DoubleInterpolationModel`): total variance in time at constant
+    delta, then a smile in log-moneyness. They differ only in the smile: linear,
+    monotone cubic, vanna-volga (3+ quotes, no calibration) or raw SVI (5+ quotes,
+    fitted per tenor). ``eSSVI`` fits one global surface.
     """
 
     DoubleLinear = "linear"
     DoubleMonotoneCubic = "monotone-cubic"
-    SABR = "sabr"
+    VannaVolga = "vanna-volga"
+    SVI = "svi"
     eSSVI = "essvi"
 
 
@@ -199,94 +201,238 @@ class DoubleInterpolationMonotoneCubic(DoubleInterpolationModel):
         return lambda k: pchip(np.clip(k, k_nodes[0], k_nodes[-1]))
 
 
-@dataclass
-class SABRParameters:
-    """SABR parameters with ``beta = 1`` (lognormal backbone).
+def vanna_volga_volatility(
+    log_moneyness: float | np.ndarray,
+    t: float,
+    anchor_log_moneyness: ArrayLike,
+    anchor_vols: ArrayLike,
+    pivot: int = 1,
+) -> np.ndarray:
+    """Second-order vanna-volga implied vol (Castagna and Mercurio, 2007).
 
-    ``alpha`` is the vol level, ``rho`` the spot-vol correlation (skew) and
-    ``nu`` the vol of vol (curvature).
+    The three anchors ``(k_i, vol_i)`` are quoted strikes of one smile, in any
+    order; ``vol_p = anchor_vols[pivot]`` is the reference (ATM) Black vol. With
+    ``y_i(k)`` the quadratic Lagrange weights in log-strike
+    (``ln(K/K_i) = k - k_i``) and ``d1(k) = (-k + vol_p^2 T / 2) / (vol_p sqrt T)``,
+    ``d2 = d1 - vol_p sqrt T``::
+
+        D1(k) = sum_i y_i(k) vol_i - vol_p                      (first order)
+        D2(k) = sum_i y_i(k) d1(k_i) d2(k_i) (vol_i - vol_p)^2
+        vol(k) = vol_p + (-vol_p + sqrt(vol_p^2 + d1 d2 (2 vol_p D1 + D2))) / (d1 d2)
+
+    It is evaluated as ``vol_p + c / (vol_p + sqrt(vol_p^2 + d1 d2 c))``, with
+    ``c = 2 vol_p D1 + D2``, which is stable where ``d1 d2 -> 0``. Where the root
+    is not real, the first-order vol ``vol_p + D1`` is used. The anchors are
+    reproduced exactly (whenever ``vol_p + d1 d2 (vol_i - vol_p) > 0`` at an
+    anchor, which holds for any sensible smile) and a flat smile stays flat.
     """
+    k = np.asarray(log_moneyness, dtype=float)
+    k1, k2, k3 = np.asarray(anchor_log_moneyness, dtype=float)
+    vols = np.asarray(anchor_vols, dtype=float)
+    vol_p = vols[pivot]
+    std = vol_p * np.sqrt(t)
 
-    alpha: float
-    rho: float
-    nu: float
+    def d1_d2(x):
+        d1 = (-x + std**2 / 2) / std
+        return d1 * (d1 - std)
 
-
-def sabr_volatility(
-    log_moneyness: float | np.ndarray, t: float, params: SABRParameters
-) -> float | np.ndarray:
-    """Black implied vol of SABR with ``beta = 1`` (Hagan et al., 2002).
-
-    With ``k = ln(K/F)`` and ``z = (nu / alpha) * ln(F/K)``::
-
-        vol = alpha * z / x(z) * (1 + (rho*nu*alpha/4 + (2 - 3*rho^2)*nu^2/24) * T)
-        x(z) = ln((sqrt(1 - 2*rho*z + z^2) + z - rho) / (1 - rho))
-
-    With ``beta = 1`` the formula depends on ``K/F`` only, not on the forward
-    level, so no spot is needed. ``z / x(z) -> 1 - rho*z/2`` as ``z -> 0``.
-    """
-    alpha, rho, nu = params.alpha, params.rho, params.nu
-    z = nu / alpha * -np.asarray(log_moneyness, dtype=float)
-    small = np.abs(z) < 1e-7
-    z_safe = np.where(small, 1.0, z)
-    x = np.log((np.sqrt(1 - 2 * rho * z_safe + z_safe**2) + z_safe - rho) / (1 - rho))
-    ratio = np.where(small, 1 - rho * z / 2, z_safe / x)
-    correction = 1 + (rho * nu * alpha / 4 + (2 - 3 * rho**2) * nu**2 / 24) * t
-    return alpha * ratio * correction
-
-
-def calibrate_sabr(
-    k_nodes: np.ndarray, vol_nodes: np.ndarray, t: float
-) -> SABRParameters:
-    """Least-squares SABR (``beta = 1``) fit of one smile at time `t`.
-
-    Three nodes are fitted exactly when the smile is reachable; more nodes are
-    fitted in the least-squares sense. Bounds: ``alpha`` in ``(0, 5]``, ``rho``
-    in ``[-0.999, 0.999]``, ``nu`` in ``(0, 10]``.
-
-    Raises
-    ------
-    ValueError
-        If the fit does not converge.
-    """
-    atm = int(np.argmin(np.abs(k_nodes)))
-    x0 = [float(vol_nodes[atm]), 0.0, 0.5]
-
-    def residuals(x):
-        return sabr_volatility(k_nodes, t, SABRParameters(*x)) - vol_nodes
-
-    result = least_squares(
-        residuals,
-        x0,
-        bounds=([1e-6, -0.999, 1e-6], [5.0, 0.999, 10.0]),
-        xtol=1e-14,
-        ftol=1e-14,
-        gtol=1e-14,
+    weights = (
+        (k2 - k) * (k3 - k) / ((k2 - k1) * (k3 - k1)),
+        (k - k1) * (k3 - k) / ((k2 - k1) * (k3 - k2)),
+        (k - k1) * (k - k2) / ((k3 - k1) * (k3 - k2)),
     )
-    if not result.success:
-        raise ValueError(f"SABR calibration failed at T={t:.6f}: {result.message}")
-    return SABRParameters(*result.x)
+    first = sum(y * v for y, v in zip(weights, vols)) - vol_p
+    second = sum(
+        y * d1_d2(k_i) * (v - vol_p) ** 2
+        for y, k_i, v in zip(weights, (k1, k2, k3), vols)
+    )
+    c = 2 * vol_p * first + second
+    discriminant = vol_p**2 + d1_d2(k) * c
+    root = np.sqrt(np.maximum(discriminant, 0.0))
+    return np.where(discriminant >= 0, vol_p + c / (vol_p + root), vol_p + first)
 
 
-class DoubleInterpolationSABR(DoubleInterpolationModel):
-    """Two-step model with a SABR (``beta = 1``) smile fitted at each tenor queried.
+def _vanna_volga_anchors(segment: int, pivot: int, n_nodes: int) -> list[int]:
+    """Anchor nodes of the vanna-volga smile between nodes `segment` and `segment + 1`.
 
-    Steps 1 and 2 are those of :class:`DoubleInterpolationModel`; the smile is
-    :func:`calibrate_sabr` on the nodes at the queried tenor, so the quotes are
-    matched at every tenor and the wings follow SABR instead of staying flat.
-    Needs at least three delta columns (three parameters).
+    The pivot (ATM) node is always an anchor. The two segments next to it use the
+    pivot and its two neighbours (the 25-delta pair of a 10/25/ATM/25/10 smile);
+    a segment further out uses its own two nodes and the pivot.
+    """
+    if segment + 1 < pivot:
+        return [segment, segment + 1, pivot]
+    if segment > pivot:
+        return [pivot, segment, segment + 1]
+    low = min(max(pivot - 1, 0), n_nodes - 3)
+    return [low, low + 1, low + 2]
+
+
+class DoubleInterpolationVannaVolga(DoubleInterpolationModel):
+    """Two-step model with a vanna-volga smile, flat beyond the outer nodes.
+
+    The smile is :func:`vanna_volga_volatility` around the node closest to the
+    ATM forward (the pivot). With three nodes one vanna-volga smile goes through
+    all of them; with more, each segment between two nodes uses the anchors of
+    :func:`_vanna_volga_anchors`. Every node is an anchor of the segments on both
+    of its sides, so each quote is matched and the smile is continuous. There is
+    nothing to calibrate. Needs at least three delta columns.
     """
 
     _min_deltas = 3
 
     def _smile(self, k_nodes, vol_nodes, t):
-        params = calibrate_sabr(k_nodes, vol_nodes, t)
-        return lambda k: sabr_volatility(k, t, params)
+        pivot = int(np.argmin(np.abs(k_nodes)))
+        n_segments = len(k_nodes) - 1
+        anchors = [
+            _vanna_volga_anchors(j, pivot, len(k_nodes)) for j in range(n_segments)
+        ]
 
-    def get_sabr_parameters(self, days: float) -> SABRParameters:
-        """SABR parameters fitted at `days`."""
+        def smile(k):
+            shape = np.shape(k)
+            k = np.clip(np.ravel(k), k_nodes[0], k_nodes[-1])
+            segment = np.clip(
+                np.searchsorted(k_nodes, k, side="right") - 1, 0, n_segments - 1
+            )
+            vols = np.empty(k.shape)
+            for j, nodes in enumerate(anchors):
+                mask = segment == j
+                if mask.any():
+                    vols[mask] = vanna_volga_volatility(
+                        k[mask], t, k_nodes[nodes], vol_nodes[nodes], nodes.index(pivot)
+                    )
+            return vols.reshape(shape)
+
+        return smile
+
+
+@dataclass
+class SVIParameters:
+    """Raw SVI parameters (Gatheral, 2004) of one smile.
+
+    Total variance ``w(k) = a + b * (rho * (k - m) + sqrt((k - m)^2 + sigma^2))``:
+    ``a`` is the level, ``b`` the wing slope, ``rho`` the skew, ``m`` the shift and
+    ``sigma`` the ATM curvature.
+    """
+
+    a: float
+    b: float
+    rho: float
+    m: float
+    sigma: float
+
+
+def svi_total_variance(
+    log_moneyness: float | np.ndarray, params: SVIParameters
+) -> float | np.ndarray:
+    """Raw SVI total variance ``w(k)``."""
+    x = np.asarray(log_moneyness, dtype=float) - params.m
+    return params.a + params.b * (params.rho * x + np.sqrt(x**2 + params.sigma**2))
+
+
+def svi_volatility(
+    log_moneyness: float | np.ndarray, t: float, params: SVIParameters
+) -> float | np.ndarray:
+    """Black vol ``sqrt(w(k) / T)`` of a raw SVI smile at time `t`."""
+    return np.sqrt(np.maximum(svi_total_variance(log_moneyness, params), 0.0) / t)
+
+
+def _svi_total_variance_from_slopes(k, min_variance, left, right, m, sigma):
+    # b = (left + right) / 2, b * rho = (right - left) / 2, b * sqrt(1 - rho^2) =
+    # sqrt(left * right), and a = min_variance - sigma * sqrt(left * right).
+    x = k - m
+    return (
+        min_variance
+        + (right - left) / 2 * x
+        + (left + right) / 2 * np.sqrt(x**2 + sigma**2)
+        - sigma * np.sqrt(left * right)
+    )
+
+
+def calibrate_svi(
+    k_nodes: np.ndarray, vol_nodes: np.ndarray, t: float
+) -> SVIParameters:
+    """Least-squares raw SVI fit of one smile at time `t`, on the vols.
+
+    The fit runs over ``(w_min, left slope, right slope, m, sigma)``, where
+    ``w_min = a + b * sigma * sqrt(1 - rho^2)`` is the minimum total variance and
+    the slopes ``b * (1 -/+ rho)`` are the wing slopes of ``w`` in ``k``. The
+    bounds ``w_min >= 0`` (``w`` is never negative) and slopes in ``[0, 2]``
+    (Roger Lee's moment bound) are enforced exactly; butterfly arbitrage
+    (Gatheral's ``g(k) >= 0``) is not. Five nodes are fitted exactly when the
+    smile is reachable, more in the least-squares sense. Three starting ``sigma``
+    values are tried and the best fit is kept.
+
+    Raises
+    ------
+    ValueError
+        If no fit converges.
+    """
+    k_nodes = np.asarray(k_nodes, dtype=float)
+    vol_nodes = np.asarray(vol_nodes, dtype=float)
+    w = vol_nodes**2 * t
+    span = max(float(k_nodes[-1] - k_nodes[0]), 1e-4)
+    low = int(np.argmin(w))
+    m0 = float(k_nodes[low])
+    left0 = (w[0] - w[low]) / (m0 - k_nodes[0]) if low > 0 else 0.0
+    right0 = (w[-1] - w[low]) / (k_nodes[-1] - m0) if low < len(w) - 1 else 0.0
+    lower = [0.0, 0.0, 0.0, float(k_nodes[0]) - span, 1e-6]
+    upper = [np.inf, 2.0, 2.0, float(k_nodes[-1]) + span, 10.0]
+
+    def residuals(x):
+        model_w = _svi_total_variance_from_slopes(k_nodes, *x)
+        return np.sqrt(np.maximum(model_w, 0.0) / t) - vol_nodes
+
+    best = None
+    for sigma0 in (0.1 * span, 0.5 * span, 2.0 * span):
+        x0 = [
+            float(w[low]),
+            float(np.clip(left0, 0.0, 2.0)),
+            float(np.clip(right0, 0.0, 2.0)),
+            m0,
+            min(sigma0, 10.0),
+        ]
+        result = least_squares(
+            residuals,
+            x0,
+            bounds=(lower, upper),
+            xtol=1e-15,
+            ftol=1e-15,
+            gtol=1e-15,
+        )
+        if result.success and (best is None or result.cost < best.cost):
+            best = result
+    if best is None:
+        raise ValueError(f"SVI calibration failed at T={t:.6f}.")
+    min_variance, left, right, m, sigma = best.x
+    b = (left + right) / 2
+    rho = (right - left) / (left + right) if b > 0 else 0.0
+    return SVIParameters(
+        a=min_variance - sigma * np.sqrt(left * right), b=b, rho=rho, m=m, sigma=sigma
+    )
+
+
+class DoubleInterpolationSVI(DoubleInterpolationModel):
+    """Two-step model with a raw SVI smile fitted at each tenor queried.
+
+    Steps 1 and 2 are those of :class:`DoubleInterpolationModel`; the smile is
+    :func:`calibrate_svi` on the nodes at the queried tenor, and its wings are
+    linear in total variance, within Lee's bound, instead of flat. SVI is a fit,
+    not an interpolation: five quotes are matched exactly only when an SVI smile
+    goes through them (a raw SVI curvature peaks once, at ``m``), otherwise in the
+    least-squares sense. Needs at least five delta columns (five parameters),
+    e.g. the 10-delta, 25-delta and ATM quotes.
+    """
+
+    _min_deltas = 5
+
+    def _smile(self, k_nodes, vol_nodes, t):
+        params = calibrate_svi(k_nodes, vol_nodes, t)
+        return lambda k: svi_volatility(k, t, params)
+
+    def get_svi_parameters(self, days: float) -> SVIParameters:
+        """Raw SVI parameters fitted at `days`."""
         k_nodes, vol_nodes = self.get_smile_nodes(days)
-        return calibrate_sabr(k_nodes, vol_nodes, days / DAYS_IN_YEAR)
+        return calibrate_svi(k_nodes, vol_nodes, days / DAYS_IN_YEAR)
 
 
 class eSSVI(VolatilitySurfaceInterpolationModel):
@@ -623,7 +769,8 @@ def _log_moneyness_from_delta(
 _MODELS = {
     VolatilitySurfaceInterpolationMethod.DoubleLinear: DoubleInterpolationLinear,
     VolatilitySurfaceInterpolationMethod.DoubleMonotoneCubic: DoubleInterpolationMonotoneCubic,
-    VolatilitySurfaceInterpolationMethod.SABR: DoubleInterpolationSABR,
+    VolatilitySurfaceInterpolationMethod.VannaVolga: DoubleInterpolationVannaVolga,
+    VolatilitySurfaceInterpolationMethod.SVI: DoubleInterpolationSVI,
 }
 
 
@@ -648,7 +795,7 @@ class VolatilitySurface:
         construction, to turn each spot put delta into a log-moneyness (see
         :func:`_log_moneyness_from_delta`). Neither spot nor the domestic curve
         is needed, and no curve is kept.
-    interpolation_method : VolatilitySurfaceInterpolationMethod, default SABR
+    interpolation_method : VolatilitySurfaceInterpolationMethod, default VannaVolga
         Surface interpolation model; see :class:`DoubleInterpolationModel` for the
         two-step methods.
     **kwargs
@@ -683,7 +830,7 @@ class VolatilitySurface:
         deltas: Sequence,
         vols: ArrayLike,
         foreign_curve: Curve | LegacyCurve,
-        interpolation_method: VolatilitySurfaceInterpolationMethod = VolatilitySurfaceInterpolationMethod.SABR,
+        interpolation_method: VolatilitySurfaceInterpolationMethod = VolatilitySurfaceInterpolationMethod.VannaVolga,
         **kwargs,
     ):
         self.days, self.deltas, self.vols = _validated_grid(days, deltas, vols)
