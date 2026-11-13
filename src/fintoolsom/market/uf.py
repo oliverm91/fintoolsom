@@ -18,9 +18,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from ..dates import Calendar, PrecedingConvention, get_calendar
+from ..dates import last_known_uf_date
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
-from .localities import Locality
 
 
 def _shift_month(year: int, month: int, k: int) -> tuple[int, int]:
@@ -124,7 +123,7 @@ class UFConvention:
         return (end_level / base_level) ** (period_days / elapsed_days) - 1.0
 
 
-def last_published_date(today: date, calendar: Calendar | None = None) -> date:
+def last_published_date(today: date) -> date:
     """Last date whose UF is published as of `today`.
 
     CPI is released on the 8th (or the preceding business day). Before the
@@ -136,23 +135,16 @@ def last_published_date(today: date, calendar: Calendar | None = None) -> date:
     ----------
     today : date
         As-of date.
-    calendar : Calendar, optional
-        Release calendar; defaults to the Chilean calendar.
 
     Returns
     -------
     date
+
+    See Also
+    --------
+    fintoolsom.dates.last_known_uf_date
     """
-    if calendar is None:
-        calendar = get_calendar(Locality.CL.value)
-    publication_date = PrecedingConvention(calendar).adjust(
-        date(today.year, today.month, 8)
-    )
-    if today < publication_date:
-        year, month = today.year, today.month
-    else:
-        year, month = _shift_month(today.year, today.month, 1)
-    return date(year, month, 9)
+    return last_known_uf_date(today)
 
 
 def monthly_inflation(levels: dict[date, float], year: int, month: int) -> float:

@@ -21,6 +21,7 @@ from .adjustments import (
     PrecedingConvention,
     ModifiedPrecedingConvention,
 )
+from .inflation import last_known_uf_date, next_cpi_publication_date
 from .schedules import Tenor, ScheduleGenerator
 from .term import TermUnit, Term
 from .time_fractions import (
