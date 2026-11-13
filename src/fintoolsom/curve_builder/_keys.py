@@ -16,6 +16,7 @@ from ..market.currencies import Currency
 from ..market.index import Index
 from ..market.market import Market
 from ..market.quotes import (
+    CrossCurrencyFixedFloatQuote,
     CrossCurrencyFloatFloatQuote,
     ForwardPointsQuote,
     InstrumentQuote,
@@ -28,7 +29,11 @@ CurveKey = Index | Currency
 
 # Quote types whose instrument needs the market FX to fully materialise: XCCY (to size
 # matched leg notionals) and forward-points (to build the outright strike off the spot).
-_FX_DEPENDENT = (CrossCurrencyFloatFloatQuote, ForwardPointsQuote)
+_FX_DEPENDENT = (
+    CrossCurrencyFixedFloatQuote,
+    CrossCurrencyFloatFloatQuote,
+    ForwardPointsQuote,
+)
 
 
 def _funding_key(risk_free_index: Index, currency: Currency) -> CurveKey:

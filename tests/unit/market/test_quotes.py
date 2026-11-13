@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
@@ -100,6 +102,25 @@ def test_float_float_quote_supports_non_deliverable_settlement():
     assert swap.settlement_currency == CLP
     assert swap.receive_leg.residuals[0] == pytest.approx(
         swap.pay_leg.residuals[0] * 950.0
+    )
+
+
+@pytest.mark.parametrize(
+    "side, fx_factor",
+    [(QuotedSide.RECEIVE, 950.0), (QuotedSide.PAY, 1 / 950.0)],
+    ids=["receive-clp", "pay-clp"],
+)
+def test_fixed_float_quote_sizes_legs_at_market_fx(side, fx_factor):
+    quote = dataclasses.replace(_fixed_float_quote(), quoted_side=side)
+    structure = quote.get_instrument()
+    assert structure.receive_leg.residuals[0] == pytest.approx(
+        structure.pay_leg.residuals[0]
+    )
+    swap = quote.get_instrument(build_market())
+    # The pay leg keeps the base notional; the receive leg is its FX-converted amount.
+    assert swap.pay_leg.residuals[0] == pytest.approx(structure.pay_leg.residuals[0])
+    assert swap.receive_leg.residuals[0] == pytest.approx(
+        swap.pay_leg.residuals[0] * fx_factor
     )
 
 

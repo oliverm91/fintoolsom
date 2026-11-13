@@ -583,14 +583,37 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             (self.fixed_leg.currency, self.floating_leg.currency),
         )
 
-    def get_instrument(self) -> Swap:
+    def get_instrument(self, market=None) -> Swap:
         from ..derivatives.swaps.swaps import Swap
         from ..derivatives.swaps.builders import fixed_leg, floating_leg
+        from .currencies import CurrencyPair
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
+
+        # Size the legs so their notionals match at the market FX: N_receive = N_pay *
+        # FX(pay_ccy -> receive_ccy). Without a market (structure-only calls) both legs
+        # use the base notional.
+        fixed_is_receive = self.quoted_side == QuotedSide.RECEIVE
+        fixed_notional = floating_notional = _NOTIONAL
+        if market is not None:
+            fixed_ccy = self.fixed_leg.currency
+            floating_ccy = self.floating_leg.currency
+            recv_ccy, pay_ccy = (
+                (fixed_ccy, floating_ccy)
+                if fixed_is_receive
+                else (floating_ccy, fixed_ccy)
+            )
+            fx = market.get_fx_rate(
+                self.quote_date, CurrencyPair(pay_ccy, recv_ccy)
+            ).value
+            if fixed_is_receive:
+                fixed_notional = _NOTIONAL * fx
+            else:
+                floating_notional = _NOTIONAL * fx
+
         fixed = fixed_leg(
-            notional=_NOTIONAL,
+            notional=fixed_notional,
             start_date=start,
             term=self.term,
             frequency=self.fixed_leg.payment_frequency.value,
@@ -604,7 +627,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             fx_fixing_lag=self.fx_fixing_lag,
         )
         floating = floating_leg(
-            notional=_NOTIONAL,
+            notional=floating_notional,
             start_date=start,
             term=self.term,
             frequency=self.floating_leg.payment_frequency.value,
@@ -618,11 +641,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             payment_lag=self.floating_leg.payment_lag,
             fx_fixing_lag=self.fx_fixing_lag,
         )
-        receive, pay = (
-            (fixed, floating)
-            if self.quoted_side == QuotedSide.RECEIVE
-            else (floating, fixed)
-        )
+        receive, pay = (fixed, floating) if fixed_is_receive else (floating, fixed)
         return Swap(
             receive_leg=receive,
             pay_leg=pay,

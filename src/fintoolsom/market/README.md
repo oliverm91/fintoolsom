@@ -60,6 +60,6 @@ from the CLF and CLP curves.
 ## Quotes
 
 Every quote builds its instrument with `get_instrument()`. FX-dependent quotes
-(FX forwards, cross-currency float-float swaps) take the market:
+(FX forwards, cross-currency swaps) take the market:
 `get_instrument(market)`. Swap quotes carry `collateral_index`, the CSA under which
 they are valued.
