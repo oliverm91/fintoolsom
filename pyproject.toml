@@ -28,7 +28,6 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
-    "pandas",
     "scipy",
     "holidays>=0.88",
     "python-dateutil",

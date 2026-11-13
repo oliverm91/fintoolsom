@@ -159,7 +159,7 @@ builds ICP, SOFR and USD curves from a full set of real 2026-06-29 quotes.
 ## Install
 
 `pip install fintoolsom`, or from source: `pip install git+https://github.com/oliverm91/fintoolsom.git --upgrade`.
-Python 3.11 or later. Dependencies: numpy, pandas, scipy, holidays, python-dateutil.
+Python 3.11 or later. Dependencies: numpy, scipy, holidays, python-dateutil.
 
 ## Development
 

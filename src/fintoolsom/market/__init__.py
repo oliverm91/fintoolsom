@@ -41,4 +41,9 @@ from .quotes import (
     CrossCurrencyFixedFloatQuote,
     CrossCurrencyFloatFloatQuote,
 )
-from .volatility_surface import VolatilitySurface, InterpolationMethod
+from .volatility_surface import (
+    VolatilitySurface,
+    VolatilitySurfaceInterpolationMethod,
+    VolatilitySurfaceInterpolationModel,
+    SABRParameters,
+)
