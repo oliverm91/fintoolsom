@@ -100,6 +100,17 @@ class _ForwardQuote(InstrumentQuote):
     spot_lag: int = field(default=2)
     payment_lag: int = field(default=1)
 
+    def __post_init__(self):
+        pair = self.currency_pair
+        if self._effective_fixing_date() is None and not (
+            pair.base_currency.is_deliverable and pair.quote_currency.is_deliverable
+        ):
+            raise ValueError(
+                f"{pair} holds a currency that cannot be delivered (CLF), so its "
+                f"forward quote must be an NDF: provide fixing_date, or term and "
+                f"quote_date."
+            )
+
     @abstractmethod
     def to_outright(self, spot: FX_Rate) -> float:
         """Outright forward price implied by the quote.
@@ -145,19 +156,14 @@ class _ForwardQuote(InstrumentQuote):
     def _build(self, strike: float) -> Forward | NDF:
         """Forward instrument at `strike`.
 
-        An NDF when a fixing date is set or derivable, or when the pair holds a
-        non-deliverable currency (a UF forward on ``CLF/CLP``, fixing on the
-        payment date by default); a deliverable Forward otherwise.
+        An NDF when a fixing date is set or derivable; a deliverable Forward
+        otherwise.
         """
         from ..derivatives.forwards.forwards import Forward, NDF
 
         fixing = self._effective_fixing_date()
         pmt = self._effective_payment_date()
         pair = self.currency_pair
-        if fixing is None and not (
-            pair.base_currency.is_deliverable and pair.quote_currency.is_deliverable
-        ):
-            fixing = pmt
         if fixing is not None:
             return NDF(
                 notional=_NOTIONAL,
@@ -265,9 +271,15 @@ class _SwapQuote(InstrumentQuote):
 class ForwardPriceQuote(_ForwardQuote):
     """FX forward quoted as an outright price.
 
-    Builds an NDF when a fixing date is set or derivable, or on a pair with a
-    non-deliverable currency (a UF forward is a ``CLF/CLP`` NDF quoted as the
-    outright UF level); a deliverable Forward otherwise.
+    Builds an NDF when a fixing date is set or derivable (a UF forward is a
+    ``CLF/CLP`` NDF quoted as the outright UF level); a deliverable Forward
+    otherwise.
+
+    Raises
+    ------
+    ValueError
+        If the pair holds a non-deliverable currency (``CLF``) and no fixing date
+        is set or derivable.
 
     Parameters
     ----------
@@ -320,6 +332,7 @@ class ForwardPointsQuote(_ForwardQuote):
     points_divisor: int = field(default=1)
 
     def __post_init__(self):
+        super().__post_init__()
         if self.points_divisor <= 0:
             raise ValueError(
                 f"points_divisor must be a positive integer. Got {self.points_divisor}."
