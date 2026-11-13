@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...market.currencies import CurrencyPair
+    from ...market.index import InterestIndex
 
 
 def _non_deliverable_currencies(currency_pair: CurrencyPair) -> list:
@@ -32,6 +33,9 @@ class Forward:
         True when buying the base currency.
     currency_pair : CurrencyPair
         Traded pair.
+    collateral_index : InterestIndex, optional
+        CSA collateral index (keyword-only); None means uncollateralised. It
+        changes how the flows are discounted, not the projected FX.
 
     Attributes
     ----------
@@ -50,6 +54,8 @@ class Forward:
     payment_date: date
     is_buy: bool
     currency_pair: CurrencyPair = None
+    _: KW_ONLY
+    collateral_index: InterestIndex | None = None
 
     sign: int = field(init=False)
 

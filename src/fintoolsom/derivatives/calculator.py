@@ -64,8 +64,9 @@ class Calculator:
     ) -> float:
         """Deliverable FX forward mark-to-market.
 
-        Domestic is the quote currency and foreign the base currency, both
-        discounted on their uncollateralised discount curves; spot is read from
+        Domestic is the quote currency and foreign the base currency, each
+        discounted under the forward's ``collateral_index`` (see
+        :meth:`Market.get_dfs`; None means uncollateralised); spot is read from
         `market` at ``market.t``. A forward paid on or before ``market.t`` is worth 0.
 
         Parameters
@@ -85,12 +86,15 @@ class Calculator:
         cp = forward.currency_pair
         if forward.payment_date <= market.t:
             return 0.0
-        domestic_curve = market.get_discount_curve(cp.quote_currency)
-        foreign_curve = market.get_discount_curve(cp.base_currency)
+        collateral = forward.collateral_index
         spot = market.get_fx_rate(market.t, cp).value
 
-        df_d = domestic_curve.get_df(forward.payment_date)
-        df_f = foreign_curve.get_df(forward.payment_date)
+        df_d = market.get_df(
+            cp.quote_currency, forward.payment_date, collateral=collateral
+        )
+        df_f = market.get_df(
+            cp.base_currency, forward.payment_date, collateral=collateral
+        )
         notional_leg_vp = spot * forward.notional * df_f
         strike_leg_vp = forward.strike * forward.notional * df_d
 
@@ -106,10 +110,11 @@ class Calculator:
         """Non-deliverable FX forward mark-to-market.
 
         The settlement FX at `fixing_date` comes from :meth:`get_fx_fixings`
-        (realised or already published, else projected on the funding curves) and
-        the settlement amount is discounted from `payment_date` on the domestic
-        (quote-currency) funding curve. A UF forward is an NDF on ``CLF/CLP``. An
-        NDF paid on or before ``market.t`` is worth 0.
+        (realised or already published, else projected on the funding curves,
+        whatever the collateral) and the settlement amount is discounted from
+        `payment_date` in the quote currency under the NDF's ``collateral_index``
+        (see :meth:`Market.get_dfs`; None means uncollateralised). A UF forward is
+        an NDF on ``CLF/CLP``. An NDF paid on or before ``market.t`` is worth 0.
 
         Parameters
         ----------
@@ -132,7 +137,9 @@ class Calculator:
             cp.base_currency, cp.quote_currency, [ndf.fixing_date], market
         )[0]
         fv = ndf.sign * ndf.notional * (s_t - ndf.strike)
-        mtm = fv * market.get_discount_curve(cp.quote_currency).get_df(ndf.payment_date)
+        mtm = fv * market.get_df(
+            cp.quote_currency, ndf.payment_date, collateral=ndf.collateral_index
+        )
         return Calculator._convert(mtm, cp.quote_currency, currency, market)
 
     # --- Options (Garman-Kohlhagen / Black-Scholes for FX) ---
