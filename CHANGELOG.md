@@ -1,3 +1,13 @@
+## v1.0.0b12 (2026-11-13)
+
+### BREAKING CHANGE
+
+- **market**: `ForwardPriceQuote` and `ForwardPointsQuote` on a pair holding `CLF` raise `ValueError` at construction unless the quote is an NDF, meaning `fixing_date` is set or derivable from `term` and `quote_date`. They no longer become an NDF fixing on the payment date by default: pass `fixing_date` (the old default was `fixing_date=payment_date`).
+
+### Fix
+
+- **market**: `CrossCurrencyFixedFloatQuote.get_instrument(market=None)` sizes its legs at the market FX on `quote_date`: the pay notional is the base notional and the receive notional is the pay notional converted from the pay to the receive currency, as `CrossCurrencyFloatFloatQuote` does. Both legs were given the same notional before. Without a market, both legs keep the base notional. The curve builder passes the market to this quote.
+
 ## v1.0.0b11 (2026-11-12)
 
 ### BREAKING CHANGE
