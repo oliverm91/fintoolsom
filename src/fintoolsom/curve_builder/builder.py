@@ -110,7 +110,19 @@ class _CurveBuilder:
         while pending:
             owned = {g: plan.owned_pillars(g) for g in pending}
             waits = {g: plan.waits(g, pending, owned) for g in pending}
-            ready = (g for g in sorted(pending, key=plan.priority) if not waits[g])
+            ready_set = {g for g in pending if not waits[g]}
+            # A group reading a curve past its end goes after the ready group that
+            # extends it there, so the extension does not move its quotes afterwards.
+            ready = (
+                g
+                for g in sorted(
+                    ready_set,
+                    key=lambda g: (
+                        bool(plan.tail_waits(g, pending, owned) & ready_set),
+                        plan.priority(g),
+                    ),
+                )
+            )
             solved = next(
                 (
                     g
@@ -432,13 +444,9 @@ def build_curves(
     """
     # Derive the valuation date from the quotes and cross-check market.t, since
     # Calculator.valuate reads FX (and other) market data off market.t internally.
-    quote_dates = {
-        q.quote_date for q in quotes if getattr(q, "quote_date", None) is not None
-    }
+    quote_dates = {q.quote_date for q in quotes}
     if not quote_dates:
-        raise ValueError(
-            "No quotes with a quote_date were provided; cannot derive a valuation date."
-        )
+        raise ValueError("No quotes were provided; cannot derive a valuation date.")
     if len(quote_dates) > 1:
         raise ValueError(
             f"All quotes must share the same quote_date; got {sorted(quote_dates)}."

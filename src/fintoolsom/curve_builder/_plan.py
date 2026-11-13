@@ -207,6 +207,30 @@ class _Planner:
             }
         return out
 
+    def tail_waits(
+        self, group: Group, pending: list[Group], owned: dict[Group, set]
+    ) -> set[Group]:
+        """Pending groups that set a curve `group` reads past that curve's end.
+
+        A built curve that ends before `group`'s last date is extrapolated there,
+        and the next pillar after that date sets it: for each such curve, the owner
+        of the first pillar past the last date, unless `group` owns an earlier one.
+        Unlike :meth:`waits` this is a preference: `group` goes after these groups
+        when they are ready, and before them only to break a deadlock.
+        """
+        last = max(_last_date(i) for i in self.instruments_of(group))
+        out = set()
+        for c in group:
+            built = _built(self.market, c)
+            if built is None or built.last_date >= last:
+                continue
+            beyond = [
+                (d, h) for h in pending for cc, d in owned[h] if cc == c and d > last
+            ]
+            if beyond and (first := min(beyond, key=lambda dh: dh[0]))[1] != group:
+                out.add(first[1])
+        return out
+
     def merge_cycles(self, pending: list[Group], waits: dict[Group, set]) -> bool:
         """Merge groups that wait on each other into one joint group, in place.
 
