@@ -35,3 +35,21 @@ def test_a_swap_cannot_settle_in_clf():
     leg = _fixed(CLF, 1_000.0, 0.02)
     with pytest.raises(ValueError, match="cannot be delivered"):
         Swap(receive_leg=leg, pay_leg=_fixed(CLF, 1_000.0, 0.01), payment_currency=CLF)
+
+
+@pytest.mark.parametrize("other", [CLP, USD, CLF], ids=["clp", "usd", "clf"])
+@pytest.mark.parametrize("uf_side", ["receive", "pay"])
+def test_a_deliverable_swap_with_a_clf_leg_is_rejected(other, uf_side):
+    uf, other_leg = _fixed(CLF, 1_000.0, 0.02), _fixed(other, 1_000.0, 0.05)
+    legs = (uf, other_leg) if uf_side == "receive" else (other_leg, uf)
+    with pytest.raises(ValueError, match="CLF cannot be delivered.*non-deliverable"):
+        Swap(receive_leg=legs[0], pay_leg=legs[1], is_deliverable=True)
+
+
+@pytest.mark.parametrize("other", [CLP, USD])
+def test_a_clf_swap_settled_in_clp_is_accepted(other):
+    uf = _fixed(CLF, 1_000.0, 0.02)
+    swap = Swap(
+        receive_leg=uf, pay_leg=_fixed(other, 1_000.0, 0.05), payment_currency=CLP
+    )
+    assert swap.leg_settlement_currency(uf) is CLP

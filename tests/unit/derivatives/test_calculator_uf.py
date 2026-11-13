@@ -151,10 +151,10 @@ def _fixed(ccy: Currency, notional: float, rate: float):
     )
 
 
-def test_uf_leg_of_a_deliverable_swap_is_paid_in_clp_at_each_payment_uf():
+def test_uf_leg_settled_in_clp_is_paid_at_each_payment_uf():
     market = _market()
     uf_leg, clp_leg = _fixed(CLF, 1_000.0, 0.02), _fixed(CLP, 37_500_000.0, 0.06)
-    swap = Swap(receive_leg=uf_leg, pay_leg=clp_leg, is_deliverable=True)
+    swap = Swap(receive_leg=uf_leg, pay_leg=clp_leg, payment_currency=CLP)
     assert swap.leg_settlement_currency(uf_leg) is CLP
     assert uf_leg.fx_fixing_dates == uf_leg.payment_dates
 

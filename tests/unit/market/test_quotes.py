@@ -59,9 +59,7 @@ def _fixed_float_quote(index: object = SOFR, **kw) -> CrossCurrencyFixedFloatQuo
         term=Term(2, TermUnit.Y, ADJ_CLP),
         quote_date=VAL_DATE,
         adj_convention=ADJ_CLP,
-        fixed_leg=_fixed_spec(CLP),
-        floating_leg=_float_spec(index),
-        **kw,
+        **{"fixed_leg": _fixed_spec(CLP), "floating_leg": _float_spec(index), **kw},
     )
 
 
@@ -226,6 +224,20 @@ def test_cross_currency_float_float_quote_needs_two_currencies():
             receive_leg=_float_spec(SOFR),
             pay_leg=_float_spec(SOFR),
         )
+
+
+def test_a_deliverable_xccy_quote_with_a_clf_leg_is_rejected():
+    with pytest.raises(ValueError, match="CLF cannot be delivered.*non-deliverable"):
+        _fixed_float_quote(fixed_leg=_fixed_spec(Currency.CLF))
+
+
+def test_a_clf_xccy_quote_settled_in_clp_is_accepted():
+    quote = _fixed_float_quote(
+        fixed_leg=_fixed_spec(Currency.CLF),
+        is_deliverable=False,
+        payment_currency=CLP,
+    )
+    assert quote.get_instrument().settlement_currency is CLP
 
 
 def test_cross_currency_fixed_float_quote_needs_two_currencies():

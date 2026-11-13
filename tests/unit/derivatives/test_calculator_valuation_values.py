@@ -292,7 +292,12 @@ def _ccs_twins():
                 case.collateral,
             )
             by_key.setdefault(key, {})[case.deliverable] = case
-    return [pytest.param(v[True], v[False], id=v[True].id) for v in by_key.values()]
+    # A CCS with a UF leg is non-deliverable only: it has no deliverable twin.
+    return [
+        pytest.param(v[True], v[False], id=v[True].id)
+        for v in by_key.values()
+        if True in v
+    ]
 
 
 @pytest.mark.parametrize("deliverable, non_deliverable", _ccs_twins())

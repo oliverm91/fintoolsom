@@ -51,13 +51,16 @@ class Swap(SwapBase):
     is_deliverable : bool, default False
         True when each leg settles physically in its own currency. False when
         the swap settles in `payment_currency` (non-deliverable); irrelevant
-        when both legs share a currency.
+        when both legs share a currency. A leg in a unit of account that cannot
+        be delivered (the UF, ``CLF``) makes the swap non-deliverable: settle it
+        in ``CLP`` with `payment_currency`.
 
     Raises
     ------
     ValueError
-        If a non-deliverable cross-currency swap has no `payment_currency`, or a
-        deliverable swap has one.
+        If a non-deliverable cross-currency swap has no `payment_currency`, a
+        deliverable swap has one or has a leg in a non-deliverable currency, or
+        `payment_currency` cannot be delivered.
     """
 
     receive_leg: SwapLeg
@@ -69,6 +72,15 @@ class Swap(SwapBase):
             raise ValueError(
                 "A deliverable swap settles each leg in its own currency: payment_currency must be None."
             )
+        if self.is_deliverable:
+            for leg in (self.receive_leg, self.pay_leg):
+                ccy = leg.currency  # type: ignore[attr-defined]
+                if not ccy.is_deliverable:
+                    raise ValueError(
+                        f"{ccy} cannot be delivered; a swap with a {ccy} leg must be "
+                        f"non-deliverable, with payment_currency="
+                        f"{ccy.settlement_currency}."
+                    )
         if (
             not self.is_deliverable
             and self.payment_currency is None
@@ -138,8 +150,9 @@ class Swap(SwapBase):
 
         The swap's `settlement_currency` when non-deliverable; otherwise the leg
         currency, unless that is a unit of account that cannot be delivered (the
-        UF, ``CLF``), whose flows are always paid in its settlement currency (CLP)
-        at the rate of their FX fixing dates, even in a deliverable swap.
+        UF, ``CLF``, in a single-currency UF swap without `payment_currency`),
+        whose flows are paid in its settlement currency (CLP) at the rate of
+        their FX fixing dates. A deliverable swap has no such leg.
 
         Parameters
         ----------

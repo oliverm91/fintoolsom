@@ -49,19 +49,32 @@ class InstrumentQuote(ABC):
 _NOTIONAL = 100.0
 
 
-def _check_settlement(is_deliverable: bool, payment_currency: Currency | None) -> None:
+def _check_settlement(
+    is_deliverable: bool,
+    payment_currency: Currency | None,
+    leg_currencies: tuple[Currency, Currency],
+) -> None:
     """Validate a cross-currency quote's settlement, as :class:`Swap` does.
 
     Raises
     ------
     ValueError
-        If a deliverable quote has a `payment_currency`, or a non-deliverable one
-        has none.
+        If a deliverable quote has a `payment_currency` or a leg in a currency
+        that cannot be delivered (the UF, ``CLF``), or a non-deliverable one has
+        no `payment_currency`.
     """
     if is_deliverable and payment_currency is not None:
         raise ValueError(
             "A deliverable cross-currency quote must not set payment_currency."
         )
+    if is_deliverable:
+        for ccy in leg_currencies:
+            if not ccy.is_deliverable:
+                raise ValueError(
+                    f"{ccy} cannot be delivered; a cross-currency quote with a {ccy} "
+                    f"leg must be non-deliverable, with payment_currency="
+                    f"{ccy.settlement_currency}."
+                )
     if not is_deliverable and payment_currency is None:
         raise ValueError(
             "A non-deliverable cross-currency quote needs a payment_currency."
@@ -564,7 +577,11 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
             raise ValueError(
                 "CrossCurrencyFixedFloat requires legs in different currencies."
             )
-        _check_settlement(self.is_deliverable, self.payment_currency)
+        _check_settlement(
+            self.is_deliverable,
+            self.payment_currency,
+            (self.fixed_leg.currency, self.floating_leg.currency),
+        )
 
     def get_instrument(self) -> Swap:
         from ..derivatives.swaps.swaps import Swap
@@ -673,7 +690,11 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
             raise ValueError(
                 "CrossCurrencyFloatFloat requires legs in different currencies."
             )
-        _check_settlement(self.is_deliverable, self.payment_currency)
+        _check_settlement(
+            self.is_deliverable,
+            self.payment_currency,
+            (self.receive_leg.currency, self.pay_leg.currency),
+        )
 
     def get_instrument(self, market=None) -> Swap:
         from ..derivatives.swaps.swaps import Swap

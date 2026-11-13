@@ -259,7 +259,9 @@ def swap_cases() -> list[SwapCase]:
     for swap_type, receive, pay in _leg_pairs():
         has_float = receive.is_floating or pay.is_floating
         spreads = (False, True) if has_float else (False,)
-        settlements = (False,) if swap_type == "irs" else (True, False)
+        # The UF cannot be delivered: a CCS with a UF leg is non-deliverable only.
+        uses_uf = Ccy.UF in (receive.ccy, pay.ccy)
+        settlements = (False,) if swap_type == "irs" or uses_uf else (True, False)
         for status, with_spread, collateral, deliverable in product(
             SwapStatus, spreads, COLLATERAL_INDEXES, settlements
         ):
