@@ -8,7 +8,7 @@ import numpy as np
 
 from ..swaps.legs import FixedLeg, TermRateLeg
 from ..swaps.swaps import LegSide
-from ._fx import _convert, _fx_fixings_at_ordinals
+from ...market.currencies import CurrencyPair
 
 if TYPE_CHECKING:
     from ...market import Market
@@ -199,11 +199,9 @@ def _leg_pv_non_deliverable(
     future_payment, flows = _leg_flows(leg, market)
     if not future_payment.any():
         return 0.0
-    fx = _fx_fixings_at_ordinals(
-        leg.currency,
-        settlement_currency,
+    fx = market._future_fx_rates_at_ordinals(
+        CurrencyPair(leg.currency, settlement_currency),
         leg._fx_fixing_ordinals[future_payment],
-        market,
     )
     dfs = market._dfs_at_ordinals(
         settlement_currency,
@@ -267,4 +265,4 @@ def get_leg_pv(swap: Swap, side: LegSide, market: Market, currency: Currency) ->
     leg = swap.leg(side)
     settlement = swap.leg_settlement_currency(leg)
     pv = _leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
-    return _convert(pv, settlement, currency, market)
+    return market.convert_value_currency(pv, settlement, currency)

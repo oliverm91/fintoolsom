@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ._fx import _convert, get_fx_fixings
-
 if TYPE_CHECKING:
     from ...market import Market
     from ...market.currencies import Currency
@@ -50,7 +48,7 @@ def get_forward_mtm(
     strike_leg_vp = forward.strike * forward.notional * df_d
 
     mtm = forward.sign * (notional_leg_vp - strike_leg_vp)
-    return _convert(mtm, cp.quote_currency, currency, market)
+    return market.convert_value_currency(mtm, cp.quote_currency, currency)
 
 
 def get_ndf_mtm(
@@ -60,7 +58,8 @@ def get_ndf_mtm(
 ) -> float:
     """Non-deliverable FX forward mark-to-market.
 
-    The settlement FX at `fixing_date` comes from :func:`get_fx_fixings`
+    The settlement FX at `fixing_date` is the realised rate
+    (:meth:`Market.get_fx_rate`) once fixed, else :meth:`Market.get_future_fx_rate`
     (realised or already published, else projected on the funding curves,
     whatever the collateral) and the settlement amount is discounted from
     `payment_date` in the quote currency under the NDF's ``collateral_index``
@@ -84,11 +83,12 @@ def get_ndf_mtm(
     cp = ndf.currency_pair
     if ndf.payment_date <= market.t:
         return 0.0
-    s_t = get_fx_fixings(
-        cp.base_currency, cp.quote_currency, [ndf.fixing_date], market
-    )[0]
+    if ndf.fixing_date <= market.t:
+        s_t = market.get_fx_rate(ndf.fixing_date, cp).value
+    else:
+        s_t = market.get_future_fx_rate(ndf.fixing_date, cp).value
     fv = ndf.sign * ndf.notional * (s_t - ndf.strike)
     mtm = fv * market.get_df(
         cp.quote_currency, ndf.payment_date, collateral=ndf.collateral_index
     )
-    return _convert(mtm, cp.quote_currency, currency, market)
+    return market.convert_value_currency(mtm, cp.quote_currency, currency)

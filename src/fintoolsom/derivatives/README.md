@@ -42,9 +42,10 @@ pricer and reports the result in `currency`, converted at spot.
   `KeyError`.
 
 **Settlement.** `Swap.leg_settlement_currency(leg)` is the leg's own currency for
-a deliverable swap and `payment_currency` for a non-deliverable one. A UF (`CLF`)
-leg always settles in CLP, at the UF of each flow's FX fixing date. Every flow
-paid in another currency is converted at its FX fixing:
+a deliverable swap and `payment_currency` for a non-deliverable one. A swap with
+a UF (`CLF`) leg cannot be deliverable: it settles in CLP, at the UF of each flow's
+FX fixing date. Every flow paid in another currency is converted at its FX fixing,
+`market.get_future_fx_rate(d, pair)`:
 
 ```
 FX(d) = FX(L) · [df_base(d) / df_base(L)] / [df_quote(d) / df_quote(L)]
@@ -52,6 +53,8 @@ FX(d) = FX(L) · [df_base(d) / df_base(L)] / [df_quote(d) / df_quote(L)]
 
 where `L = market.get_fx_known_until(pair)`: `t` for a traded pair, or the last
 published UF date for CLF/CLP. Fixings on or before `L` are read from the history.
+`market.convert_value_currency` (spot) and `market.convert_future_value_currency`
+(the FX fixing of a date) convert amounts without building a `CurrencyPair`.
 
 Every coupon's amortization is paid with that coupon, so a bullet leg only repays
 its notional at the end and an amortizing leg repays it along the way. There is no

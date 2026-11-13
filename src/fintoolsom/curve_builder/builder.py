@@ -332,7 +332,7 @@ def _forward_notional(forward: Forward, market: Market, currency: Currency) -> f
     return abs(
         amount
         if ccy == currency
-        else Calculator._convert(amount, ccy, currency, market)
+        else market.convert_value_currency(amount, ccy, currency)
     )
 
 

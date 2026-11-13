@@ -1,8 +1,12 @@
 from datetime import date
+
+import pytest
+
 from fintoolsom.derivatives.forwards.forwards import Forward, NDF
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
+from tests.factories.swap_factory import build_market
 from tests.factories.curve_factory import (
     index_curve_from_zero_coupon_curve,
     discount_curve_from_zero_coupon_curve,
@@ -91,3 +95,18 @@ def test_ndf_mtm_matches_forward_when_fixing_equals_payment(
     forward_mtm = Calculator.get_forward_mtm(forward, market, Currency.CLP)
     ndf_mtm = Calculator.get_ndf_mtm(ndf, market, Currency.CLP)
     assert ndf_mtm == forward_mtm
+
+
+@pytest.mark.parametrize(
+    "fixing_date", [date(2024, 7, 1), date(2024, 7, 8)], ids=["past", "today"]
+)
+def test_ndf_fixed_but_unpaid_settles_at_the_realised_fixing(fixing_date):
+    # get_future_fx_rate only takes dates after market.t: a fixed NDF reads the history.
+    market = build_market()
+    payment = date(2025, 7, 10)
+    ndf = NDF(1e6, 900.0, payment, True, USDCLP, fixing_date=fixing_date)
+    realised = market.get_fx_rate(fixing_date, USDCLP).value
+    expected = 1e6 * (realised - 900.0) * market.get_df(Currency.CLP, payment)
+    assert Calculator.valuate(ndf, market, Currency.CLP) == pytest.approx(
+        expected, rel=1e-14
+    )

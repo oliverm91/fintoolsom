@@ -12,7 +12,7 @@ pricing (`derivatives`) and curve building (`curve_builder`) read from.
 | `localities.py` | `Locality`: the country whose calendar a currency uses |
 | `index.py` | Index definitions: `OvernightRateIndex` (SOFR), `TermRateIndex` (Term SOFR, TAB), `OvernightInterestPriceIndex` (ICP) |
 | `index_history.py` | Fixings: `OvernightRateHistory`, `TermRateHistory`, `OvernightInterestPriceHistory` (levels, gaps filled geometrically) |
-| `market.py` | `Market`: date `t`, FX, index histories, `risk_free_index`, curves, volatility surfaces |
+| `market.py` | `Market`: date `t`, FX (history, projected fixings `get_future_fx_rate`, currency conversion), index histories, `risk_free_index`, curves, volatility surfaces |
 | `quotes.py` | Quotes that build their instrument: FX forwards (price or points), IRS/OIS, basis, cross-currency swaps |
 | `conventions.py` | `FixedLegSpec`, `FloatingLegSpec`, `PaymentFrequency`: leg structure used by quotes |
 | `uf.py` | UF (`CLF`) mechanics: publication calendar, CPI reajuste, `uf_rate_data(levels)` |

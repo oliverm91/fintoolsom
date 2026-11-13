@@ -471,3 +471,107 @@ class Market:
         if currency_pair in self.fx_history:
             return self.fx_history[currency_pair].get_fx_rate(t)
         raise KeyError(f"No {currency_pair} data loaded in market.")
+
+    def get_future_fx_rate(self, t: date, currency_pair: CurrencyPair) -> FX_Rate:
+        """FX rate of `currency_pair` fixing at `t`: known, or projected on the curves.
+
+        Let ``L = get_fx_known_until(currency_pair)``: :attr:`t` for a traded
+        pair, the last published date for a pair priced by an index known ahead
+        of time (the UF, up to the 9th of next month once CPI is out). A fixing
+        on or before ``L`` is the loaded rate (:meth:`get_fx_rate`); a later one
+        is projected from the rate at ``L`` with forward discount factors on the
+        funding curves (:meth:`get_discount_curve`)::
+
+            FX(t) = FX(L) * [df_base(t) / df_base(L)] / [df_quote(t) / df_quote(L)]
+
+        which is ``spot * df_base(t) / df_quote(t)`` when ``L = self.t``. Under a
+        common CSA the collateral adjustment of both currencies cancels in this
+        ratio, so the funding curves are used regardless of collateral.
+
+        Parameters
+        ----------
+        t : date
+            Fixing date, after :attr:`t`; use :meth:`get_fx_rate` for earlier ones.
+        currency_pair : CurrencyPair
+            Pair to project.
+
+        Returns
+        -------
+        FX_Rate
+
+        Raises
+        ------
+        ValueError
+            If `t` is not after :attr:`t`.
+        KeyError
+            If a known fixing, the rate at ``L`` or a funding curve is not loaded.
+        """
+        if t <= self.t:
+            raise ValueError(
+                f"get_future_fx_rate needs a date after the market date {self.t}; "
+                f"got {t}. Use get_fx_rate for known rates."
+            )
+        if t <= self.get_fx_known_until(currency_pair):
+            return self.get_fx_rate(t, currency_pair)
+        rate = self._future_fx_rates_at_ordinals(
+            currency_pair, np.array([t.toordinal()])
+        )[0]
+        return FX_Rate(currency_pair, float(rate))
+
+    def _future_fx_rates_at_ordinals(
+        self, currency_pair: CurrencyPair, ordinals: np.ndarray
+    ) -> np.ndarray:
+        """:meth:`get_future_fx_rate` values for dates held as integer ordinals.
+
+        Unlike :meth:`get_future_fx_rate`, dates on or before :attr:`t` are allowed
+        and read the history (a fixed but unpaid swap flow).
+        """
+        base, quote = currency_pair.base_currency, currency_pair.quote_currency
+        if base == quote:
+            return np.ones(len(ordinals))
+        known_until = self.get_fx_known_until(currency_pair)
+        last_known = known_until.toordinal()
+        known = ordinals <= last_known
+        fx = np.empty(len(ordinals))
+        for i in np.where(known)[0]:
+            fx[i] = self.get_fx_rate(
+                date.fromordinal(int(ordinals[i])), currency_pair
+            ).value
+        if (~known).any():
+            anchor = self.get_fx_rate(known_until, currency_pair).value
+            nodes = np.concatenate(([last_known], ordinals[~known]))
+            df_base = self.get_discount_curve(base)._dfs_at_ordinals(nodes)
+            df_quote = self.get_discount_curve(quote)._dfs_at_ordinals(nodes)
+            fx[~known] = (
+                anchor * (df_base[1:] / df_base[0]) / (df_quote[1:] / df_quote[0])
+            )
+        return fx
+
+    def convert_value_currency(
+        self, value: float, from_currency: Currency, to_currency: Currency
+    ) -> float:
+        """`value` in `from_currency` converted to `to_currency` at spot (:attr:`t`).
+
+        Raises
+        ------
+        KeyError
+            If the pair has no rate loaded at :attr:`t`.
+        """
+        pair = CurrencyPair(from_currency, to_currency)
+        return value * self.get_fx_rate(self.t, pair).value
+
+    def convert_future_value_currency(
+        self, value: float, from_currency: Currency, to_currency: Currency, t: date
+    ) -> float:
+        """`value` in `from_currency` at `t` converted to `to_currency` at the FX
+        fixing of `t` (:meth:`get_future_fx_rate`).
+
+        Raises
+        ------
+        ValueError
+            If `t` is not after :attr:`t`.
+        KeyError
+            As :meth:`get_future_fx_rate`.
+        """
+        pair = CurrencyPair(from_currency, to_currency)
+        return value * self.get_future_fx_rate(t, pair).value
