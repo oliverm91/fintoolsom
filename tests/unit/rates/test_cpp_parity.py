@@ -177,3 +177,16 @@ def test_curve_building_matches(method):
         assert other._core is not None
         _same(curve.forward_rates, other.forward_rates)
         _same(curve._grid, other._grid)
+
+
+@params
+@pytest.mark.parametrize("precalculate", [False, True])
+def test_copies_and_pickles_keep_the_core(kind, method, forwards, precalculate):
+    import copy
+    import pickle
+
+    _, cpp = _pair(kind, method, forwards, precalculate)
+    for clone in (copy.deepcopy(cpp), pickle.loads(pickle.dumps(cpp))):
+        assert clone._core is not None
+        assert (clone._grid is None) is (cpp._grid is None)
+        np.testing.assert_array_equal(clone._dfs_at_days(DAYS), cpp._dfs_at_days(DAYS))

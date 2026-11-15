@@ -46,9 +46,9 @@ def test_unknown_names_raise(call):
         call()
 
 
-@pytest.mark.parametrize(
-    "subpackage", sorted(set(settings.SUBPACKAGES) - settings.PORTED)
-)
-def test_cpp_on_a_subpackage_not_ported_raises(subpackage):
+@pytest.mark.parametrize("subpackage", settings.SUBPACKAGES)
+def test_cpp_on_a_subpackage_not_ported_raises(subpackage, monkeypatch):
+    # Every subpackage is ported today: pretend this one is not.
+    monkeypatch.setattr(settings, "PORTED", settings.PORTED - {subpackage})
     with pytest.raises(ValueError, match="has no C"):
         settings.set_backend("cpp", subpackage)

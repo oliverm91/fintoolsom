@@ -5,8 +5,13 @@ have a C++ one, in the compiled extension ``fintoolsom._native``; both give the 
 results, so switching only changes speed. Use the Python one to step through a
 calculation in a debugger.
 
-The backend is read when an object is created: a curve built under ``"cpp"`` keeps its
-C++ core after the setting changes.
+What each backend covers:
+
+- ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``).
+- ``"derivatives"``: swap valuation arithmetic (leg PVs and flows).
+
+The backend is read when an object is created: a curve or leg built under ``"cpp"``
+keeps its C++ core after the setting changes.
 
 Set it from the environment before importing fintoolsom::
 
@@ -35,7 +40,7 @@ Backend = Literal["python", "cpp"]
 BACKENDS: tuple[str, ...] = ("python", "cpp")
 SUBPACKAGES: tuple[str, ...] = ("rates", "market", "derivatives")
 # Subpackages with a C++ implementation.
-PORTED: frozenset[str] = frozenset({"rates"})
+PORTED: frozenset[str] = frozenset({"rates", "derivatives"})
 
 DEFAULT_BACKEND: Backend = "python"
 

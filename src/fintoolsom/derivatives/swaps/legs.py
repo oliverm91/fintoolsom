@@ -3,10 +3,11 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from datetime import date
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 
+from fintoolsom import settings
 from fintoolsom.rates.Rates import Rate, RateConvention
 
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
@@ -71,7 +72,14 @@ class SwapLeg:
     _end_ordinals: np.ndarray = field(init=False, repr=False)
     _fx_fixing_ordinals: np.ndarray = field(init=False, repr=False)
 
+    # C++ backend (fintoolsom.settings, "derivatives"), read at construction. The
+    # leg's fintoolsom._native.SwapLegCore is built on its first valuation.
+    _native: bool = field(init=False, repr=False, compare=False)
+    _core: Any = field(init=False, default=None, repr=False, compare=False)
+
     def __post_init__(self):
+        self._native = settings.get_backend("derivatives") == "cpp"
+        self._core = None
         self.residuals = np.array([c.residual for c in self.coupons])
         self.amortizations = np.array([c.amortization for c in self.coupons])
         self.start_dates = [c.start_date for c in self.coupons]
@@ -89,6 +97,10 @@ class SwapLeg:
                 "Coupons must be in schedule order: start and payment dates "
                 "non-decreasing."
             )
+
+    def __getstate__(self) -> dict:
+        # The C++ core is not picklable; a copy rebuilds it on its first valuation.
+        return {**self.__dict__, "_core": None}
 
     @property
     def n_coupons(self) -> int:

@@ -144,6 +144,25 @@ class PillarCurve(DailyGridCurve):
             self._spot_fallback(),
         )
 
+    def __getstate__(self) -> dict:
+        # The C++ core is not picklable: drop it (and its grid) and rebuild on loading.
+        state = dict(self.__dict__)
+        if state.get("_core") is not None:
+            state["_core"] = None
+            state["_rebuild_grid"] = state.get("_grid") is not None
+            state["_grid"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        state = dict(state)
+        rebuild_grid = state.pop("_rebuild_grid", None)
+        for name, value in state.items():
+            setattr(self, name, value)
+        if rebuild_grid is not None:
+            self._core = self._build_core()
+            if rebuild_grid:
+                self._grid = self._core.precalculate(self._grid_horizon)
+
     def _spot_dfs(self) -> np.ndarray:
         """Dfs of days ``[0, first knot)`` when a spot segment overrides the formula."""
         return _NO_SPOT

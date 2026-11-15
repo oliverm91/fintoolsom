@@ -65,6 +65,8 @@ def _leg_flows(leg, market: Market) -> tuple[np.ndarray, np.ndarray]:
     KeyError
         If a realised fixing is needed and is missing from the index history.
     """
+    if leg._native:
+        return _cpp.leg_flows(leg, market)
     t = market.t.toordinal()
     future_payment = leg._payment_ordinals > t
     if not future_payment.any():
@@ -184,6 +186,8 @@ def _leg_pv(leg, collateral, market: Market) -> float:
     float
         PV in the leg currency.
     """
+    if leg._native:
+        return _cpp.leg_pv(leg, collateral, market)
     if (
         isinstance(leg, FloatingLeg)
         and leg._par_eligible
@@ -274,6 +278,8 @@ def _leg_pv_non_deliverable(
     float
         PV in `settlement_currency`.
     """
+    if leg._native and leg.currency != settlement_currency:
+        return _cpp.leg_pv_non_deliverable(leg, collateral, market, settlement_currency)
     if leg.currency == settlement_currency:
         return _leg_pv(leg, collateral, market)
     future_payment, flows = _leg_flows(leg, market)
@@ -347,3 +353,6 @@ def get_leg_pv(swap: Swap, side: LegSide, market: Market, currency: Currency) ->
     pv = _leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
     return market.convert_value_currency(pv, settlement, currency)
 
+
+# Imported last: it reads this module's helpers.
+from . import _native_swap_pv as _cpp  # noqa: E402

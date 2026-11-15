@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 
 from ..swaps.legs import FixedLeg
+from . import _native_swap_pv as _cpp
 from ._swap_pv import (
     _discounted_on_index_curve,
     _flows_pv,
@@ -66,6 +67,8 @@ def get_simplified_swap_mtm(
 def _simplified_leg_pv(leg, collateral, market: Market) -> float:
     """PV of a simplified leg in its own currency: at par when it is floating,
     discounted on its index curve and not yet realised; else its unpaid flows."""
+    if leg._native:
+        return _cpp.leg_pv(leg, collateral, market, assume_par=True)
     if (
         not isinstance(leg, FixedLeg)
         and _nothing_realised(leg, market.t.toordinal())
@@ -81,6 +84,8 @@ def _non_started_leg_pv(leg, collateral, market: Market) -> float:
     A floating leg projects every coupon over ``[start, end]`` on its index curve,
     or is valued at par when that curve also discounts it.
     """
+    if leg._native:
+        return _cpp.non_started_leg_pv(leg, collateral, market)
     if isinstance(leg, FixedLeg):
         flows = leg.flows
     elif _discounted_on_index_curve(leg, collateral, market):
