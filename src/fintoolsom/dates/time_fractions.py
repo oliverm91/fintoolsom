@@ -3,12 +3,36 @@ import calendar
 from dataclasses import dataclass
 from datetime import date
 
+from .. import settings
+
 
 @dataclass
 class TimeFractionBase(ABC):
     @abstractmethod
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
         pass
+
+    def _native(
+        self, start_date, end_date, frequency=0, period_start=None, period_end=None
+    ) -> float | None:
+        """The factor from ``fintoolsom._native.time_fraction``, or None to compute it
+        in Python: the ``"python"`` backend of ``"dates"``, dates that aren't ``date``
+        (or None for the periods), a frequency that isn't an int, a subclass."""
+        if not settings.is_cpp("dates"):
+            return None
+        kind = _KINDS.get(type(self))
+        if (
+            kind is None
+            or type(start_date) is not date
+            or type(end_date) is not date
+            or type(frequency) is not int
+            or (period_start is not None and type(period_start) is not date)
+            or (period_end is not None and type(period_end) is not date)
+        ):
+            return None
+        return settings.native().time_fraction(
+            kind, start_date, end_date, frequency, period_start, period_end
+        )
 
     def get_coupon_factor(self, start_date: date, end_date: date) -> float:
         return self.get_day_count_factor(start_date, end_date)
@@ -17,6 +41,8 @@ class TimeFractionBase(ABC):
 @dataclass
 class TF_30_360Base(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         m1, m2, y1, y2 = (
             start_date.month,
             end_date.month,
@@ -101,30 +127,40 @@ class TF_30E_360ISDA(TF_30_360Base):
 @dataclass
 class TF_Actual365(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (end_date - start_date).days / 365
 
 
 @dataclass
 class TF_Actual360(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (end_date - start_date).days / 360
 
 
 @dataclass
 class TF_Actual364(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (end_date - start_date).days / 364
 
 
 @dataclass
 class TF_Actual30(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (end_date - start_date).days / 30
 
 
 @dataclass
 class TF_Actual360_25(TimeFractionBase):
     def get_day_count_factor(self, start_date: date, end_date: date) -> float:
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (end_date - start_date).days / 365.25
 
 
@@ -141,6 +177,8 @@ class TF_Actual365_Long(TimeFractionBase):
         The first day in the period is excluded, the last day is included.
         If the frequency is not annual, the denominator is 366 if the period end date is in a leap year, if not it is 365.
         """
+        if (factor := self._native(start_date, end_date, frequency)) is not None:
+            return factor
         numerator = (end_date - start_date).days
 
         if frequency == 1:
@@ -160,6 +198,8 @@ class TF_NL_360(TimeFractionBase):
         The denominator is always 360.
         The first day in the period is excluded, the last day is included.
         """
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (
             (end_date - start_date).days - _feb_29_count(start_date, end_date)
         ) / 360
@@ -175,6 +215,8 @@ class TF_NL_365(TimeFractionBase):
         The denominator is always 365.
         The first day in the period is excluded, the last day is included.
         """
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         return (
             (end_date - start_date).days - _feb_29_count(start_date, end_date)
         ) / 365
@@ -192,6 +234,8 @@ class TF_ActualActualISDA(TimeFractionBase):
         Compounding Period falling in a leap year divided by 366 and (ii) the actual number of days in that
         portion of the Calculation Period or Compounding Period falling in a non-leap year divided by 365)
         """
+        if (factor := self._native(start_date, end_date)) is not None:
+            return factor
         t = start_date
         time_factor = 0.0
         while t < end_date:
@@ -229,6 +273,12 @@ class TF_ActualActualICMA(TimeFractionBase):
         exactly ``1 / frequency``). Frequency is 1 for annual payments, 2 for
         semi-annual, 4 for quarterly...
         """
+        if (
+            factor := self._native(
+                start_date, end_date, frequency, period_start, period_end
+            )
+        ) is not None:
+            return factor
         period_start = start_date if period_start is None else period_start
         period_end = end_date if period_end is None else period_end
         return (end_date - start_date).days / (
@@ -243,3 +293,21 @@ def _feb_29_count(start_date: date, end_date: date) -> int:
         for year in range(start_date.year, end_date.year + 1)
         if calendar.isleap(year) and start_date < date(year, 2, 29) <= end_date
     )
+
+
+# The kinds of fintoolsom._native.time_fraction, by class (subclasses stay in Python).
+_KINDS: dict[type, int] = {
+    TF_30_360BondBasis: 0,
+    TF_30E_360: 1,
+    TF_30E_360ISDA: 2,
+    TF_Actual365: 3,
+    TF_Actual360: 4,
+    TF_Actual364: 5,
+    TF_Actual30: 6,
+    TF_Actual360_25: 7,
+    TF_Actual365_Long: 8,
+    TF_NL_360: 9,
+    TF_NL_365: 10,
+    TF_ActualActualISDA: 11,
+    TF_ActualActualICMA: 12,
+}

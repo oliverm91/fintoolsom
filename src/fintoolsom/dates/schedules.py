@@ -1,10 +1,16 @@
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
-from .calendars import get_calendar
-from .adjustments import AdjustmentDateConventionBase, ModifiedFollowingConvention
+from .. import settings
+from .calendars import Calendar, get_calendar
+from .adjustments import (
+    _KINDS as _ADJUSTMENT_KINDS,
+    AdjustmentDateConventionBase,
+    ModifiedFollowingConvention,
+)
 
 _def_cal = get_calendar()
 _def_adj_conv = ModifiedFollowingConvention(_def_cal)
@@ -65,11 +71,30 @@ class Tenor:
     def get_unadjusted_maturity(
         self, t: date, forward: bool = True, periods: int = 1
     ) -> date:
+        if type(periods) is int and (core := self._native_core(t)) is not None:
+            return core.shift(
+                self.tenor_unit, self.tenor_value, t, bool(forward), periods
+            )
         return self._get_umaturity_func(t, forward=forward, periods=periods)
 
     def get_adjusted_maturity(self, t: date, forward: bool = True) -> date:
+        kind = _ADJUSTMENT_KINDS.get(type(self.adj_conv))
+        if kind is not None and (core := self._native_core(t)) is not None:
+            return core.advance(
+                kind, self.tenor_unit, self.tenor_value, t, bool(forward)
+            )
         u_mat = self.get_unadjusted_maturity(t, forward=forward)
         return self.adj_conv.adjust(u_mat)
+
+    def _native_core(self, t):
+        """The C++ core of the convention's calendar, or None to stay in Python: the
+        ``"python"`` backend of ``"dates"``, a `t` that isn't a ``date``, a calendar
+        subclass."""
+        if settings.is_cpp("dates") and type(t) is date:
+            calendar = getattr(self.adj_conv, "calendar", None)
+            if type(calendar) is Calendar:
+                return calendar._native_core()
+        return None
 
 
 @dataclass
@@ -91,6 +116,19 @@ class ScheduleGenerator:
             raise ValueError(
                 f"Frequency tenor accepted values are: {accepted_frequency_tenors}."
             )
+        if settings.get_backend("dates") == "cpp":
+            schedule = _native_schedule(
+                start_date,
+                maturity_tenor,
+                frequency_tenor,
+                adj_conv,
+                maturity_adj_conv,
+                end_date,
+                stub_first,
+                long_stub,
+            )
+            if schedule is not None:
+                return schedule
         freq_tenor = Tenor(frequency_tenor, adj_conv)
         if maturity_adj_conv is None:
             maturity_adj_conv = adj_conv
@@ -170,3 +208,65 @@ class ScheduleGenerator:
         adj_schedule.append(adj_mat)
 
         return adj_schedule
+
+
+_PLAIN_TENOR = re.compile(r"[0-9]+[dDwWmMyY]")
+
+
+def _plain_tenor(tenor) -> tuple[str, int] | None:
+    """``(unit, value)`` of a tenor such as ``"3M"``, as :class:`Tenor` reads it; None
+    for anything else, which :class:`Tenor` handles (or rejects) in Python."""
+    if type(tenor) is not str or not _PLAIN_TENOR.fullmatch(tenor):
+        return None
+    return tenor[-1].lower(), int(tenor[:-1])
+
+
+def _native_schedule(
+    start_date,
+    maturity_tenor,
+    frequency_tenor,
+    adj_conv,
+    maturity_adj_conv,
+    end_date,
+    stub_first,
+    long_stub,
+) -> list[date] | None:
+    """:meth:`ScheduleGenerator.generate_schedule` in C++, the same dates; None when the
+    inputs are not plain (dates that are not ``date``, a tenor that is not
+    ``<n><unit>``, a zero frequency, a convention subclass) or rolling never reaches
+    the end, for the Python code to handle them and raise its errors."""
+    if maturity_adj_conv is None:
+        maturity_adj_conv = adj_conv
+    kind = _ADJUSTMENT_KINDS.get(type(adj_conv))
+    maturity_kind = _ADJUSTMENT_KINDS.get(type(maturity_adj_conv))
+    frequency = _plain_tenor(frequency_tenor)
+    if (
+        kind is None
+        or maturity_kind is None
+        or type(adj_conv.calendar) is not Calendar
+        or type(maturity_adj_conv.calendar) is not Calendar
+        or frequency is None
+        or frequency[1] == 0
+        or type(start_date) is not date
+        or (end_date is not None and type(end_date) is not date)
+    ):
+        return None
+    maturity = None
+    if end_date is None or maturity_tenor:
+        maturity = _plain_tenor(maturity_tenor)
+        if maturity is None:
+            return None
+    return settings.native().generate_schedule(
+        start_date,
+        None if maturity is None else maturity[0],
+        0 if maturity is None else maturity[1],
+        frequency[0],
+        frequency[1],
+        kind,
+        adj_conv.calendar._native_core(),
+        maturity_kind,
+        maturity_adj_conv.calendar._native_core(),
+        end_date,
+        bool(stub_first),
+        bool(long_stub),
+    )

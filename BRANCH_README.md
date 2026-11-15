@@ -1,10 +1,21 @@
 # Branch `cpp-backend`: C++ kernels for fintoolsom
 
 This branch adds a C++23 implementation of fintoolsom's numerical cores, bound to
-Python with [nanobind](https://github.com/wjakob/nanobind). The plan covers `rates`
-(curves), `market`, and `derivatives`. **Only the `rates` curves are ported so far**
-(the `PillarCurve` family: `IndexCurve` and `DiscountCurve`). The Python code stays the
-reference, and each port must give the same results.
+Python with [nanobind](https://github.com/wjakob/nanobind). **Ported:**
+
+- `rates`: the curves (the `PillarCurve` family: `IndexCurve` and `DiscountCurve`).
+- `derivatives`: swap valuation (`Swap`, `SimplifiedSwap`, `NonStartedSimplifiedSwap`:
+  leg PVs, leg flows, the par shortcut, non-deliverable FX), FX forwards and NDFs
+  (MtM, projected settlement FX) and options (Garman-Kohlhagen price and greeks,
+  strike from delta).
+- `market`: the lookups of a valuation (curves, FX rates, FX known-until), done in C++
+  on the Python `Market` containers, so a swap or forward is valued in one C++ call.
+- `dates`: calendars (`is_holiday`, `add_business_days`), the business-day conventions,
+  `Tenor`, `Term`, schedule generation, day counts, time fractions, `date_ordinals` and,
+  through the calendars, the CPI/UF dates. The holiday rules (`HolidayRule`) stay
+  Python: they only feed holidays into the `holidays` objects.
+
+The Python code stays the reference, and each port must give the same results.
 
 ## Layout
 
@@ -15,9 +26,25 @@ reference, and each port must give the same results.
 | `cpp/src/curves/pillar_curve.*` | `PillarCurveCore`: day offsets to discount factors, and the daily grid. |
 | `cpp/src/curves/fits.*` | Ports of the scipy fits the Python curves use (CubicSpline natural, PCHIP, the `k=1` B-spline antiderivative, convex monotone). |
 | `cpp/src/curves/piecewise_poly.hpp` | Piecewise polynomial evaluated as scipy `PPoly` does. |
+| `cpp/src/swaps/swap_leg.*` | `SwapLegCore`: a leg's coupons as flat arrays and its valuation arithmetic; `fsum`, CPython's `math.fsum`. |
+| `cpp/src/bind_swaps.cpp`, `cpp/src/py_curve.hpp` | Bindings of `SwapLegCore`; discount factors read from a curve's C++ core, or from Python. |
+| `src/fintoolsom/derivatives/calculator/_native_swap_pv.py` | The Python side of the C++ swap valuation: market lookups and realised fixings. |
+| `cpp/src/fx/fx_derivatives.hpp`, `cpp/src/bind_fx.cpp` | Forward, NDF and option kernels and their bindings. |
+| `cpp/src/fx/special.hpp` | `ndtr` (libm `erfc`) and `ndtri` (Cephes), as `_normal.py` computes them. |
+| `cpp/src/discount.hpp` | `DfSource` and `Discount` (`a`, or `a * b / c`), shared by swaps and FX. |
+| `src/fintoolsom/derivatives/calculator/_native_fx.py` | The Python side of the C++ FX valuation: spot, fixings, curves, surface, conventions. |
+| `src/fintoolsom/derivatives/calculator/_normal.py` | Pure-Python normal cdf and inverse, the reference for both backends. |
+| `cpp/src/bind_market.cpp` | `MarketView`: the Market lookups through the C API, and whole swap / simplified swap / forward / NDF valuations. |
+| `cpp/src/dates/schedule.hpp`, `cpp/src/bind_dates.cpp` | `CalendarCore` (a calendar's days, loaded from Python in one call), the adjustment conventions, `Tenor` and `generate_schedule`. |
+| `cpp/src/dates/day_counts.hpp` | Day counts and time fractions. |
 | `cpp/benchmarks/bench_curves.py` | Python vs C++ benchmarks (below). |
 | `src/fintoolsom/settings.py` | Chooses the backend per subpackage. |
-| `tests/unit/rates/test_cpp_parity.py` | Parity of both backends. |
+| `tests/unit/rates/test_cpp_parity.py` | Parity of both curve backends. |
+| `tests/unit/derivatives/test_cpp_swap_parity.py` | Parity of both swap valuation backends. |
+| `tests/unit/derivatives/test_cpp_fx_parity.py` | Parity of both forward, NDF and option backends. |
+| `tests/unit/market/test_cpp_market_parity.py` | Parity of whole valuations on Python and C++ markets, errors included. |
+| `tests/unit/dates/test_cpp_schedule_parity.py` | Parity of calendars, conventions and schedules. |
+| `tests/unit/dates/test_cpp_dates_parity.py` | Parity of day counts, time fractions, ordinals, tenors, terms and CPI/UF dates; the one-call holiday load. |
 | `tests/unit/test_settings.py` | The settings module. |
 
 ## Building
@@ -53,7 +80,7 @@ compiler. `ci.yml` now also runs on macOS and runs the suite a second time with
 ```python
 from fintoolsom import settings
 
-settings.set_backend("cpp")              # every ported subpackage (rates)
+settings.set_backend("cpp")              # every subpackage (dates, rates, market, derivatives)
 settings.set_backend("python", "rates")  # one subpackage
 with settings.use_backend("python"):     # temporarily, e.g. to debug a build
     ...
@@ -69,7 +96,17 @@ The default is `python`. Asking for `cpp` on a subpackage that isn't ported yet 
 
 An object reads the backend when it is created. A curve built under `cpp` keeps its C++
 core, and a curve derived from it (copy, bump, aged) reads the setting that is current
-when the derived curve is made.
+when the derived curve is made. A swap leg reads the `derivatives` setting the same
+way. Curves and legs with a C++ core can be copied and pickled: the core is rebuilt
+on loading.
+
+The settings are independent, and any combination gives the same results. The fast
+one is `cpp` for all. With C++ swaps on Python curves (`rates=python`,
+`derivatives=cpp`), the C++ code reads every discount factor through the curve's Python
+`_dfs_at_ordinals`: no faster than Python, so use it only to debug one side. A `Market`
+reads the `market` setting when created; its lookups run in C++ only for an
+instrument with a C++ core (`derivatives=cpp`), since Python arithmetic does its own
+lookups. Everything in `dates` reads its setting when called.
 
 ## How a curve uses the C++ core
 
@@ -88,6 +125,87 @@ Dates, validation, ids, and the curve API stay in Python.
 precomputed table. Negative days on a curve with a spot rate need the spot rate's own
 day count, so the core sends them back to a small Python closure. That closure
 deliberately captures the rate and date, not the curve, to avoid reference cycles.
+
+## How a swap uses the C++ core
+
+A leg built under the `cpp` backend of `derivatives` gets a `SwapLegCore` on its first
+valuation. The core holds the leg's per-coupon data as contiguous arrays (start, end,
+payment and fixing ordinals, residuals, flows, spreads) plus the par flags.
+
+The calculator's functions stay the entry points:
+
+- `_leg_pv`, `_leg_pv_non_deliverable` and `_leg_flows`
+- `_simplified_leg_pv` and `_non_started_leg_pv`
+
+Each one routes a C++ leg to `_native_swap_pv`. That module does, in Python, what reads
+the market:
+
+- the projection and discount curves, looked up in the same order as the Python path,
+  so a missing curve raises the same error;
+- the realised fixings of started coupons (running overnight coupons, set term-rate
+  coupons), from the index history;
+- the known FX fixings of non-deliverable flows.
+
+C++ then does the rest in one call:
+
+- the projected accruals and flows;
+- the discount factors: `a`, or `a * b / c` for collateral in another currency;
+- the FX projection of later fixings on the funding curves;
+- the par shortcut;
+- the sums.
+
+When a curve has a C++ core, C++ reads its discount factors from the core, without
+going through Python.
+
+Curve building rarely touches the history. Its swaps haven't started, so their whole
+valuation runs in C++.
+
+## How forwards and options use the C++ core
+
+A `Forward`, `NDF`, `Call` or `Put` reads the `derivatives` backend when it is created
+(`_native`); `get_strike_from_delta` reads it when it is called. The calculator
+functions in `_forwards` and `_options` stay the entry points and route to
+`_native_fx`, which reads the market in Python in the same order as the Python path:
+
+- spot, the realised or published FX fixing of an NDF, and the reporting-currency rate;
+- the discount curves (`a`, or `a`, `b`, `c` for collateral in another currency), or
+  for an option the two funding curves, whose dfs feed the rate convention;
+- an option's volatility, from the pair's surface.
+
+C++ then computes the discount factors (from a curve's core when it has one), an NDF's
+settlement FX projected on the funding curves, and the price, greeks or strike.
+
+## How the market and the schedules use C++
+
+**Market.** The Python `Market` keeps its data: `curves`, `fx_history` and each
+`FX_RateData.historic_data` are plain dicts that callers (the curve builder, tests,
+users) mutate directly, so a C++ copy would go stale. `MarketView` reads them where
+they stand, through the C API: a dict lookup per curve or FX rate, an `isinstance`
+check for index curves, `CurrencyPair` keys cached per pair of currency names. Each
+lookup is the Python method's, in the same order and with the same errors (`KeyError`,
+`ValueError` and their messages). On a C++ market, `get_swap_mtm`, `get_leg_pv`, the
+simplified and non-started swap MtMs and the forward and NDF MtMs hand the whole
+valuation to C++: settlement currency, leg PVs, conversion at spot. Realised fixings
+of started coupons are still read in Python, through a callback.
+
+**Dates.** A `Calendar` gets a `CalendarCore` on first use. The core asks Python once
+for the flags of every day from 5 years before the first date it sees to 65 after:
+holiday of the `holidays` object, its weekend days (which can vary by date in
+`holidays`) and weekend working days, as one `bytes` built with numpy. A date outside
+that window extends it by at least 20 years, again in one call, so a typical session
+crosses into Python once per calendar. The neighbouring years are populated too, so an
+observed 31 December added with the next year is there. Populating the `holidays`
+object is the cost (about 1 ms a year for CL, 0.4 ms for GB, 2 ms for JP), paid once
+per calendar; the calendars are shared per country. `Calendar.is_holiday` (a holiday, or Saturday/Sunday) and
+`add_business_days` (`HolidayBase.get_nth_working_day`) are reproduced exactly, as are
+the four adjustment conventions and month arithmetic (`relativedelta`'s clamping to
+the month's end). `add_custom_holiday` drops the core. Day counts, time fractions and
+`date_ordinals` are integer arithmetic on ordinals with the Python divisions (the same
+doubles). Inputs off the plain path (`datetime`s or other non-`date` dates, a tenor that
+isn't `<n><unit>`, a zero frequency or base, a non-int frequency or period count, a
+subclassed convention, calendar, day count or time fraction, empty lists, a schedule
+that rolls past its iteration limit) go to the Python code, which then raises its own
+errors.
 
 ## Data layout
 
@@ -138,6 +256,28 @@ On Windows the two backends agree **to the bit** (0 ulps) for:
 The parity tests allow 4 ulps, because other platforms' libm `exp`/`log` may differ from
 the one numpy uses by an ulp.
 
+Swap valuation agrees **to the bit on every platform**. The parity test covers all 1,140
+factory swap cases on markets of Python curves and of C++ curves: leg PVs, swap MtMs,
+leg flows, and the simplified and non-started variants. The arithmetic is IEEE `+ * /`
+with no libm call.
+
+To make that possible, the Python reference sums PVs with `math.fsum` instead of
+`np.dot`/`np.sum`. BLAS kernels pick their own summation order and may use fused
+multiply-adds, so their result can't be reproduced. The correctly rounded sum is unique,
+and `fsum` in `swap_leg.cpp` is CPython's algorithm, special values included. The change
+moves Python PVs by at most an ulp and costs no measurable time.
+
+Forwards, NDFs and options also agree to the bit: 764 parity cases (forwards and NDFs
+over every collateral, fixing and payment date and reporting currency; option prices,
+greeks, log-moneyness and strikes over maturities, moneyness, vols and conventions;
+options valued from a surface). Here both sides call libm (`exp`, `log`, `sqrt`,
+`erfc`) through CPython's `math` and C++'s `<cmath>`, the same functions in-process.
+scipy's `ndtr` / `ndtri` could not be matched: its compiled Cephes kernels round
+differently from a strict-IEEE build of the same code (up to 3 ulps on Windows). The
+Python reference therefore uses `_normal.py`: `ndtr(x) = 0.5 * math.erfc(-x / sqrt(2))`
+and a pure-Python port of the Cephes `ndtri`, which C++ mirrors. Against scipy they
+differ by at most 6e-14 relative (ndtr, far tail) and 6e-16 (ndtri).
+
 ## Benchmarks
 
 The numbers below come from `uv run python cpp/benchmarks/bench_curves.py` on Windows
@@ -175,26 +315,107 @@ What the numbers show:
   breaks even.
 - `get_dfs` is dominated by converting dates to ordinals in Python.
 
+### Swap valuation
+
+Each figure is the median time of one `Calculator.valuate` call on a swap from the test
+factory, valued on its market. A "[NonStarted]" row is the same swap as a
+`NonStartedSimplifiedSwap`.
+
+| Swap | Python | C++ | Speed-up |
+|---|---:|---:|---:|
+| IRS USD OIS, SOFR CSA (par) | 10.8 µs | 6.0 µs | 1.8× |
+| ↳ [NonStarted] | 5.9 µs | 4.0 µs | 1.5× |
+| IRS CLP ICP, uncollateralised (par) | 10.7 µs | 5.6 µs | 1.9× |
+| IRS CLP OIS, SOFR CSA (three-curve discount) | 26.1 µs | 8.7 µs | 3.0× |
+| ↳ [NonStarted] | 15.2 µs | 5.9 µs | 2.6× |
+| IRS USD OIS, started (realised fixings) | 27.9 µs | 14.1 µs | 2.0× |
+| CCS deliverable | 13.2 µs | 6.7 µs | 2.0× |
+| CCS non-deliverable | 55.2 µs | 23.1 µs | 2.4× |
+
+Both columns use C++ curves. The C++ arithmetic is now a small part of each call. What
+remains is the calculator's Python layers (swap, leg, settlement currency, conversion
+at spot) and the market lookups, about 2–3 µs per leg. Moving those layers into C++
+would mean porting `market`.
+
+### FX forwards, NDFs and options
+
+Median time of one call. "Call, from surface" is `Calculator.valuate` on a USD/CLP
+call, volatility read from a `VannaVolga` surface.
+
+| Instrument | Python curves: Python | C++ | C++ curves: Python | C++ | Speed-up |
+|---|---:|---:|---:|---:|---:|
+| Forward, uncollateralised | 8.9 µs | 9.7 µs | 5.4 µs | 3.2 µs | 1.7× |
+| Forward, SOFR CSA | 14.7 µs | 16.0 µs | 7.9 µs | 3.8 µs | 2.1× |
+| NDF, projected fixing | 40.3 µs | 24.8 µs | 35.4 µs | 14.5 µs | 2.4× |
+| Call, from surface | 54.7 µs | 52.4 µs | 53.1 µs | 51.8 µs | 1.0× |
+| Call delta | 4.1 µs | 2.5 µs | 4.2 µs | 2.6 µs | 1.6× |
+| Strike from 25 delta | 2.5 µs | 2.2 µs | 2.5 µs | 2.2 µs | 1.1× |
+
+The speed-up column is on C++ curves. On Python curves a C++ forward is slightly
+slower: its two or three discount factors come back through Python callbacks. An
+option's valuation is almost all volatility-surface interpolation, which is `market`
+and stays Python.
+
 ### Curve building
 
 The test builds every curve from `notebooks/quotes.json` with `build_curves`: 3
-warm-ups, then 10 timed builds, dropping the 2 slowest, reported as mean ± std. The two
-backends build identical curves (the largest relative df difference is 0).
+warm-ups, then 10 timed builds, dropping the 2 slowest, reported as mean ± std. It
+compares three configurations: all Python, C++ curves only, and C++ curves and swaps.
+All three build identical curves (the largest relative df difference is 0).
 
-| Interpolation | Python | C++ | Speed-up |
-|---|---:|---:|---:|
-| PiecewiseConstant | 62.9 ± 1.1 ms | 42.7 ± 1.1 ms | 1.47× |
-| CubicSpline | 359.7 ± 3.2 ms | 207.0 ± 1.3 ms | 1.74× |
-| ConvexMonotone | 391.2 ± 4.0 ms | 210.5 ± 3.3 ms | 1.86× |
+| Interpolation | Python | C++ curves | C++ curves + swaps | Speed-up |
+|---|---:|---:|---:|---:|
+| PiecewiseConstant | 60.4 ± 2.2 ms | 44.5 ± 1.1 ms | 37.9 ± 0.4 ms | 1.59× |
+| CubicSpline | 312.2 ± 3.1 ms | 172.1 ± 1.4 ms | 108.5 ± 1.6 ms | 2.88× |
+| ConvexMonotone | 338.4 ± 3.1 ms | 171.0 ± 1.4 ms | 107.9 ± 1.3 ms | 3.14× |
 
-The rest of a build is swap valuation and the solver, which are still Python
-(`derivatives`). That code is the next target.
+With simplified swaps: the same build, with the builder valuing every swap as a
+`NonStartedSimplifiedSwap` (`simplified_swaps` in the benchmark), all Python vs all C++
+(rates and derivatives). All four configurations build identical curves.
+
+| Interpolation | Python | Python simplified | C++ | C++ simplified |
+|---|---:|---:|---:|---:|
+| PiecewiseConstant | 65.5 ± 1.2 ms | 60.6 ± 0.9 ms (1.08×) | 40.6 ± 1.3 ms (1.61×) | 40.7 ± 1.3 ms (1.61×) |
+| CubicSpline | 334.5 ± 4.2 ms | 280.8 ± 4.2 ms (1.19×) | 107.2 ± 1.4 ms (3.12×) | 93.0 ± 1.2 ms (3.60×) |
+
+With the market and dates ports, each port added in turn (a later run, on a slower
+moment of the machine: compare the speed-ups, each against its own Python row). All configurations build identical curves.
+
+| Interpolation | Python | C++ rates + derivatives | + market | + dates (all C++) | all C++, simplified |
+|---|---:|---:|---:|---:|---:|
+| PiecewiseConstant | 61.4 ± 1.0 ms | 38.9 ± 0.9 ms (1.58×) | 35.4 ± 0.7 ms (1.73×) | 22.7 ± 0.8 ms (2.70×) | 23.6 ± 1.2 ms (2.60×) |
+| CubicSpline | 328.1 ± 4.2 ms | 104.4 ± 1.7 ms (3.14×) | 72.1 ± 1.2 ms (4.55×) | 59.8 ± 0.9 ms (5.48×) | 57.3 ± 1.2 ms (5.72×) |
+| ConvexMonotone | 341.4 ± 3.7 ms | 107.4 ± 4.3 ms (3.18×) | 72.5 ± 1.4 ms (4.71×) | 60.0 ± 1.5 ms (5.69×) | 58.3 ± 1.3 ms (5.85×) |
+
+The market port takes the per-valuation Python lookups out of the solver loop (most of
+a fitted build); the dates port takes schedules, conventions, tenors, day counts and
+`date_ordinals` out of building the instruments from the quotes (most of what was
+left of a PiecewiseConstant build).
+Simplified swaps no longer matter on C++: what they saved was Python glue. What
+remains is mostly Python: building the leg and coupon objects, the solver's own loop
+(scipy `hybr`) and the curve objects it rebuilds each iteration.
 
 ## Not ported yet / caveats
 
-- `market` and `derivatives` (swap legs and PV) are not ported. `ZeroCouponCurve` and
-  the legacy curves are not ported either; they always use Python.
+- `market`: the `Market` methods called from Python (and Python valuations) stay
+  Python; index histories and realised fixings stay Python. In `derivatives`, swap risk (`get_leg_duration`, `get_leg_dv01`) is still Python and
+  reads the C++ leg flows. The volatility surface (calibration, interpolation) is
+  `market` and stays Python, as does its own vectorised `ndtri` (scipy). `ZeroCouponCurve` and
+  the legacy curves are not ported either; they always use Python, and C++ swaps read
+  them through `_dfs_at_ordinals`.
+- The realised part of a started coupon (index history, Rate conventions) is computed
+  in Python, even for a C++ leg.
 - The core copies a curve's knots and forwards when the curve is built. Mutating
   `curve.forward_rates` in place afterwards is not seen by the core. That was never
   supported anyway, because the Python fit is also built once.
 - `forward_integral` is exposed on the core for tests and debugging only.
+- Options valued on a C++ market still resolve their curves, spot and volatility in
+  Python (`_native_fx`): the volatility surface dominates their cost.
+- A `CalendarCore` caches the years it loaded. Changing a calendar's holidays other than
+  through `add_custom_holiday` (e.g. on its private `_calendar`) isn't seen by it: set
+  `calendar._core = None` after such a change.
+- The first C++ use of a calendar populates about 70 years of its `holidays` object
+  (CL about 0.1 s), where Python populates only the years it touches.
+- nanobind's leak report at exit is off: a shared calendar's core, held by a module
+  global, can outlive the interpreter's last collection.
+- Leg and coupon objects are still built in Python from the C++ schedule dates.

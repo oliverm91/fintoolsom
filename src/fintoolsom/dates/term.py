@@ -6,7 +6,9 @@ from enum import Enum
 
 from dateutil.relativedelta import relativedelta
 
-from .adjustments import AdjustmentDateConventionBase
+from .. import settings
+from .adjustments import _KINDS, AdjustmentDateConventionBase
+from .calendars import Calendar
 
 
 class TermUnit(Enum):
@@ -31,6 +33,18 @@ class Term:
 
     def advance(self, from_date: date) -> date:
         """Return from_date + this tenor, adjusted by adj_convention."""
+        convention = self.adj_convention
+        kind = _KINDS.get(type(convention))
+        if (
+            kind is not None
+            and type(from_date) is date
+            and type(self.value) is int
+            and type(convention.calendar) is Calendar
+            and settings.is_cpp("dates")
+        ):
+            return convention.calendar._native_core().advance(
+                kind, _UNITS[self.unit], self.value, from_date
+            )
         if self.unit == TermUnit.W:
             raw = from_date + relativedelta(weeks=self.value)
         elif self.unit == TermUnit.M:
@@ -43,3 +57,7 @@ class Term:
 
     def __str__(self) -> str:
         return f"{self.value}{self.unit.value}"
+
+
+# The units of fintoolsom._native.CalendarCore.advance.
+_UNITS = {TermUnit.D: "d", TermUnit.W: "w", TermUnit.M: "m", TermUnit.Y: "y"}

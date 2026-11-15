@@ -4,10 +4,17 @@ import calendar
 
 import numpy as np
 
+from .. import settings
+
 
 def date_ordinals(dates) -> np.ndarray:
     """Proleptic Gregorian ordinals of `dates`, as integers."""
+    if type(dates) in _SEQUENCES and settings.is_cpp("dates"):
+        return settings.native().date_ordinals(dates)
     return np.array([d.toordinal() for d in dates], dtype=np.int64)
+
+
+_SEQUENCES = (list, tuple)
 
 
 def _gdc_dd(cls, sd, ed):
@@ -56,6 +63,10 @@ class DayCountConventionBase(ABC):
     def get_day_count(
         cls, start_date: date | list[date], end_date: date | list[date]
     ) -> int | np.ndarray:
+        if settings.is_cpp("dates") and (kind := _KINDS.get(cls)) is not None:
+            days = settings.native().day_counts(kind, start_date, end_date)
+            if days is not None:
+                return days
         try:
             return cls._method_mapper[(type(start_date), type(end_date))](
                 cls, start_date, end_date
@@ -72,6 +83,17 @@ class DayCountConventionBase(ABC):
         end_date: date | list[date],
         time_fraction_base: int,
     ) -> float | np.ndarray:
+        if (
+            settings.is_cpp("dates")
+            and type(time_fraction_base) in _BASES
+            and time_fraction_base != 0
+            and (kind := _KINDS.get(cls)) is not None
+        ):
+            fraction = settings.native().day_counts(
+                kind, start_date, end_date, time_fraction_base
+            )
+            if fraction is not None:
+                return fraction
         days = cls.get_day_count(start_date, end_date)
         return days / time_fraction_base
 
@@ -185,3 +207,14 @@ class Days30EISDADayCountConvention(DayCountConventionBase):
     @staticmethod
     def _strfy():
         return "30eISDA"
+
+
+# The kinds of fintoolsom._native.day_counts, by class (subclasses stay in Python).
+_KINDS: dict[type, int] = {
+    ActualDayCountConvention: 0,
+    Days30ADayCountConvention: 1,
+    Days30UDayCountConvention: 2,
+    Days30EDayCountConvention: 3,
+    Days30EISDADayCountConvention: 4,
+}
+_BASES = (int, float)

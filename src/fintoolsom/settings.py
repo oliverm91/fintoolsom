@@ -7,6 +7,9 @@ calculation in a debugger.
 
 What each backend covers:
 
+- ``"dates"``: calendars, business-day conventions, ``Tenor``, ``Term``, schedule
+  generation, day counts, time fractions and ``date_ordinals``, on C++ copies of the
+  calendars' days (loaded from ``holidays`` in one call per calendar).
 - ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``).
 - ``"derivatives"``: swap, forward, NDF and option valuation arithmetic.
 - ``"market"``: the market lookups (curves, FX rates) of a valuation: an instrument
@@ -14,7 +17,7 @@ What each backend covers:
 
 The backend is read when an object is created (a curve, leg, forward, option or
 market built under ``"cpp"`` keeps its C++ path after the setting changes), or, for
-``get_strike_from_delta``, when called.
+``dates`` and ``get_strike_from_delta``, when called.
 
 Set it from the environment before importing fintoolsom::
 
@@ -41,9 +44,9 @@ from typing import Literal
 Backend = Literal["python", "cpp"]
 
 BACKENDS: tuple[str, ...] = ("python", "cpp")
-SUBPACKAGES: tuple[str, ...] = ("rates", "market", "derivatives")
+SUBPACKAGES: tuple[str, ...] = ("dates", "rates", "market", "derivatives")
 # Subpackages with a C++ implementation.
-PORTED: frozenset[str] = frozenset({"rates", "market", "derivatives"})
+PORTED: frozenset[str] = frozenset({"dates", "rates", "market", "derivatives"})
 
 DEFAULT_BACKEND: Backend = "python"
 
@@ -118,6 +121,9 @@ def native():
         If the extension is not built (e.g. an install from source without a C++23
         compiler).
     """
+    global _native_module
+    if _native_module is not None:
+        return _native_module
     try:
         from . import _native
     except ImportError as e:
@@ -126,7 +132,16 @@ def native():
             "fintoolsom._native is not built. Install a wheel, or build from source "
             "with a C++23 compiler, or use the Python backend."
         ) from e
+    _native_module = _native
     return _native
+
+
+_native_module = None
+
+
+def is_cpp(subpackage: str) -> bool:
+    """Whether `subpackage` uses the C++ backend now (a fast check for hot paths)."""
+    return _backends[subpackage] == "cpp"
 
 
 def _from_environment() -> None:

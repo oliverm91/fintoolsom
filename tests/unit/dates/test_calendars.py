@@ -96,6 +96,7 @@ def test_a_holiday_added_to_a_shared_calendar_reaches_every_consumer():
         )  # an own calendar is independent
     finally:
         get_calendar("CL")._calendar.pop(extra)
+        get_calendar("CL")._core = None  # its C++ days still hold the holiday
 
 
 def test_repr_is_short():

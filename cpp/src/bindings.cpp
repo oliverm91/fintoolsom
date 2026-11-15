@@ -29,6 +29,9 @@ GridOut grid_view(const std::shared_ptr<const std::vector<double>>& grid) {
 
 NB_MODULE(_native, m) {
     m.doc() = "C++ kernels of fintoolsom (C++23, nanobind).";
+    // Objects held by Python globals (a shared Calendar's core, a module-level curve)
+    // can outlive the interpreter's last collection; that is not a leak to report.
+    nb::set_leak_warnings(false);
 
     nb::class_<PyPillarCurve>(m, "PillarCurveCore",
                               "Numerical core of a PillarCurve: day offsets to discount factors.")
@@ -85,4 +88,5 @@ NB_MODULE(_native, m) {
     bind_swaps(m);
     bind_fx(m);
     bind_market(m);
+    bind_dates(m);
 }

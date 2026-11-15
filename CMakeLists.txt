@@ -21,6 +21,7 @@ nanobind_add_module(_native NB_STATIC
   cpp/src/bind_swaps.cpp
   cpp/src/bind_fx.cpp
   cpp/src/bind_market.cpp
+  cpp/src/bind_dates.cpp
   cpp/src/swaps/swap_leg.cpp)
 target_include_directories(_native PRIVATE cpp/src)
 
