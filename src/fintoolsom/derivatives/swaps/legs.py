@@ -40,6 +40,11 @@ class SwapLeg:
     coupons : list of SwapCoupon
         The leg's coupons, in schedule order.
 
+    Raises
+    ------
+    ValueError
+        If the coupons' start or payment dates decrease along the list.
+
     Attributes
     ----------
     residuals, amortizations : numpy.ndarray
@@ -77,6 +82,13 @@ class SwapLeg:
         self._start_ordinals = date_ordinals(self.start_dates)
         self._end_ordinals = date_ordinals(self.end_dates)
         self._fx_fixing_ordinals = date_ordinals(self.fx_fixing_dates)
+        if (np.diff(self._start_ordinals) < 0).any() or (
+            np.diff(self._payment_ordinals) < 0
+        ).any():
+            raise ValueError(
+                "Coupons must be in schedule order: start and payment dates "
+                "non-decreasing."
+            )
 
     @property
     def n_coupons(self) -> int:
@@ -299,6 +311,9 @@ class FloatingLeg(SwapLeg):
     ----------
     spreads_values : numpy.ndarray
         Per-coupon spread interest, added (not compounded) to the flow.
+    fixed_flows : numpy.ndarray
+        Per-coupon part of the flow known at construction: spread interest
+        plus amortization. A coupon's flow is its index interest plus this.
     """
 
     _label = "Floating"
@@ -306,6 +321,7 @@ class FloatingLeg(SwapLeg):
     index: InterestIndex
     spread: Rate
     spreads_values: np.ndarray = field(init=False)
+    fixed_flows: np.ndarray = field(init=False)
 
     def _terms(self) -> str:
         return (
@@ -317,6 +333,7 @@ class FloatingLeg(SwapLeg):
         self.spreads_values = self.residuals * (
             self.spread.get_wealth_factor(self.start_dates, self.end_dates) - 1
         )
+        self.fixed_flows = self.spreads_values + self.amortizations
 
     @property
     def currency(self) -> Currency:

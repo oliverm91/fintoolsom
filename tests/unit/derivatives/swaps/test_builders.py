@@ -35,6 +35,19 @@ def test_spread_defaults_to_a_fresh_zero_rate_per_leg():
     assert list(a.spreads_values) == [0.0] * a.n_coupons
 
 
+@pytest.mark.parametrize(
+    "builder, index",
+    [(builders.overnight_leg, CAMARA), (builders.term_rate_leg, TAB_3M)],
+)
+def test_fixed_flows_are_spread_interest_plus_amortization(builder, index):
+    leg = _leg(builder, index, spread=SPREAD)
+    assert leg.spreads_values.any()
+    assert list(leg.fixed_flows) == pytest.approx(
+        list(leg.spreads_values + leg.amortizations)
+    )
+    assert leg.fixed_flows[-1] == pytest.approx(leg.spreads_values[-1] + 1_000.0)
+
+
 def test_term_leg_fixes_spot_lag_business_days_before_each_start():
     leg = _leg(builders.term_rate_leg, TAB_3M)
     calendar = ADJ_CLP.calendar

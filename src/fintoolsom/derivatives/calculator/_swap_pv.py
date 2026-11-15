@@ -23,17 +23,17 @@ def _leg_flows(leg, market: Market) -> tuple[np.ndarray, np.ndarray]:
 
     Realised fixings come from the index history (``market.get_index``).
 
-    TermRateLeg, split by fixing date:
-
-    * fixed (``fixing_date <= t``): the fixed rate over the whole coupon.
-    * to project (``fixing_date > t``): forward accrual from the projection curve.
-
     OvernightLeg and XCCYFloatingLeg, split by start date:
 
     * running (``start <= t < payment``): realised ``[start, t]`` (index business
       days, or ICP level ratio) compounded with the projection ``[t, end]``, or
       fully realised when ``end <= t``.
     * future (``start > t``): forward accrual from the projection curve.
+
+    TermRateLeg, split by fixing date:
+
+    * fixed (``fixing_date <= t``): the fixed rate over the whole coupon.
+    * to project (``fixing_date > t``): forward accrual from the projection curve.
 
     Parameters
     ----------
@@ -62,74 +62,87 @@ def _leg_flows(leg, market: Market) -> tuple[np.ndarray, np.ndarray]:
     if isinstance(leg, FixedLeg):
         return future_payment, leg.flows[future_payment]
 
-    flows = np.zeros(int(future_payment.sum()))
-    # Projection goes through get_accrual (interest per unit notional) on the
+    # Projection goes through the accrual (interest per unit notional) on the
     # index's own curve.
     proj_curve = market.get_index_curve(leg.index)
 
-    if isinstance(leg, TermRateLeg):
-        # Once fixing_date <= t the rate is locked, wherever start_date falls.
-        fixed_mask = future_payment & (leg._fixing_ordinals <= t)
-        to_proj_mask = future_payment & ~fixed_mask
+    # Overnight and cross-currency legs first: most swaps are not on a term rate.
+    if not isinstance(leg, TermRateLeg):
+        # Running: started, not yet paid. With a payment lag there can be two: one
+        # ended (fully realised) awaiting payment, and the next one accruing.
+        running = future_payment & (leg._start_ordinals <= t)
+        if not running.any():  # nothing started yet: every unpaid coupon projects
+            return future_payment, _projected_flows(leg, proj_curve, future_payment)
+        pure_future = future_payment & ~running
 
-        if fixed_mask.any():
-            history = _index_history(leg, market)
-            fixed_flows = [
-                history.get_rate(leg.fixing_dates[i]).get_accrued_interest(
-                    leg.residuals[i], leg.start_dates[i], leg.end_dates[i]
-                )
-                + leg.spreads_values[i]
-                + leg.amortizations[i]
-                for i in np.where(fixed_mask)[0]
-            ]
-            flows[fixed_mask[future_payment]] = np.array(fixed_flows)
-
-        if to_proj_mask.any():
-            accruals = proj_curve._accrual_at_ordinals(
-                leg._start_ordinals[to_proj_mask], leg._end_ordinals[to_proj_mask]
-            )
-            flows[to_proj_mask[future_payment]] = (
-                leg.residuals[to_proj_mask] * accruals
-                + leg.spreads_values[to_proj_mask]
-                + leg.amortizations[to_proj_mask]
-            )
-
-    else:
-        future_start = leg._start_ordinals > t
-        pure_future = future_payment & future_start
-        current_mask = future_payment & ~future_start
-
+        flows = np.zeros(int(future_payment.sum()))
         if pure_future.any():
-            accruals = proj_curve._accrual_at_ordinals(
-                leg._start_ordinals[pure_future], leg._end_ordinals[pure_future]
+            flows[pure_future[future_payment]] = _projected_flows(
+                leg, proj_curve, pure_future
             )
-            # amortizations: the notional repaid with the final coupon (final
-            # exchange). Same-currency legs cancel it; cross-currency legs exchange it.
-            flows[pure_future[future_payment]] = (
-                leg.residuals[pure_future] * accruals
-                + leg.spreads_values[pure_future]
-                + leg.amortizations[pure_future]
-            )
+        flows[running[future_payment]] = _running_flows(
+            leg, market, proj_curve, running
+        )
+        return future_payment, flows
 
-        if current_mask.any():
-            idx = int(np.where(current_mask)[0][0])
-            c = leg.coupons[idx]
-            # Realised part from the index history: compounded on the index's own
-            # business days (rate index) or the ratio of published levels (ICP).
-            realised_end = min(market.t, c.end_date)
-            accrued = _index_history(leg, market).get_accrued_interest(
-                c.residual, c.start_date, realised_end
-            )
-            interest = accrued
-            if realised_end < c.end_date:
-                interest += (c.residual + accrued) * proj_curve.get_accrual(
-                    market.t, c.end_date
-                )
-            flows[current_mask[future_payment]] = (
-                interest + leg.spreads_values[idx] + leg.amortizations[idx]
-            )
+    # Term-rate leg: once fixing_date <= t the rate is locked, wherever
+    # start_date falls.
+    set_mask = future_payment & (leg._fixing_ordinals <= t)
+    if not set_mask.any():  # nothing fixed yet: every unpaid coupon projects
+        return future_payment, _projected_flows(leg, proj_curve, future_payment)
+    to_proj_mask = future_payment & ~set_mask
 
+    flows = np.zeros(int(future_payment.sum()))
+    history = _index_history(leg, market)
+    flows[set_mask[future_payment]] = [
+        history.get_rate(leg.fixing_dates[i]).get_accrued_interest(
+            leg.residuals[i], leg.start_dates[i], leg.end_dates[i]
+        )
+        + leg.fixed_flows[i]
+        for i in np.flatnonzero(set_mask)
+    ]
+    if to_proj_mask.any():
+        flows[to_proj_mask[future_payment]] = _projected_flows(
+            leg, proj_curve, to_proj_mask
+        )
     return future_payment, flows
+
+
+def _projected_flows(leg, proj_curve, mask: np.ndarray) -> np.ndarray:
+    """Flows of the `mask` coupons, interest projected over their whole period.
+
+    ``fixed_flows`` holds the spread and the notional repaid with the final
+    coupon (final exchange): same-currency legs cancel it, cross-currency legs
+    exchange it.
+    """
+    accruals = proj_curve._accrual_at_ordinals(
+        leg._start_ordinals[mask], leg._end_ordinals[mask]
+    )
+    return leg.residuals[mask] * accruals + leg.fixed_flows[mask]
+
+
+def _running_flows(leg, market: Market, proj_curve, mask: np.ndarray) -> np.ndarray:
+    """Flows of the started, unpaid overnight coupons in `mask`.
+
+    The realised part ``[start, min(t, end)]`` comes from the index history
+    (compounded on the index's business days, or the ratio of published ICP
+    levels), compounded with the projection over ``[t, end]``, which is zero
+    for a coupon already ended.
+
+    A scalar loop: `mask` holds one or two coupons, too few for array
+    projection to beat scalar ``get_accrual`` (measured ~8 us slower per call).
+    """
+    t = market.t
+    history = _index_history(leg, market)
+    flows = []
+    for i in np.flatnonzero(mask):
+        start, end, residual = leg.start_dates[i], leg.end_dates[i], leg.residuals[i]
+        realised_end = min(t, end)
+        interest = history.get_accrued_interest(residual, start, realised_end)
+        if realised_end < end:
+            interest += (residual + interest) * proj_curve.get_accrual(t, end)
+        flows.append(interest + leg.fixed_flows[i])
+    return np.array(flows)
 
 
 def _index_history(leg, market: Market):

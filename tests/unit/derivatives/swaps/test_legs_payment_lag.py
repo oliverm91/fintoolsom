@@ -1,8 +1,11 @@
+from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
 
 from fintoolsom.derivatives.swaps import builders
+from fintoolsom.derivatives.swaps.legs import FixedLeg
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.market import Currency
 from tests.factories.swap_factory import (
@@ -80,6 +83,19 @@ def test_fx_fixing_is_measured_back_from_the_lagged_payment_date():
 def test_negative_payment_lag_raises():
     with pytest.raises(ValueError, match="payment_lag"):
         _fixed(payment_lag=-1)
+
+
+def test_leg_rejects_coupons_out_of_schedule_order():
+    coupons = _fixed().coupons
+    with pytest.raises(ValueError, match="schedule order"):
+        FixedLeg(coupons=coupons[::-1], currency=USD)
+
+
+def test_leg_rejects_payment_dates_out_of_order():
+    first, second, *rest = _fixed().coupons
+    late = replace(first, payment_date=second.payment_date + timedelta(days=5))
+    with pytest.raises(ValueError, match="schedule order"):
+        FixedLeg(coupons=[late, second, *rest], currency=USD)
 
 
 def test_payment_lag_changes_the_payment_ordinals_only():
