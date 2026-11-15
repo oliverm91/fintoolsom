@@ -19,6 +19,10 @@ from .swaps import (
     SwapBase,
     Swap,
 )
+from .simplified import (
+    SimplifiedSwap,
+    NonStartedSimplifiedSwap,
+)
 from .builders import (
     fixed_leg,
     term_rate_leg,

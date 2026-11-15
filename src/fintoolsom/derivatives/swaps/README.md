@@ -156,3 +156,36 @@ Keep these in mind when building coupons by hand:
   `fixing_date` on the coupon is not used in valuation.
 - **Floating flows always come from the index.** Only fixed legs can pay explicit
   amounts.
+- **Coupons must be in schedule order.** A leg raises `ValueError` if the start or
+  payment dates go backwards along `coupons`.
+
+## Simplified swaps for curve building
+
+`SimplifiedSwap` and `NonStartedSimplifiedSwap` take the same legs as `Swap` and are
+valued on a shorter path (`Calculator.valuate` routes them). They drop what a
+curve-building quote does not need:
+
+- **No settlement currency.** Every leg settles in its own currency, as in a
+  deliverable swap. There is no `payment_currency` or `is_deliverable`, and a UF
+  (`CLF`) leg is accepted: it is valued in UF on the UF curve and converted at spot,
+  not paid in CLP at its fixing.
+- **No payment lag.** Every coupon pays, and fixes FX, on its accrual end date. Legs
+  built with a lag are copied with those dates moved; the legs you pass are not
+  changed.
+- **`NonStartedSimplifiedSwap` also ignores fixings.** Every coupon counts as unpaid,
+  and every floating coupon is projected over its whole period, including a
+  term-rate coupon whose fixing date has passed. Valuing it after its
+  `effective_date` (the swap's first accrual start, not a curve's) raises
+  `ValueError`. A swap starting before its index curve's effective date is fine:
+  those days are projected on the curve's spot segment.
+
+No builder returns them yet. Wrap the legs of a built swap:
+
+```python
+from fintoolsom.derivatives.swaps import NonStartedSimplifiedSwap
+
+fast = NonStartedSimplifiedSwap(
+    receive_leg=swap.receive_leg, pay_leg=swap.pay_leg, collateral_index=swap.collateral_index
+)
+Calculator.valuate(fast, market, Currency.CLP)
+```

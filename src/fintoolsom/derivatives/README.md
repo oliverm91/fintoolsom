@@ -15,6 +15,7 @@ same instrument can be valued on any market, for example a bumped copy.
 | `swaps/legs.py` | `FixedLeg`, `TermRateLeg`, `OvernightLeg`, `XCCYFloatingLeg`: coupons plus cached per-coupon arrays |
 | `swaps/builders.py` | `fixed_leg`, `overnight_leg`, `term_rate_leg`, `xccy_floating_leg`, `floating_leg` (chooses by index type) |
 | `swaps/swaps.py` | `Swap(receive_leg=, pay_leg=, collateral_index=, payment_currency=, is_deliverable=)` |
+| `swaps/simplified.py` | `SimplifiedSwap` (every leg settles in its own currency, no payment lag) and `NonStartedSimplifiedSwap` (also valued as if no coupon has started): cheaper valuation for curve building |
 | `options/` | `Call`, `Put` on an FX pair (Garman-Kohlhagen; work in progress) |
 | `calculator.py` | `Calculator`: MTM, leg PV, FX fixings, duration and DV01, option greeks |
 

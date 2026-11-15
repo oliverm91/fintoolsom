@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING
 
 from ..forwards.forwards import NDF, Forward
 from ..options.options import Option
+from ..swaps.simplified import NonStartedSimplifiedSwap, SimplifiedSwap
 from ..swaps.swaps import Swap
-from . import _forwards, _fx, _options, _swap_pv, _swap_risk
+from . import _forwards, _fx, _options, _simplified_swap_pv, _swap_pv, _swap_risk
 
 if TYPE_CHECKING:
     from ...market import Market
@@ -63,6 +64,12 @@ class Calculator:
     get_leg_duration = staticmethod(_swap_risk.get_leg_duration)
     get_leg_dv01 = staticmethod(_swap_risk.get_leg_dv01)
 
+    # --- Simplified swaps (curve building) ---
+    get_simplified_swap_mtm = staticmethod(_simplified_swap_pv.get_simplified_swap_mtm)
+    get_non_started_swap_mtm = staticmethod(
+        _simplified_swap_pv.get_non_started_swap_mtm
+    )
+
     # --- Dispatcher ---
 
     @staticmethod
@@ -71,7 +78,8 @@ class Calculator:
     ) -> float:
         """Mark-to-market of any supported instrument.
 
-        NDF is checked before Forward, since NDF subclasses Forward.
+        NDF is checked before Forward, since NDF subclasses Forward, and the
+        simplified swaps before Swap, most specific first.
 
         Parameters
         ----------
@@ -96,6 +104,14 @@ class Calculator:
         if isinstance(instrument, Forward):
             return _forwards.get_forward_mtm(instrument, market, currency)
         if isinstance(instrument, Swap):
+            if isinstance(instrument, NonStartedSimplifiedSwap):
+                return _simplified_swap_pv.get_non_started_swap_mtm(
+                    instrument, market, currency
+                )
+            if isinstance(instrument, SimplifiedSwap):
+                return _simplified_swap_pv.get_simplified_swap_mtm(
+                    instrument, market, currency
+                )
             return _swap_pv.get_swap_mtm(instrument, market, currency)
         if isinstance(instrument, Option):
             return _options.get_mtm_option(instrument, market)

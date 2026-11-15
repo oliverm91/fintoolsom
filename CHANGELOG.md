@@ -7,6 +7,7 @@
 ### Feat
 
 - **swaps**: `FloatingLeg.fixed_flows` holds each coupon's flow known at construction: spread interest plus amortization. Valuation adds it to the projected or realised index interest.
+- **swaps**: `SimplifiedSwap(receive_leg=, pay_leg=, collateral_index=)` is a `Swap` valued on a shorter path, for curve building. Every leg settles in its own currency (no `payment_currency` or `is_deliverable`; a UF leg is valued in UF and converted at spot) and pays on its accrual end dates: legs with a payment lag are copied with payment and FX fixing dates on their end dates. `NonStartedSimplifiedSwap` also values every coupon as unpaid and projected, reading no fixings, and raises `ValueError` when valued after its `effective_date` (the swap's first accrual start). `Calculator.valuate` routes both, through `Calculator.get_simplified_swap_mtm` and `Calculator.get_non_started_swap_mtm`. No builder returns them: wrap the legs of a built swap. Building the notebook curves with `NonStartedSimplifiedSwap` is about 10% faster and gives the same curves.
 
 ### Fix
 
