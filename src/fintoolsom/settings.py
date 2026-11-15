@@ -10,14 +10,19 @@ What each backend covers:
 - ``"dates"``: calendars, business-day conventions, ``Tenor``, ``Term``, schedule
   generation, day counts, time fractions and ``date_ordinals``, on C++ copies of the
   calendars' days (loaded from ``holidays`` in one call per calendar).
-- ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``).
-- ``"derivatives"``: swap, forward, NDF and option valuation arithmetic.
-- ``"market"``: the market lookups (curves, FX rates) of a valuation: an instrument
-  with a C++ core valued on a C++ market runs in one C++ call.
+- ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``), ``Rate`` factors,
+  curve year fractions and knot checks.
+- ``"derivatives"``: swap, forward, NDF and option valuation arithmetic, the par
+  check of floating legs, leg duration.
+- ``"market"``: the market lookups (curves, FX rates, realised fixings) of a
+  valuation: an instrument with a C++ core valued on a C++ market runs in one C++
+  call; ``Market.get_dfs``, its FX projection and accrual loops; the index
+  histories' day walks (with ``"dates"``) and the UF extension.
 
 The backend is read when an object is created (a curve, leg, forward, option or
 market built under ``"cpp"`` keeps its C++ path after the setting changes), or, for
-``dates`` and ``get_strike_from_delta``, when called.
+``dates``, ``Rate`` factors, the index histories and ``get_strike_from_delta``, when
+called.
 
 Set it from the environment before importing fintoolsom::
 

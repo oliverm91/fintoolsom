@@ -212,6 +212,10 @@ class Market:
         risk_free_index: Index | None = None,
     ) -> np.ndarray:
         """:meth:`get_dfs` for dates already held as integer ordinals."""
+        if self._native and _is_ordinals(ordinals):
+            return settings.native().market_dfs(
+                self, currency, ordinals, collateral, risk_free_index
+            )
         if collateral is None:
             return self.get_discount_curve(
                 currency, risk_free_index=risk_free_index
@@ -315,6 +319,28 @@ class Market:
             raise ValueError(
                 f"Start date must be earlier than end date. Start date: {start_date}, End date: {end_date}."
             )
+        if (
+            self._native
+            and start_date < end_date
+            and type(calendar) is Calendar
+            and settings.is_cpp("dates")
+            and type(notional) in _NOTIONALS
+            and type(fixing_lag) is int
+            and type(start_date) is date
+            and type(end_date) is date
+        ):
+            accrued = settings.native().market_accrue_business_days(
+                self,
+                notional,
+                rate_name,
+                start_date.toordinal(),
+                end_date.toordinal(),
+                fixing_lag,
+                calendar._native_core(),
+                bool(use_closest_past_rate_for_fixing),
+            )
+            if accrued is not None:
+                return _accrued(*accrued)
         t = start_date
         acrrued_interest = 0
         while t < end_date:
@@ -350,6 +376,24 @@ class Market:
             raise ValueError(
                 f"Start date must be earlier than end date. Start date: {start_date}, End date: {end_date}."
             )
+        if (
+            self._native
+            and start_date < end_date
+            and type(notional) in _NOTIONALS
+            and type(start_date) is date
+            and type(end_date) is date
+        ):
+            accrued = settings.native().market_accrue_custom_days(
+                self,
+                notional,
+                rate_name,
+                start_date.toordinal(),
+                end_date.toordinal(),
+                reset_dates,
+                bool(use_closest_past_rate_for_fixing),
+            )
+            if accrued is not None:
+                return _accrued(*accrued)
         t = start_date
         reset_counter = 0
         acrrued_interest = 0
@@ -428,6 +472,8 @@ class Market:
         -------
         date
         """
+        if self._native and type(self.t) is date:
+            return settings.native().market_fx_known_until(self, currency_pair)
         data = self.fx_history.get(currency_pair)
         if data is None or not data.historic_data:
             return self.t
@@ -531,6 +577,8 @@ class Market:
         Unlike :meth:`get_future_fx_rate`, dates on or before :attr:`t` are allowed
         and read the history (a fixed but unpaid swap flow).
         """
+        if self._native and _is_ordinals(ordinals):
+            return settings.native().market_future_fx(self, currency_pair, ordinals)
         base, quote = currency_pair.base_currency, currency_pair.quote_currency
         if base == quote:
             return np.ones(len(ordinals))
@@ -580,3 +628,22 @@ class Market:
         """
         pair = CurrencyPair(from_currency, to_currency)
         return value * self.get_future_fx_rate(t, pair).value
+
+
+# Notionals the C++ accrual loops take as they are (Rate factors keep their type).
+_NOTIONALS = (float, int)
+
+
+def _is_ordinals(ordinals) -> bool:
+    """A one-dimensional int64 array, as the C++ lookups take it."""
+    return (
+        type(ordinals) is np.ndarray
+        and ordinals.dtype == np.int64
+        and ordinals.ndim == 1
+    )
+
+
+def _accrued(accrued: float, exponential: bool) -> float:
+    """The accrual loops' result type: an np.float64 once an exponential rate (whose
+    factors are np.float64) has accrued."""
+    return np.float64(accrued) if exponential else accrued

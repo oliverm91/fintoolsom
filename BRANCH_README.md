@@ -3,13 +3,19 @@
 This branch adds a C++23 implementation of fintoolsom's numerical cores, bound to
 Python with [nanobind](https://github.com/wjakob/nanobind). **Ported:**
 
-- `rates`: the curves (the `PillarCurve` family: `IndexCurve` and `DiscountCurve`).
+- `rates`: the curves (the `PillarCurve` family: `IndexCurve` and `DiscountCurve`),
+  `Rate` factors (`get_wealth_factor`, `get_discount_factor`, `get_accrued_interest`),
+  curve year fractions and the knot checks.
 - `derivatives`: swap valuation (`Swap`, `SimplifiedSwap`, `NonStartedSimplifiedSwap`:
-  leg PVs, leg flows, the par shortcut, non-deliverable FX), FX forwards and NDFs
-  (MtM, projected settlement FX) and options (Garman-Kohlhagen price and greeks,
-  strike from delta).
+  leg PVs, leg flows, the par shortcut and its eligibility check, non-deliverable FX),
+  leg duration and DV01, FX forwards and NDFs (MtM, projected settlement FX) and
+  options (Garman-Kohlhagen price and greeks, strike from delta).
 - `market`: the lookups of a valuation (curves, FX rates, FX known-until), done in C++
-  on the Python `Market` containers, so a swap or forward is valued in one C++ call.
+  on the Python `Market` containers, so a swap or forward is valued in one C++ call,
+  realised fixings of started coupons included; `Market.get_dfs`,
+  `_future_fx_rates_at_ordinals`, `get_fx_known_until` and the rate-accrual loops; the
+  gap filling and level compounding of the overnight index histories; the UF
+  extension (`extend_with_cpi`). The volatility surface stays Python.
 - `dates`: calendars (`is_holiday`, `add_business_days`), the business-day conventions,
   `Tenor`, `Term`, schedule generation, day counts, time fractions, `date_ordinals` and,
   through the calendars, the CPI/UF dates. The holiday rules (`HolidayRule`) stay
@@ -34,7 +40,9 @@ The Python code stays the reference, and each port must give the same results.
 | `cpp/src/discount.hpp` | `DfSource` and `Discount` (`a`, or `a * b / c`), shared by swaps and FX. |
 | `src/fintoolsom/derivatives/calculator/_native_fx.py` | The Python side of the C++ FX valuation: spot, fixings, curves, surface, conventions. |
 | `src/fintoolsom/derivatives/calculator/_normal.py` | Pure-Python normal cdf and inverse, the reference for both backends. |
-| `cpp/src/bind_market.cpp` | `MarketView`: the Market lookups through the C API, and whole swap / simplified swap / forward / NDF valuations. |
+| `cpp/src/bind_market.cpp` | `MarketView`: the Market lookups through the C API (realised fixings included), whole swap / simplified swap / forward / NDF valuations, leg duration, the Market methods and accrual loops. |
+| `cpp/src/bind_histories.cpp` | The day walks of the index histories (gap filling, level compounding, rescaling) and the UF extension, on the Python dicts in place. |
+| `cpp/src/rates/interest.hpp`, `cpp/src/bind_rates.cpp`, `cpp/src/py_dates.hpp` | Interest conventions and `Rate` factors, year fractions, knot checks; dates and `Rate`s read from Python. |
 | `cpp/src/dates/schedule.hpp`, `cpp/src/bind_dates.cpp` | `CalendarCore` (a calendar's days, loaded from Python in one call), the adjustment conventions, `Tenor` and `generate_schedule`. |
 | `cpp/src/dates/day_counts.hpp` | Day counts and time fractions. |
 | `cpp/benchmarks/bench_curves.py` | Python vs C++ benchmarks (below). |
@@ -43,6 +51,8 @@ The Python code stays the reference, and each port must give the same results.
 | `tests/unit/derivatives/test_cpp_swap_parity.py` | Parity of both swap valuation backends. |
 | `tests/unit/derivatives/test_cpp_fx_parity.py` | Parity of both forward, NDF and option backends. |
 | `tests/unit/market/test_cpp_market_parity.py` | Parity of whole valuations on Python and C++ markets, errors included. |
+| `tests/unit/market/test_cpp_market_methods_parity.py` | Parity of realised fixings, duration and DV01, the par check, the Market methods and accrual loops, the index histories and the UF extension. |
+| `tests/unit/rates/test_cpp_rates_parity.py` | Parity of `Rate` factors (result types included), year fractions and knot checks. |
 | `tests/unit/dates/test_cpp_schedule_parity.py` | Parity of calendars, conventions and schedules. |
 | `tests/unit/dates/test_cpp_dates_parity.py` | Parity of day counts, time fractions, ordinals, tenors, terms and CPI/UF dates; the one-call holiday load. |
 | `tests/unit/test_settings.py` | The settings module. |
@@ -137,8 +147,9 @@ The calculator's functions stay the entry points:
 - `_leg_pv`, `_leg_pv_non_deliverable` and `_leg_flows`
 - `_simplified_leg_pv` and `_non_started_leg_pv`
 
-Each one routes a C++ leg to `_native_swap_pv`. That module does, in Python, what reads
-the market:
+Each one routes a C++ leg to `_native_swap_pv` (on a Python market; on a C++ market the
+whole valuation is one C++ call, below). That module does, in Python, what reads the
+market:
 
 - the projection and discount curves, looked up in the same order as the Python path,
   so a missing curve raises the same error;
@@ -186,7 +197,23 @@ lookup is the Python method's, in the same order and with the same errors (`KeyE
 `ValueError` and their messages). On a C++ market, `get_swap_mtm`, `get_leg_pv`, the
 simplified and non-started swap MtMs and the forward and NDF MtMs hand the whole
 valuation to C++: settlement currency, leg PVs, conversion at spot. Realised fixings
-of started coupons are still read in Python, through a callback.
+of started coupons are read in C++ too: the level dict of an `OvernightRateHistory` or
+`OvernightInterestPriceHistory`, the fixings of a `TermRateHistory` and their `Rate`
+conventions; the projection over `[t, end]` of a running coupon is the curve's own
+`get_accrual`. Another history class, a level that isn't a float or a rate convention
+not ported falls back to the Python callback. `get_leg_duration` runs the same way, and
+so do `Market.get_dfs` / `_dfs_at_ordinals`, `_future_fx_rates_at_ordinals`,
+`get_fx_known_until` and the loops of `accrue_rates_reset_business_days` and
+`accrue_rates_custom_reset_days` (their argument checks stay Python).
+
+**Index histories and the UF.** With the `market` and `dates` backends on C++, the day
+walks of `OvernightRateHistory` (`_fill_gaps`, `_compound_levels`, the rescaling of a
+replaced fixing) and `OvernightInterestPriceHistory._check_for_gaps` run in C++ on the
+index calendar's core, writing into the Python dicts in Python's order. Where a step
+needs Python (an exponential or numpy-valued rate, a level that isn't a float, a
+result where Python raises), C++ stops before it and the Python loop carries on, so
+the result is the same. `extend_with_cpi` fills its period in C++, with `round(x, 2)`
+reproduced as the correctly rounded 2-decimal string read back.
 
 **Dates.** A `Calendar` gets a `CalendarCore` on first use. The core asks Python once
 for the flags of every day from 5 years before the first date it sees to 65 after:
@@ -267,6 +294,11 @@ multiply-adds, so their result can't be reproduced. The correctly rounded sum is
 and `fsum` in `swap_leg.cpp` is CPython's algorithm, special values included. The change
 moves Python PVs by at most an ulp and costs no measurable time.
 
+Rate factors, the accrual loops and the history walks agree to the bit on Windows; off
+Windows an exponential rate may differ by a few ulps (Python's is `np.exp`), and the
+tests allow 4. Duration, the par check and realised fixings agree to the bit: duration
+now sums with `math.fsum` on both backends, as the PVs do.
+
 Forwards, NDFs and options also agree to the bit: 764 parity cases (forwards and NDFs
 over every collateral, fixing and payment date and reporting currency; option prices,
 greeks, log-moneyness and strikes over maturities, moneyness, vols and conventions;
@@ -328,7 +360,7 @@ factory, valued on its market. A "[NonStarted]" row is the same swap as a
 | IRS CLP ICP, uncollateralised (par) | 10.7 µs | 5.6 µs | 1.9× |
 | IRS CLP OIS, SOFR CSA (three-curve discount) | 26.1 µs | 8.7 µs | 3.0× |
 | ↳ [NonStarted] | 15.2 µs | 5.9 µs | 2.6× |
-| IRS USD OIS, started (realised fixings) | 27.9 µs | 14.1 µs | 2.0× |
+| IRS USD OIS, started (realised fixings, now read in C++; a later run) | 27.6 µs | 13.7 µs | 2.0× |
 | CCS deliverable | 13.2 µs | 6.7 µs | 2.0× |
 | CCS non-deliverable | 55.2 µs | 23.1 µs | 2.4× |
 
@@ -387,6 +419,15 @@ moment of the machine: compare the speed-ups, each against its own Python row). 
 | CubicSpline | 328.1 ± 4.2 ms | 104.4 ± 1.7 ms (3.14×) | 72.1 ± 1.2 ms (4.55×) | 59.8 ± 0.9 ms (5.48×) | 57.3 ± 1.2 ms (5.72×) |
 | ConvexMonotone | 341.4 ± 3.7 ms | 107.4 ± 4.3 ms (3.18×) | 72.5 ± 1.4 ms (4.71×) | 60.0 ± 1.5 ms (5.69×) | 58.3 ± 1.3 ms (5.85×) |
 
+With the rest of `rates`, `derivatives` and `market` ported (Rate factors, year
+fractions and knot checks, the par check, realised fixings, histories; a later run):
+
+| Interpolation | Python | C++ rates + derivatives | + market | + dates (all C++) | all C++, simplified |
+|---|---:|---:|---:|---:|---:|
+| PiecewiseConstant | 56.7 ± 0.8 ms | 28.4 ± 0.1 ms (1.99×) | 26.4 ± 0.3 ms (2.15×) | 15.7 ± 0.2 ms (3.62×) | 15.9 ± 0.2 ms (3.56×) |
+| CubicSpline | 288.6 ± 1.6 ms | 85.1 ± 0.9 ms (3.39×) | 57.0 ± 0.5 ms (5.06×) | 46.4 ± 0.2 ms (6.22×) | 45.6 ± 0.3 ms (6.33×) |
+| ConvexMonotone | 316.4 ± 1.6 ms | 85.4 ± 0.9 ms (3.71×) | 57.6 ± 0.2 ms (5.49×) | 47.9 ± 1.5 ms (6.60×) | 48.1 ± 0.6 ms (6.58×) |
+
 The market port takes the per-valuation Python lookups out of the solver loop (most of
 a fitted build); the dates port takes schedules, conventions, tenors, day counts and
 `date_ordinals` out of building the instruments from the quotes (most of what was
@@ -397,14 +438,16 @@ remains is mostly Python: building the leg and coupon objects, the solver's own 
 
 ## Not ported yet / caveats
 
-- `market`: the `Market` methods called from Python (and Python valuations) stay
-  Python; index histories and realised fixings stay Python. In `derivatives`, swap risk (`get_leg_duration`, `get_leg_dv01`) is still Python and
-  reads the C++ leg flows. The volatility surface (calibration, interpolation) is
-  `market` and stays Python, as does its own vectorised `ndtri` (scipy). `ZeroCouponCurve` and
-  the legacy curves are not ported either; they always use Python, and C++ swaps read
-  them through `_dfs_at_ordinals`.
-- The realised part of a started coupon (index history, Rate conventions) is computed
-  in Python, even for a C++ leg.
+- Not ported, by design: the volatility surface (calibration, interpolation) and its
+  vectorised `ndtri` (scipy); `ZeroCouponCurve` and the legacy curves (deprecated; C++
+  swaps read them through `_dfs_at_ordinals`); the data and declarative classes
+  (quotes, conventions, currencies, localities, indexes, `Market` construction and
+  setters); building leg, coupon and instrument objects; one-line methods
+  (`get_rate`, `get_index`, `convert_value_currency`, `UFConvention.reajuste`,
+  `implied_monthly_cpi`), where a C++ call would cost as much as the Python.
+- `Market` methods route to C++ on a market created under the `market` backend;
+  `Rate` factors on the `rates` backend at call time; the history walks on the
+  `market` and `dates` backends at call time.
 - The core copies a curve's knots and forwards when the curve is built. Mutating
   `curve.forward_rates` in place afterwards is not seen by the core. That was never
   supported anyway, because the Python fit is also built once.

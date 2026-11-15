@@ -368,6 +368,12 @@ class FloatingLeg(SwapLeg):
         if not self.coupons:
             return False
         r, a = self.residuals, self.amortizations
+        if self._native and r.dtype == np.float64 and a.dtype == np.float64:
+            par = settings.native().repays_at_par(
+                self._payment_ordinals, self._start_ordinals, self._end_ordinals, r, a
+            )
+            if par is not None:
+                return par
         return bool(
             np.array_equal(self._payment_ordinals, self._end_ordinals)
             and np.array_equal(self._start_ordinals[1:], self._end_ordinals[:-1])

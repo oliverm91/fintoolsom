@@ -8,7 +8,9 @@
 // _dfs_at_ordinals (its curves), get_fx_rate, get_fx_known_until and
 // convert_value_currency. On top of it, a whole swap, simplified swap, forward or NDF is
 // valued in one call, as the calculator functions do.
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -16,10 +18,9 @@
 #include <utility>
 #include <vector>
 
+#include "dates/schedule.hpp"
 #include "fx/fx_derivatives.hpp"
-#include "py_curve.hpp"
-
-#include <datetime.h>  // after Python.h
+#include "py_dates.hpp"  // datetime.h, after Python.h
 
 namespace fts::py {
 
@@ -40,6 +41,9 @@ struct Refs {
     PyObject* fx_rate;           // fintoolsom.market.currencies.FX_Rate
     PyObject* leg_core;          // _native_swap_pv._core
     PyObject* projection;        // _native_swap_pv._projection
+    PyObject* overnight_rate_history;   // fintoolsom.market.index_history
+    PyObject* overnight_price_history;  // OvernightInterestPriceHistory
+    PyObject* term_rate_history;        // TermRateHistory
 };
 
 const Refs& refs() {
@@ -49,9 +53,16 @@ const Refs& refs() {
         };
         const char* currencies = "fintoolsom.market.currencies";
         const char* glue = "fintoolsom.derivatives.calculator._native_swap_pv";
-        return Refs{get("fintoolsom.rates", "IndexCurve"), get(currencies, "Currency"),
-                    get(currencies, "CurrencyPair"),    get(currencies, "FX_Rate"),
-                    get(glue, "_core"),                 get(glue, "_projection")};
+        const char* histories = "fintoolsom.market.index_history";
+        return Refs{get("fintoolsom.rates", "IndexCurve"),
+                    get(currencies, "Currency"),
+                    get(currencies, "CurrencyPair"),
+                    get(currencies, "FX_Rate"),
+                    get(glue, "_core"),
+                    get(glue, "_projection"),
+                    get(histories, "OvernightRateHistory"),
+                    get(histories, "OvernightInterestPriceHistory"),
+                    get(histories, "TermRateHistory")};
     }();
     return r;
 }
@@ -128,12 +139,14 @@ nb::handle currency_pair(nb::handle base, nb::handle quote) {
 
 class MarketView {
 public:
-    explicit MarketView(nb::handle market)
+    // `risk_free_index`: the numeraire of the discount curves, None for the market's.
+    explicit MarketView(nb::handle market, nb::handle risk_free_index = nb::none())
         : market_(market),
           curves_(market.attr("curves")),
           fx_history_(market.attr("fx_history")),
           t_date_(market.attr("t")),
-          rfi_(market.attr("risk_free_index")),
+          rfi_(risk_free_index.is_none() ? nb::object(market.attr("risk_free_index"))
+                                         : nb::borrow(risk_free_index)),
           t_(ordinal_of(t_date_)) {}
 
     [[nodiscard]] nb::handle market() const { return market_; }
@@ -241,6 +254,91 @@ public:
         return value * fx_rate(t_date_, currency_pair(from, to));
     }
 
+    // Market.get_index(index.name): the history holding the index's fixings.
+    [[nodiscard]] nb::object index_history(nb::handle index) const {
+        const nb::object name = index.attr("name").attr("upper")();
+        const nb::object histories = market_.attr("indexes_history");
+        PyObject* history = PyDict_GetItemWithError(histories.ptr(), name.ptr());
+        if (history == nullptr) {
+            if (PyErr_Occurred()) throw nb::python_error();
+            throw_py(PyExc_KeyError, fmt_str("Index {} not found in market.", name));
+        }
+        return nb::borrow(history);
+    }
+
+    // Market.get_rate(t, name, use_closest_past_rate).
+    [[nodiscard]] nb::object rate(std::int64_t t, nb::handle name, bool closest) const {
+        const nb::object rates = market_.attr("interest_rates");
+        PyObject* series = PyDict_GetItemWithError(rates.ptr(), name.ptr());
+        if (series == nullptr) {
+            if (PyErr_Occurred()) throw nb::python_error();
+            throw_py(PyExc_ValueError, fmt_str("Rate {} not found.", name));
+        }
+        const nb::object day = date_of(t);
+        PyObject* rate = PyDict_GetItemWithError(series, day.ptr());
+        if (rate != nullptr) return nb::borrow(rate);
+        if (PyErr_Occurred()) throw nb::python_error();
+        if (!closest) throw_py(PyExc_ValueError, fmt_str("Rate {} not found for date {}.", name, day));
+        PyObject *key, *value, *best = nullptr;
+        std::int64_t best_ordinal = 0;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(series, &pos, &key, &value)) {
+            const std::int64_t o = ordinal_of(key);
+            if (o < t && (best == nullptr || o > best_ordinal)) {
+                best = value;
+                best_ordinal = o;
+            }
+        }
+        if (best == nullptr) {
+            throw_py(PyExc_ValueError,
+                     fmt_str("Rate {} not found for date {} and there were no past dates.",
+                             name, day));
+        }
+        return nb::borrow(best);
+    }
+
+    // Market._dfs_at_ordinals.
+    [[nodiscard]] DoublesOut dfs(nb::handle currency, std::span<const std::int64_t> ordinals,
+                                 nb::handle collateral) const {
+        const DiscountCurves curves = discount(currency, collateral);
+        auto [out, data] = new_array<double>(ordinals.size());
+        curves.get()(ordinals, std::span(data, ordinals.size()));
+        return out;
+    }
+
+    // Market._future_fx_rates_at_ordinals.
+    [[nodiscard]] DoublesOut future_fx(nb::handle pair, std::span<const std::int64_t> ordinals) const {
+        const std::size_t n = ordinals.size();
+        auto [out, fx] = new_array<double>(n);
+        const nb::object base = pair.attr("base_currency"), quote = pair.attr("quote_currency");
+        if (same_currency(base, quote)) {
+            std::fill(fx, fx + n, 1.0);
+            return out;
+        }
+        const nb::object known_until = fx_known_until(pair);
+        const std::int64_t last_known = ordinal_of(known_until);
+        std::vector<std::int64_t> nodes{last_known};
+        for (std::size_t i = 0; i < n; ++i) {
+            if (ordinals[i] <= last_known) fx[i] = fx_rate(date_of(ordinals[i]), pair);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (ordinals[i] > last_known) nodes.push_back(ordinals[i]);
+        }
+        if (nodes.size() > 1) {
+            const double anchor = fx_rate(known_until, pair);
+            std::vector<double> df_base(nodes.size()), df_quote(nodes.size());
+            df_source(discount_curve(base))(nodes, df_base);
+            df_source(discount_curve(quote))(nodes, df_quote);
+            std::size_t k = 1;
+            for (std::size_t i = 0; i < n; ++i) {
+                if (ordinals[i] <= last_known) continue;
+                fx[i] = anchor * (df_base[k] / df_base[0]) / (df_quote[k] / df_quote[0]);
+                ++k;
+            }
+        }
+        return out;
+    }
+
 private:
     nb::handle market_;
     nb::object curves_, fx_history_, t_date_, rfi_;
@@ -262,14 +360,93 @@ Leg leg_of(nb::handle leg) {
     return Leg{std::move(core), p};
 }
 
-// _native_swap_pv._projection: the index curve, then (in Python) the realised flows
-// of the coupons started or fixed by t.
+// _native_swap_pv._projection: the index curve, then the realised flows of the coupons
+// started or fixed by t.
 struct Projection {
     std::optional<DfSource> curve;
-    nb::object keep;  // the Python (proj, index, flows) when there are realised flows
-    Known known;
+    std::vector<std::int64_t> index;  // coupons with realised flows
+    std::vector<double> flows;
     [[nodiscard]] const DfSource* get() const { return curve ? &*curve : nullptr; }
+    [[nodiscard]] Known known() const { return Known{index, flows}; }
 };
+
+// levels[o] of a history's level dict (exact float or int values); KeyError(date) when
+// missing, as the Python lookup; nullopt for values left to Python.
+std::optional<double> level_at(nb::handle levels, std::int64_t o) {
+    const nb::object day = date_of(o);
+    PyObject* v = PyDict_GetItemWithError(levels.ptr(), day.ptr());
+    if (v == nullptr) {
+        if (PyErr_Occurred()) throw nb::python_error();
+        PyErr_SetObject(PyExc_KeyError, day.ptr());
+        throw nb::python_error();
+    }
+    return dt::plain_number(v);
+}
+
+// The realised flows of _native_swap_pv._projection (_swap_pv._running_flows for an
+// overnight leg, the fixed rates of a term-rate leg), read from the market's index
+// history: an exact OvernightRateHistory or OvernightInterestPriceHistory (overnight),
+// TermRateHistory or OvernightRateHistory (term rate). False, with nothing computed,
+// for any other history, value or rate, which the Python callback then reads.
+bool realised_flows(const PySwapLeg& core, const MarketView& m, nb::handle proj,
+                    Projection& p) {
+    if (!PyDate_CheckExact(m.t_date().ptr())) return false;
+    const std::int64_t t = m.t();
+    const nb::object history = m.index_history(core.index);  // Market.get_index
+    const PyObject* type = reinterpret_cast<PyObject*>(Py_TYPE(history.ptr()));
+    const Refs& r = refs();
+    const auto start = core.start(), end = core.end(), pay = core.pay();
+    const auto residual = core.residual(), fixed = core.flows();
+    const std::size_t n = core.size();
+    if (core.kind() == LegKind::TermRate) {
+        if (type != r.term_rate_history && type != r.overnight_rate_history) return false;
+        const nb::object rates = history.attr("rates");
+        if (!PyDict_CheckExact(rates.ptr())) return false;
+        const auto fixing = core.fixing();
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!(pay[i] > t && fixing[i] <= t)) continue;
+            // RateHistory.get_rate(fixing).get_accrued_interest(residual, start, end)
+            const nb::object day = date_of(fixing[i]);
+            PyObject* rate = PyDict_GetItemWithError(rates.ptr(), day.ptr());
+            if (rate == nullptr) {
+                if (PyErr_Occurred()) throw nb::python_error();
+                throw_py(PyExc_KeyError, fmt_str("Date {} not found in {} rate history.", day,
+                                                 history.attr("name")));
+            }
+            const auto terms = dt::rate_terms(rate);
+            if (!terms) return false;
+            const double wf = terms->wealth_factor(start[i], end[i]);
+            if (!std::isfinite(wf)) return false;  // where Python may raise
+            p.index.push_back(static_cast<std::int64_t>(i));
+            p.flows.push_back(residual[i] * (wf - 1.0) + fixed[i]);
+        }
+        return true;
+    }
+    const char* attr = type == r.overnight_rate_history    ? "_index_values"
+                       : type == r.overnight_price_history ? "values"
+                                                           : nullptr;
+    if (attr == nullptr) return false;
+    const nb::object levels = history.attr(attr);
+    if (!PyDict_CheckExact(levels.ptr())) return false;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!(pay[i] > t && start[i] <= t)) continue;
+        const std::int64_t realised_end = std::min(t, end[i]);
+        // get_accrued_interest: levels[end] / levels[start] - 1, end looked up first
+        const auto last = level_at(levels, realised_end);
+        if (!last) return false;
+        const auto first = level_at(levels, start[i]);
+        if (!first) return false;
+        double interest = residual[i] * (*last / *first - 1.0);
+        if (realised_end < end[i]) {
+            const double accrual =
+                nb::cast<double>(proj.attr("get_accrual")(m.t_date(), date_of(end[i])));
+            interest += (residual[i] + interest) * accrual;
+        }
+        p.index.push_back(static_cast<std::int64_t>(i));
+        p.flows.push_back(interest + fixed[i]);
+    }
+    return true;
+}
 
 Projection projection(nb::handle leg, const Leg& l, const MarketView& m) {
     Projection p;
@@ -279,11 +456,18 @@ Projection projection(nb::handle leg, const Leg& l, const MarketView& m) {
         p.curve = df_source(proj);
         return p;
     }
-    p.keep = nb::handle(refs().projection)(leg, l.core_obj, m.market(), m.t());
-    const auto index = nb::cast<DaysIn>(nb::object(p.keep[1]));
-    const auto flows = nb::cast<DoublesIn>(nb::object(p.keep[2]));
-    p.curve = df_source(nb::object(p.keep[0]));
-    p.known = Known{view(index), view(flows)};
+    if (realised_flows(*l.core, m, proj, p)) {
+        p.curve = df_source(proj);
+        return p;
+    }
+    p.index.clear();
+    p.flows.clear();
+    const nb::object keep = nb::handle(refs().projection)(leg, l.core_obj, m.market(), m.t());
+    const auto index = nb::cast<DaysIn>(nb::object(keep[1]));
+    const auto flows = nb::cast<DoublesIn>(nb::object(keep[2]));
+    p.curve = df_source(nb::object(keep[0]));
+    p.index.assign(index.data(), index.data() + index.shape(0));
+    p.flows.assign(flows.data(), flows.data() + flows.shape(0));
     return p;
 }
 
@@ -299,7 +483,7 @@ double leg_pv(nb::handle leg, nb::handle collateral, const MarketView& m, bool a
     if (!core.has_unpaid(t)) return 0.0;
     const Projection p = projection(leg, l, m);
     const DiscountCurves discount = m.discount(core.currency, collateral);
-    return core.pv(t, p.get(), p.known, discount.get());
+    return core.pv(t, p.get(), p.known(), discount.get());
 }
 
 // _native_swap_pv.leg_pv_non_deliverable.
@@ -329,7 +513,7 @@ double leg_pv_non_deliverable(nb::handle leg, nb::handle collateral, const Marke
     const DiscountCurves discount = m.discount(settlement, collateral);
     const FxProjection fx{last_known, known_fx, anchor, base ? &*base : nullptr,
                           quote ? &*quote : nullptr};
-    return core.pv_non_deliverable(t, p.get(), p.known, fx, discount.get());
+    return core.pv_non_deliverable(t, p.get(), p.known(), fx, discount.get());
 }
 
 // _native_swap_pv.non_started_leg_pv.
@@ -408,6 +592,83 @@ double non_started_swap_mtm(nb::handle swap, nb::handle market, nb::handle curre
     return r - p;
 }
 
+// _swap_risk.get_leg_duration of the receive (True) or pay leg.
+double leg_duration(nb::handle swap, bool receive, nb::handle market) {
+    const MarketView m(market);
+    const nb::object leg = swap.attr(receive ? "receive_leg" : "pay_leg");
+    const Leg l = leg_of(leg);
+    const PySwapLeg& core = *l.core;
+    const std::int64_t t = m.t();
+    if (!core.has_unpaid(t)) return 0.0;
+    const Projection p = projection(leg, l, m);
+    const std::vector<double> unpaid = core.unpaid_flows(t, p.get(), p.known());
+    std::vector<std::int64_t> dates;
+    std::vector<double> flows;
+    core.rate_sensitive(t, unpaid, dates, flows);
+    if (dates.empty()) return 0.0;
+    const DiscountCurves discount = m.discount(core.currency, swap.attr("collateral_index"));
+    std::vector<double> dfs(dates.size());
+    discount.get()(dates, dfs);
+    return swaps::duration(t, dates, flows, dfs);
+}
+
+// ── Rate accruals (Market.accrue_rates_*) ──────────────────────────────────
+
+// One step of the accrual loops: accrued += rate.get_accrued_interest(notional +
+// accrued, start, end). False for a rate left to Python, or a result that is not
+// finite (where Python may raise).
+bool accrue(nb::handle rate, double notional, std::int64_t start, std::int64_t end,
+            double& accrued, bool& exponential) {
+    const auto terms = dt::rate_terms(rate);
+    if (!terms) return false;
+    const double interest = (notional + accrued) * (terms->wealth_factor(start, end) - 1.0);
+    if (!std::isfinite(interest)) return false;
+    accrued += interest;
+    exponential = exponential || terms->interest == rates::Interest::Exponential;
+    return true;
+}
+
+// The loop of Market.accrue_rates_reset_business_days, from start < end: (accrued,
+// whether a rate was exponential, so the Python result is an np.float64), or None to
+// leave it to Python.
+nb::object accrue_business_days(nb::handle market, double notional, nb::handle name,
+                                std::int64_t start, std::int64_t end, std::int64_t lag,
+                                const dates::CalendarCore& calendar, bool closest) {
+    const MarketView m(market);
+    double accrued = 0.0;
+    bool exponential = false;
+    for (std::int64_t t = start; t < end;) {
+        const std::int64_t reset = calendar.add_business_days(t, -lag);
+        const nb::object rate = m.rate(reset, name, closest);
+        const std::int64_t next = calendar.add_business_days(t, 1);
+        if (!accrue(rate, notional, t, std::min(next, end), accrued, exponential)) {
+            return nb::none();
+        }
+        t = calendar.add_business_days(t, 1);
+    }
+    return nb::make_tuple(accrued, exponential);
+}
+
+// The loop of Market.accrue_rates_custom_reset_days, on the sorted reset dates.
+nb::object accrue_custom_days(nb::handle market, double notional, nb::handle name,
+                              std::int64_t start, std::int64_t end, nb::handle reset_dates,
+                              bool closest) {
+    const auto resets = dt::exact_ordinals(reset_dates);
+    if (!resets || !PyList_CheckExact(reset_dates.ptr())) return nb::none();
+    const MarketView m(market);
+    double accrued = 0.0;
+    bool exponential = false;
+    std::size_t k = 0;
+    for (std::int64_t t = start; t < end; ++k) {
+        const nb::object rate = m.rate((*resets)[k], name, closest);
+        std::int64_t next = k == resets->size() - 1 ? end : (*resets)[k + 1];
+        if (next > end) next = end;
+        if (!accrue(rate, notional, t, next, accrued, exponential)) return nb::none();
+        t = next;
+    }
+    return nb::make_tuple(accrued, exponential);
+}
+
 // ── Forwards (_native_fx.forward_mtm / ndf_mtm, with the lookups here) ─────
 
 double forward_mtm(nb::handle forward, nb::handle market, nb::handle currency) {
@@ -481,6 +742,43 @@ void bind_market(nb::module_& m) {
     m.def("market_forward_mtm", &forward_mtm, nb::arg("forward"), nb::arg("market"),
           nb::arg("currency"));
     m.def("market_ndf_mtm", &ndf_mtm, nb::arg("ndf"), nb::arg("market"), nb::arg("currency"));
+
+    m.def("market_leg_duration", &leg_duration, nb::arg("swap"), nb::arg("receive"),
+          nb::arg("market"), "_swap_risk.get_leg_duration of the receive (True) or pay leg.");
+    m.def(
+        "market_dfs",
+        [](nb::handle market, nb::handle currency, DaysIn ordinals, nb::handle collateral,
+           nb::handle risk_free_index) {
+            return MarketView(market, risk_free_index).dfs(currency, view(ordinals), collateral);
+        },
+        nb::arg("market"), nb::arg("currency"), nb::arg("ordinals"),
+        nb::arg("collateral").none(), nb::arg("risk_free_index").none(),
+        "Market._dfs_at_ordinals.");
+    m.def(
+        "market_future_fx",
+        [](nb::handle market, nb::handle pair, DaysIn ordinals) {
+            return MarketView(market).future_fx(pair, view(ordinals));
+        },
+        nb::arg("market"), nb::arg("pair"), nb::arg("ordinals"),
+        "Market._future_fx_rates_at_ordinals.");
+
+    m.def("market_accrue_business_days", &accrue_business_days, nb::arg("market"),
+          nb::arg("notional"), nb::arg("name"), nb::arg("start"), nb::arg("end"),
+          nb::arg("fixing_lag"), nb::arg("calendar"), nb::arg("closest"),
+          "The loop of Market.accrue_rates_reset_business_days: (accrued, exponential) "
+          "or None.");
+    m.def("market_accrue_custom_days", &accrue_custom_days, nb::arg("market"),
+          nb::arg("notional"), nb::arg("name"), nb::arg("start"), nb::arg("end"),
+          nb::arg("reset_dates"), nb::arg("closest"),
+          "The loop of Market.accrue_rates_custom_reset_days: (accrued, exponential) "
+          "or None.");
+    m.def(
+        "market_rate",
+        [](nb::handle market, std::int64_t t, nb::handle name, bool closest) {
+            return MarketView(market).rate(t, name, closest);
+        },
+        nb::arg("market"), nb::arg("t"), nb::arg("name"), nb::arg("closest"),
+        "Market.get_rate at the ordinal t.");
 
     // The lookups alone, for tests.
     m.def(

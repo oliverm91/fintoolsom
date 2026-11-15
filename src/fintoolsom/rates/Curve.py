@@ -23,6 +23,7 @@ from typing import Self, Sequence
 
 import numpy as np
 
+from .. import settings
 from .Rates import Rate, RateConvention
 
 # Day base of the curves' time axis (Act/365).
@@ -61,6 +62,10 @@ class InterpolationMethod(Enum):
 
 def year_fractions(curve_date: date, dates: Sequence[date]) -> np.ndarray:
     """Act/365 year fractions from `curve_date` to each of `dates`."""
+    if settings.is_cpp("rates"):
+        taus = settings.native().year_fractions(curve_date, dates)
+        if taus is not None:
+            return taus
     return np.array([(d - curve_date).days for d in dates], dtype=float) / DAY_BASE
 
 

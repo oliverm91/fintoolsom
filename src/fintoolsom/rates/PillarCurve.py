@@ -117,8 +117,17 @@ class PillarCurve(DailyGridCurve):
         self._check_method()
         self.knot_dates = list(self.knot_dates)
         self.forward_rates = np.asarray(self.forward_rates, dtype=float)
-        self._check_knots()
-        self._knot_tau = year_fractions(self.curve_date, self.knot_dates)
+        taus = None
+        if settings.is_cpp("rates"):
+            # The order and count checks with the year fractions, in one C++ call;
+            # None sends any error to the Python checks.
+            taus = settings.native().knot_taus(
+                self.curve_date, self.knot_dates, MIN_KNOTS
+            )
+        if taus is None or len(self.forward_rates) != len(self.knot_dates) - 1:
+            self._check_knots()
+            taus = year_fractions(self.curve_date, self.knot_dates)
+        self._knot_tau = taus
         self._log_df_effective = self._log_df_first_knot()
         if settings.get_backend("rates") == "cpp":
             self._core = self._build_core()

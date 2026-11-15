@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from .. import settings
 from ..dates import last_known_uf_date
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 
@@ -230,6 +231,16 @@ def extend_with_cpi(
     base_uf = levels[base_date]
     next_ninth = _next_ninth(base_date)
     period_days = (next_ninth - base_date).days
+    if (
+        settings.is_cpp("market")
+        and type(base_uf) is float
+        and type(cpi) in (float, int)
+        and type(base_date) is date
+        and settings.native().uf_extend(
+            out, base_uf, cpi, base_date.toordinal(), next_ninth.toordinal()
+        )
+    ):
+        return out
     d = base_date + timedelta(days=1)
     while d <= next_ninth:
         if d not in out:

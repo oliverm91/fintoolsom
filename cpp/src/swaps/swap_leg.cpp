@@ -275,4 +275,67 @@ double SwapLegCore::non_started_pv(const DfSource* proj, const Discount& discoun
     return fsum_products(flows, dfs);
 }
 
+namespace {
+
+// np.isclose(x, y, rtol=1e-12, atol=0.0): numpy's formula, infinities included.
+bool isclose(double x, double y) {
+    return (std::fabs(x - y) <= 0.0 + 1e-12 * std::fabs(y) && std::isfinite(y)) || x == y;
+}
+
+}  // namespace
+
+bool repays_at_par(std::span<const std::int64_t> pay, std::span<const std::int64_t> start,
+                   std::span<const std::int64_t> end, std::span<const double> r,
+                   std::span<const double> a) {
+    const std::size_t n = pay.size();
+    if (n == 0) return false;
+    if (!std::equal(pay.begin(), pay.end(), end.begin(), end.end())) return false;
+    if (!std::equal(start.begin() + 1, start.end(), end.begin(), end.end() - 1)) return false;
+    for (std::size_t i = 1; i < n; ++i) {
+        if (!isclose(r[i], r[i - 1] - a[i - 1])) return false;
+    }
+    return isclose(r[n - 1], a[n - 1]);
+}
+
+void SwapLegCore::rate_sensitive(std::int64_t t, std::span<const double> unpaid,
+                                 std::vector<std::int64_t>& dates,
+                                 std::vector<double>& flows) const {
+    const std::size_t lo = first_unpaid(t);
+    dates.clear();
+    flows.clear();
+    std::size_t first = n_;  // first unpaid coupon whose rate is not set
+    if (kind_ != LegKind::Fixed) {
+        const std::vector<std::int64_t>& set_by = kind_ == LegKind::TermRate ? fixing_ : start_;
+        for (std::size_t i = lo; i < n_; ++i) {
+            if (!(set_by[i] <= t)) {
+                first = i;
+                break;
+            }
+        }
+    }
+    for (std::size_t i = lo; i < first; ++i) {
+        dates.push_back(pay_[i]);
+        flows.push_back(unpaid[i - lo]);
+    }
+    if (first == n_) return;
+    dates.push_back(start_[first]);
+    flows.push_back(residual_[first]);
+    for (std::size_t i = first; i < n_; ++i) {
+        dates.push_back(pay_[i]);
+        flows.push_back(spreads_[i]);
+    }
+}
+
+double duration(std::int64_t t, std::span<const std::int64_t> dates,
+                std::span<const double> flows, std::span<const double> dfs) {
+    std::vector<double> pvs(dates.size()), weighted(dates.size());
+    for (std::size_t i = 0; i < dates.size(); ++i) {
+        pvs[i] = flows[i] * dfs[i];
+        const double tau = static_cast<double>(dates[i] - t) / 365.0;
+        weighted[i] = tau * pvs[i];
+    }
+    const double total = fsum(pvs);
+    return total != 0.0 ? fsum(weighted) / total : 0.0;
+}
+
 }  // namespace fts::swaps

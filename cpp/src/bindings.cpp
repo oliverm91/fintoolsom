@@ -89,4 +89,6 @@ NB_MODULE(_native, m) {
     bind_fx(m);
     bind_market(m);
     bind_dates(m);
+    bind_rates(m);
+    bind_histories(m);
 }

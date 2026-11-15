@@ -138,6 +138,23 @@ void bind_swaps(nb::module_& m) {
             "PV of every coupon projected (floating) and discounted, none realised.");
 
     m.def(
+        "repays_at_par",
+        [](DaysIn pay, DaysIn start, DaysIn end, DoublesIn residuals,
+           DoublesIn amortizations) -> nb::object {
+            const std::size_t n = pay.shape(0);
+            if (start.shape(0) != n || end.shape(0) != n || residuals.shape(0) != n ||
+                amortizations.shape(0) != n) {
+                return nb::none();
+            }
+            return nb::bool_(swaps::repays_at_par(view(pay), view(start), view(end),
+                                                  view(residuals), view(amortizations)));
+        },
+        nb::arg("pay"), nb::arg("start"), nb::arg("end"), nb::arg("residuals"),
+        nb::arg("amortizations"),
+        "FloatingLeg._repays_at_par on the leg's ordinals and notionals; None when the "
+        "lengths differ.");
+
+    m.def(
         "fsum", [](DoublesIn values) { return swaps::fsum(view(values)); }, nb::arg("values"),
         "math.fsum of a float64 array (the C++ port, for tests).");
 }

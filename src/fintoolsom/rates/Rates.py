@@ -5,7 +5,9 @@ from datetime import date
 from typing import Self
 import numpy as np
 
+from .. import settings
 from ..dates import DayCountConventionBase, ActualDayCountConvention
+from ..dates import date_counts as _date_counts
 
 
 class InterestConventionBase(ABC):
@@ -194,9 +196,41 @@ class Rate:
     def copy(self) -> Self:
         return Rate(self.rate_convention.copy(), self.rate)
 
+    def _native(self, what: int, start_date, end_date, n=1.0):
+        """A factor from ``fintoolsom._native.rate_factors`` (`what`: 0 wealth, 1
+        discount, 2 accrued interest on `n`), or None to compute it in Python: the
+        ``"python"`` backend of ``"rates"``, a rate or notional that isn't a scalar,
+        conventions of other classes, or inputs the C++ code leaves to Python."""
+        if not settings.is_cpp("rates"):
+            return None
+        rate, rc = self.rate, self.rate_convention
+        interest = _INTEREST_KINDS.get(rc.interest_convention)
+        day_count = _date_counts._KINDS.get(rc.day_count_convention)
+        base = rc.time_fraction_base
+        if (
+            interest is None
+            or day_count is None
+            or type(rate) not in _SCALARS
+            or type(n) not in _SCALARS
+            or type(base) not in _BASES
+            or not base
+        ):
+            return None
+        out = settings.native().rate_factors(
+            what, interest, rate, day_count, base, start_date, end_date, n
+        )
+        # Python gives numpy scalars for np.exp, and for numpy scalar inputs.
+        if type(out) is float and (
+            interest == 2 or type(rate) is np.float64 or type(n) is np.float64
+        ):
+            return np.float64(out)
+        return out
+
     def get_wealth_factor(
         self, start_date: date | list[date], end_date: date | list[date]
     ) -> float | np.ndarray:
+        if (wf := self._native(0, start_date, end_date)) is not None:
+            return wf
         tfb = self.rate_convention.time_fraction_base
         return self.rate_convention.interest_convention.get_wf_from_rate(
             self.rate,
@@ -208,6 +242,8 @@ class Rate:
     def get_discount_factor(
         self, start_date: date | list[date], end_date: date | list[date]
     ) -> float | np.ndarray:
+        if (df := self._native(1, start_date, end_date)) is not None:
+            return df
         wf = self.get_wealth_factor(start_date, end_date)
         df = 1 / wf
         return df
@@ -218,6 +254,8 @@ class Rate:
         start_date: date | list[date],
         end_date: date | list[date],
     ) -> float | np.ndarray:
+        if (interest := self._native(2, start_date, end_date, n)) is not None:
+            return interest
         wf = self.get_wealth_factor(start_date, end_date)
         interest = n * (wf - 1)
         return interest
@@ -233,3 +271,13 @@ class Rate:
         self.rate = self.rate_convention.interest_convention.get_rate_from_wf(
             current_wf, new_tf
         )
+
+
+# The kinds of fintoolsom._native.rate_factors, by class (subclasses stay in Python).
+_INTEREST_KINDS: dict[type, int] = {
+    LinearInterestConvention: 0,
+    CompoundedInterestConvention: 1,
+    ExponentialInterestConvention: 2,
+}
+_SCALARS = (float, int, np.float64)
+_BASES = (int, float)

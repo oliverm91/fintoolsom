@@ -42,6 +42,17 @@ struct Known {
 // math.fsum: the correctly rounded sum (CPython's algorithm, special values included).
 double fsum(std::span<const double> values);
 
+// FloatingLeg._repays_at_par: payments on the end dates, a contiguous schedule and the
+// notional repaid through the amortizations (np.allclose / np.isclose, rtol 1e-12).
+bool repays_at_par(std::span<const std::int64_t> pay, std::span<const std::int64_t> start,
+                   std::span<const std::int64_t> end, std::span<const double> residual,
+                   std::span<const double> amortization);
+
+// _swap_risk.get_leg_duration from the rate-sensitive flows and their dfs:
+// fsum(tau * pv) / fsum(pv), tau in act/365 years from t; 0 when the PVs sum to 0.
+double duration(std::int64_t t, std::span<const std::int64_t> dates,
+                std::span<const double> flows, std::span<const double> dfs);
+
 // One swap leg's per-coupon data as flat arrays (structure of arrays).
 class SwapLegCore {
 public:
@@ -54,6 +65,13 @@ public:
     [[nodiscard]] LegKind kind() const noexcept { return kind_; }
     [[nodiscard]] std::size_t size() const noexcept { return n_; }
     [[nodiscard]] bool par_eligible() const noexcept { return par_eligible_; }
+    [[nodiscard]] std::span<const std::int64_t> start() const noexcept { return start_; }
+    [[nodiscard]] std::span<const std::int64_t> end() const noexcept { return end_; }
+    [[nodiscard]] std::span<const std::int64_t> pay() const noexcept { return pay_; }
+    [[nodiscard]] std::span<const std::int64_t> fixing() const noexcept { return fixing_; }
+    [[nodiscard]] std::span<const double> residual() const noexcept { return residual_; }
+    // Fixed legs: their flows; floating legs: fixed_flows (spread + amortization).
+    [[nodiscard]] std::span<const double> flows() const noexcept { return flows_; }
     // First coupon paid after t: payment dates are non-decreasing.
     [[nodiscard]] std::size_t first_unpaid(std::int64_t t) const noexcept;
     [[nodiscard]] bool has_unpaid(std::int64_t t) const noexcept { return first_unpaid(t) < n_; }
@@ -81,6 +99,11 @@ public:
                                             const Discount& discount) const;
     // _simplified_swap_pv._non_started_leg_pv, off the par shortcut.
     [[nodiscard]] double non_started_pv(const DfSource* proj, const Discount& discount) const;
+
+    // _swap_risk._rate_sensitive_flows from the unpaid flows (unpaid_flows): the
+    // payment ordinals and flows that stay fixed under a parallel shift.
+    void rate_sensitive(std::int64_t t, std::span<const double> unpaid,
+                        std::vector<std::int64_t>& dates, std::vector<double>& flows) const;
 
 private:
     // Flows of coupons [lo, n): fixed flows, or projected over [start, end].

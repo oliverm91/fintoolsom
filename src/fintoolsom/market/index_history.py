@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
 
+from .. import settings
 from ..rates import Rate
 from ..dates import Calendar
 from .currencies import Currency
@@ -82,6 +83,20 @@ class OvernightHistory(IndexHistory, ABC):
     def calendar(self) -> Calendar:
         """Fixing calendar of the index."""
         return self.index.calendar
+
+    def _native_calendar(self):
+        """The C++ core of the index calendar when the history's day walks run in C++
+        (the "market" and "dates" backends, an index and calendar of the exact ported
+        classes, whose get_maturity is one business day); else None."""
+        if not (settings.is_cpp("market") and settings.is_cpp("dates")):
+            return None
+        index = self.index
+        if (
+            type(index) not in _OVERNIGHT_INDEXES
+            or type(index.calendar) is not Calendar
+        ):
+            return None
+        return index.calendar._native_core()
 
     @abstractmethod
     def spot_overnight_rate(self, t: date) -> Rate:
@@ -183,6 +198,17 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
 
     def _fill_gaps(self, t: date, end_t: date, verbose: bool = False) -> date:
         """Fill the business days from `t` to `end_t`; returns the date the walk ends on."""
+        if (
+            not verbose
+            and type(t) is date
+            and type(end_t) is date
+            and type(self.rates) is dict
+            and type(self._filled_dates) is set
+            and (core := self._native_calendar()) is not None
+        ):
+            return settings.native().fill_rate_gaps(
+                self.rates, self._filled_dates, t, end_t, core
+            )
         while t < end_t:
             next_t = self.index.get_maturity(
                 t
@@ -210,6 +236,13 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
         """Recompute the levels after `t` up to `end_t`, from the level at `t`."""
         levels = self._index_values
         r = None
+        if (
+            type(t) is date
+            and type(end_t) is date
+            and (core := self._native_calendar()) is not None
+        ):
+            # Up to where a level or rate needs Python, which carries on from there.
+            t, r = settings.native().compound_levels(levels, self.rates, t, end_t, core)
         while t < end_t:
             next_t = self.index.get_maturity(t)
             if t in self.rates:
@@ -227,6 +260,13 @@ class OvernightRateHistory(OvernightHistory, RateHistory):
         previous = levels[next_fixing]
         self._compound_levels(t, next_fixing)
         ratio = levels[next_fixing] / previous
+        if (
+            type(ratio) is float
+            and type(next_fixing) is date
+            and self._native_calendar() is not None
+            and settings.native().scale_levels_after(levels, next_fixing, ratio)
+        ):
+            return
         for d in reversed(levels):
             if d <= next_fixing:
                 break
@@ -392,6 +432,12 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
         between consecutive known levels, applying the implied daily rate
         uniformly across the gap.
         """
+        if (
+            not verbose
+            and (core := self._native_calendar()) is not None
+            and settings.native().fill_price_gaps(self.values, core)
+        ):
+            return
         sorted_known = sorted(self.values)
         for i in range(len(sorted_known) - 1):
             t_start = sorted_known[i]
@@ -438,3 +484,7 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
         )
         rate_value = float(rc.interest_convention.get_rate_from_wf(wf, year_fraction))
         return Rate(rc.copy(), rate_value)
+
+
+# Overnight indexes whose get_maturity is one business day on their calendar.
+_OVERNIGHT_INDEXES = (OvernightRateIndex, OvernightInterestPriceIndex)

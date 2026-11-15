@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ... import settings
 from ..swaps.legs import FixedLeg, FloatingLeg, TermRateLeg
-from ._swap_pv import _leg_flows, get_leg_pv
+from ..swaps.swaps import LegSide
+from ._swap_pv import _leg_flows, _on_cpp_market, get_leg_pv
 
 if TYPE_CHECKING:
     from ...market import Market
     from ...market.currencies import Currency
-    from ..swaps.swaps import LegSide, Swap
+    from ..swaps.swaps import Swap
 
 
 def _rate_sensitive_flows(leg, market: Market) -> tuple[list[date], np.ndarray]:
@@ -74,6 +77,10 @@ def get_leg_duration(swap: Swap, side: LegSide, market: Market) -> float:
     float
         Duration in years; 0 for a leg with no unpaid flow.
     """
+    if _on_cpp_market(swap, market) and isinstance(side, LegSide):
+        return settings.native().market_leg_duration(
+            swap, side is LegSide.RECEIVE, market
+        )
     leg = swap.leg(side)
     pay_dates, flows = _rate_sensitive_flows(leg, market)
     if not pay_dates:
@@ -81,8 +88,9 @@ def get_leg_duration(swap: Swap, side: LegSide, market: Market) -> float:
     dfs = market.get_dfs(leg.currency, pay_dates, collateral=swap.collateral_index)
     pvs = flows * dfs
     taus = np.array([(d - market.t).days / 365 for d in pay_dates])
-    total = float(np.sum(pvs))
-    return float(np.sum(taus * pvs) / total) if total != 0 else 0.0
+    # math.fsum, correctly rounded, as the C++ backend (np.sum's pairwise order is not).
+    total = math.fsum(pvs.tolist())
+    return math.fsum((taus * pvs).tolist()) / total if total != 0 else 0.0
 
 
 def get_leg_dv01(
