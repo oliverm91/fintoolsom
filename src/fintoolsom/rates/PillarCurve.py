@@ -18,11 +18,15 @@ from scipy.interpolate import (
     make_interp_spline,
 )
 
+from .. import settings
 from ._convex_monotone import convex_monotone_forward
 from .Curve import DAY_BASE, DailyGridCurve, InterpolationMethod, year_fractions
 
 # Every pillar curve has at least two segments.
 MIN_KNOTS = 3
+
+# Spot dfs of a curve without a spot segment, for the C++ core.
+_NO_SPOT = np.empty(0)
 
 
 @cache
@@ -115,13 +119,38 @@ class PillarCurve(DailyGridCurve):
         self.forward_rates = np.asarray(self.forward_rates, dtype=float)
         self._check_knots()
         self._knot_tau = year_fractions(self.curve_date, self.knot_dates)
-        self._cum = np.concatenate(
-            ([0.0], np.cumsum(self.forward_rates * np.diff(self._knot_tau)))
-        )
         self._log_df_effective = self._log_df_first_knot()
-        self._forward_integral = self._build_forward_integral()
+        if settings.get_backend("rates") == "cpp":
+            self._core = self._build_core()
+        else:
+            self._cum = np.concatenate(
+                ([0.0], np.cumsum(self.forward_rates * np.diff(self._knot_tau)))
+            )
+            self._forward_integral = self._build_forward_integral()
         if self.precalculate:
             self.precalculate_dfs()
+
+    def _build_core(self):
+        """The C++ core computing this curve's dfs (``fintoolsom._native``)."""
+        if self.interpolation_method is InterpolationMethod.PiecewiseLinear:
+            _warn_piecewise_linear()
+        return settings.native().PillarCurveCore(
+            self._knot_tau,
+            self.forward_rates,
+            self.interpolation_method.value,
+            self._log_df_effective,
+            self._spot_dfs(),
+            self.curve_date.toordinal(),
+            self._spot_fallback(),
+        )
+
+    def _spot_dfs(self) -> np.ndarray:
+        """Dfs of days ``[0, first knot)`` when a spot segment overrides the formula."""
+        return _NO_SPOT
+
+    def _spot_fallback(self) -> Callable[[np.ndarray], np.ndarray] | None:
+        """Function giving the spot-segment dfs of negative days, or None."""
+        return None
 
     @property
     def last_date(self) -> date:
@@ -237,4 +266,6 @@ class PillarCurve(DailyGridCurve):
         return at_knots
 
     def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
+        if self._core is not None:
+            return self._core.dfs_from_days(days)
         return np.exp(self._log_df_effective - self._forward_integral(days / DAY_BASE))

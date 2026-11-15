@@ -1,6 +1,8 @@
 from importlib.metadata import version as _v
 
 __version__ = _v("fintoolsom")
+
+from . import settings
 from .fixedIncome import CLBond, Coupons, Coupon
 from .fixedIncome import get_irr
 from .models import NelsonSiegelSvensson

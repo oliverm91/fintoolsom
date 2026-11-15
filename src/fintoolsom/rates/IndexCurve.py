@@ -78,7 +78,39 @@ class IndexCurve(PillarCurve):
         """First knot: where the forwards start."""
         return self.knot_dates[0]
 
+    def _has_spot_segment(self) -> bool:
+        return self.spot_rate is not None and self.knot_dates[0] > self.curve_date
+
+    def _spot_dfs(self) -> np.ndarray:
+        if not self._has_spot_segment():
+            return super()._spot_dfs()
+        n = (self.knot_dates[0] - self.curve_date).days
+        return np.asarray(
+            self.spot_rate.get_discount_factor(
+                self.curve_date, [self.curve_date + timedelta(days=d) for d in range(n)]
+            ),
+            dtype=float,
+        )
+
+    def _spot_fallback(self):
+        if not self._has_spot_segment():
+            return None
+        # Not a bound method: the C++ core must not hold a reference to the curve.
+        spot_rate, curve_date = self.spot_rate, self.curve_date
+
+        def spot_dfs(days: np.ndarray) -> np.ndarray:
+            return np.asarray(
+                spot_rate.get_discount_factor(
+                    curve_date, [curve_date + timedelta(days=int(n)) for n in days]
+                ),
+                dtype=float,
+            )
+
+        return spot_dfs
+
     def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
+        if self._core is not None:
+            return self._core.dfs_from_days(days)
         dfs = super()._dfs_from_days(days)
         if self.spot_rate is not None and self.knot_dates[0] > self.curve_date:
             spot = days / DAY_BASE < self._knot_tau[0]

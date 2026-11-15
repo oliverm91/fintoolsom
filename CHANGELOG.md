@@ -7,6 +7,8 @@
 ### Feat
 
 - **swaps**: `FloatingLeg.fixed_flows` holds each coupon's flow known at construction: spread interest plus amortization. Valuation adds it to the projected or realised index interest.
+- **rates**: optional C++23 backend (nanobind extension `fintoolsom._native`) for `IndexCurve` and `DiscountCurve`, bit-identical to the Python one on every interpolation method. Choose it per subpackage with `fintoolsom.settings` (`set_backend`, `use_backend`) or `FINTOOLSOM_BACKEND` / `FINTOOLSOM_BACKEND_<SUBPACKAGE>`; Python stays the default. Fitted curves build 6-12x faster, lookups about 3x, notebook curve building 1.5-1.9x. See `BRANCH_README.md`.
+- **build**: the package builds with scikit-build-core and CMake; PyPI gets cibuildwheel wheels for Linux (x86_64, aarch64), Windows (AMD64) and macOS (x86_64, arm64), CPython 3.11-3.14.
 - **swaps**: `SimplifiedSwap(receive_leg=, pay_leg=, collateral_index=)` is a `Swap` valued on a shorter path, for curve building. Every leg settles in its own currency (no `payment_currency` or `is_deliverable`; a UF leg is valued in UF and converted at spot) and pays on its accrual end dates: legs with a payment lag are copied with payment and FX fixing dates on their end dates. `NonStartedSimplifiedSwap` also values every coupon as unpaid and projected, reading no fixings, and raises `ValueError` when valued after its `effective_date` (the swap's first accrual start). `Calculator.valuate` routes both, through `Calculator.get_simplified_swap_mtm` and `Calculator.get_non_started_swap_mtm`. No builder returns them: wrap the legs of a built swap. Building the notebook curves with `NonStartedSimplifiedSwap` is about 10% faster and gives the same curves.
 
 ### Fix

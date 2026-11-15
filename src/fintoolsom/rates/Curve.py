@@ -200,12 +200,15 @@ class DailyGridCurve(Curve):
     curve when it was computed: call :meth:`precalculate_dfs` again after changing
     the curve's data in place.
 
-    Subclasses hold a ``precalculate`` flag and implement :meth:`_dfs_from_days`.
+    Subclasses hold a ``precalculate`` flag and implement :meth:`_dfs_from_days`. A
+    subclass with a C++ core (``_core``, see :mod:`fintoolsom.settings`) hands it the
+    grid and every lookup.
     """
 
     precalculate: bool
     _grid: np.ndarray | None = None
     _grid_horizon: int = -1
+    _core = None
 
     @abstractmethod
     def _dfs_from_days(self, days: np.ndarray) -> np.ndarray:
@@ -218,12 +221,17 @@ class DailyGridCurve(Curve):
         this curve then have a grid too.
         """
         horizon = (self.last_date - self.curve_date).days
-        self._grid = self._dfs_from_days(np.arange(horizon + 1, dtype=np.int64))
+        if self._core is not None:
+            self._grid = self._core.precalculate(horizon)
+        else:
+            self._grid = self._dfs_from_days(np.arange(horizon + 1, dtype=np.int64))
         self._grid_horizon = horizon
         self.precalculate = True
 
     def _dfs_at_days(self, days: np.ndarray) -> np.ndarray:
         """Discount factors at int64 day offsets from ``curve_date``."""
+        if self._core is not None:
+            return self._core.dfs_at_days(days)
         grid = self._grid
         if grid is None:
             return self._dfs_from_days(days)
@@ -238,6 +246,8 @@ class DailyGridCurve(Curve):
         return out
 
     def _dfs_at_ordinals(self, ordinals: np.ndarray) -> np.ndarray:
+        if self._core is not None:
+            return self._core.dfs_at_ordinals(ordinals)
         return self._dfs_at_days(ordinals - self.curve_date.toordinal())
 
     def get_dfs(self, dates: Sequence[date]) -> np.ndarray:

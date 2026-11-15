@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -26,8 +26,14 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
+      # Builds the C++ extension (fintoolsom._native) too.
       - name: Install dependencies
         run: uv sync --group dev --python ${{ matrix.python-version }}
 
       - name: Run tests
         run: uv run pytest
+
+      - name: Run tests on the C++ backend
+        run: uv run pytest
+        env:
+          FINTOOLSOM_BACKEND: cpp

@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.11", "nanobind>=2.4", "setuptools-scm>=8"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "fintoolsom"
@@ -51,13 +51,40 @@ version_provider = "scm"
 update_changelog_on_bump = true
 tag_format = "v$version"
 
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/fintoolsom"]
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+# CMake 4.2+ knows the Visual Studio 2026 generator; scikit-build-core downloads it
+# when the system one is older.
+cmake.version = ">=4.2"
+cmake.build-type = "Release"
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+wheel.packages = ["src/fintoolsom"]
 # Subpackage READMEs are for the repository, not for installs.
-exclude = ["**/README.md"]
+wheel.exclude = ["**/README.md"]
+build-dir = "build/{wheel_tag}"
+
+[tool.setuptools_scm]
+
+[tool.uv]
+# Rebuild the C++ extension whenever its sources or build files change.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "cpp/**/*.cpp" },
+    { file = "cpp/**/*.hpp" },
+]
+
+[tool.cibuildwheel]
+build = "cp311-* cp312-* cp313-* cp314-*"
+skip = "*-win32 *-manylinux_i686 *-musllinux_*"
+test-requires = ["pytest"]
+# Parity of the C++ and Python curves, on the installed wheel.
+test-command = "pytest {project}/tests/unit/rates {project}/tests/unit/test_settings.py -q -p no:cacheprovider"
+
+[tool.cibuildwheel.macos]
+# Each runner builds its own architecture (publish.yml: an Intel and an Apple-silicon
+# runner), so every wheel is tested natively. C++23 library features need macOS 11.
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

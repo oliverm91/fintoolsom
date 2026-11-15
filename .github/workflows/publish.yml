@@ -1,15 +1,47 @@
 name: Publish
 
+# fintoolsom ships a compiled extension (fintoolsom._native, C++23), so PyPI gets one
+# wheel per platform and Python version, built by cibuildwheel (configured in
+# pyproject.toml, [tool.cibuildwheel]), plus the sdist for every other platform (it
+# needs a C++23 compiler and CMake >= 4.2 to install).
+
 on:
   release:
     types: [published]
+  # Build the wheels without publishing, to try changes to this workflow.
+  workflow_dispatch:
 
 jobs:
-  publish:
-    if: ${{ !github.event.release.prerelease }}
+  wheels:
+    name: Wheels ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest     # manylinux x86_64
+          - ubuntu-24.04-arm  # manylinux aarch64
+          - windows-latest    # win_amd64
+          - macos-15-intel    # macOS x86_64
+          - macos-latest      # macOS arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # setuptools-scm reads the version from the tags
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Build and test the wheels
+        run: uvx --from "cibuildwheel>=3.1,<4" cibuildwheel --output-dir wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  sdist:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -18,8 +50,25 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
-      - name: Build
-        run: uv build
+      - name: Build the sdist
+        run: uv build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    needs: [wheels, sdist]
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
