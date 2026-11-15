@@ -1,3 +1,21 @@
+## v1.0.0b14 (2026-11-15)
+
+### BREAKING CHANGE
+
+- **swaps**: a `SwapLeg` whose coupons' start or payment dates decrease along `coupons` raises `ValueError` at construction. Coupons must be in schedule order; equal dates are allowed. Legs from the builders were always in order.
+
+### Feat
+
+- **swaps**: `FloatingLeg.fixed_flows` holds each coupon's flow known at construction: spread interest plus amortization. Valuation adds it to the projected or realised index interest.
+
+### Fix
+
+- **calculator**: an overnight or cross-currency floating leg with a payment lag values every started, unpaid coupon. When the valuation date fell between a coupon's end and its lagged payment date, the next coupon, already accruing, was given the previous coupon's flow.
+
+### Perf
+
+- **calculator**: `_leg_flows` returns the projected flows directly when no coupon of an overnight leg has started, or none of a term-rate leg has fixed, which covers the curve builder's instruments: about 15% faster there.
+
 ## v1.0.0b13 (2026-11-13)
 
 ### BREAKING CHANGE
