@@ -11,6 +11,10 @@
 - **build**: the package builds with scikit-build-core and CMake; PyPI gets cibuildwheel wheels for Linux (x86_64, aarch64), Windows (AMD64) and macOS (x86_64, arm64), CPython 3.11-3.14.
 - **swaps**: `SimplifiedSwap(receive_leg=, pay_leg=, collateral_index=)` is a `Swap` valued on a shorter path, for curve building. Every leg settles in its own currency (no `payment_currency` or `is_deliverable`; a UF leg is valued in UF and converted at spot) and pays on its accrual end dates: legs with a payment lag are copied with payment and FX fixing dates on their end dates. `NonStartedSimplifiedSwap` also values every coupon as unpaid and projected, reading no fixings, and raises `ValueError` when valued after its `effective_date` (the swap's first accrual start). `Calculator.valuate` routes both, through `Calculator.get_simplified_swap_mtm` and `Calculator.get_non_started_swap_mtm`. No builder returns them: wrap the legs of a built swap. Building the notebook curves with `NonStartedSimplifiedSwap` is about 10% faster and gives the same curves.
 
+### Refactor
+
+- **calculator**: leg PVs sum with `math.fsum` (correctly rounded) instead of `np.dot` / `np.sum`, whose BLAS summation order cannot be reproduced; PVs move by at most an ulp.
+
 ### Fix
 
 - **calculator**: an overnight or cross-currency floating leg with a payment lag values every started, unpaid coupon. When the valuation date fell between a coupon's end and its lagged payment date, the next coupon, already accruing, was given the previous coupon's flow.
@@ -18,6 +22,7 @@
 
 ### Perf
 
+- **calculator**: a floating leg discounted on its own index curve (CSA on the leg index, or uncollateralised on the risk-free index), with no coupon started or fixed, is valued at par: `residuals[0] * df(first start)` plus the spreads discounted from the end dates, instead of projecting and discounting every coupon. Applies to legs with no payment lag, a contiguous schedule and the notional repaid through the amortizations, checked once at construction (`FloatingLeg._par_eligible`); `SimplifiedSwap` and `NonStartedSimplifiedSwap` assume it. Same PV up to rounding (about 1e-16 relative); notebook curve building is 13-16% faster with fitted curves on the Python backend, about 20% on the C++ one.
 - **calculator**: `_leg_flows` returns the projected flows directly when no coupon of an overnight leg has started, or none of a term-rate leg has fixed, which covers the curve builder's instruments: about 15% faster there.
 
 ## v1.0.0b13 (2026-11-13)

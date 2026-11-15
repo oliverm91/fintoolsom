@@ -314,6 +314,14 @@ class FloatingLeg(SwapLeg):
     fixed_flows : numpy.ndarray
         Per-coupon part of the flow known at construction: spread interest
         plus amortization. A coupon's flow is its index interest plus this.
+
+    Notes
+    -----
+    A leg paying on its accrual end dates, with each coupon starting where the
+    previous one ends and the notional repaid through the amortizations, is
+    *par eligible*: discounted on the curve that projects its index, its index
+    interest plus amortizations sum to ``residuals[0] * df(first start)``. The
+    calculator then values it from that one df plus the spreads.
     """
 
     _label = "Floating"
@@ -322,6 +330,8 @@ class FloatingLeg(SwapLeg):
     spread: Rate
     spreads_values: np.ndarray = field(init=False)
     fixed_flows: np.ndarray = field(init=False)
+    _par_eligible: bool = field(init=False, repr=False)
+    _has_spread: bool = field(init=False, repr=False)
 
     def _terms(self) -> str:
         return (
@@ -334,6 +344,24 @@ class FloatingLeg(SwapLeg):
             self.spread.get_wealth_factor(self.start_dates, self.end_dates) - 1
         )
         self.fixed_flows = self.spreads_values + self.amortizations
+        self._par_eligible = self._repays_at_par()
+        self._has_spread = bool(self.spreads_values.any())
+
+    def _repays_at_par(self) -> bool:
+        """No payment lag, a contiguous schedule and the notional fully repaid.
+
+        Under these, sum over coupons of ``residual * (df(start) - df(end))``
+        plus ``amortization * df(end)`` telescopes to ``residuals[0] * df(start_0)``.
+        """
+        if not self.coupons:
+            return False
+        r, a = self.residuals, self.amortizations
+        return bool(
+            np.array_equal(self._payment_ordinals, self._end_ordinals)
+            and np.array_equal(self._start_ordinals[1:], self._end_ordinals[:-1])
+            and np.allclose(r[1:], r[:-1] - a[:-1], rtol=1e-12, atol=0.0)
+            and np.isclose(r[-1], a[-1], rtol=1e-12, atol=0.0)
+        )
 
     @property
     def currency(self) -> Currency:

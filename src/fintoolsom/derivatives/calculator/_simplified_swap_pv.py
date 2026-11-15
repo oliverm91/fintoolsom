@@ -4,16 +4,27 @@ Every leg settles in its own currency and pays on its accrual end dates, so a
 leg PV is its unpaid flows discounted in the leg currency; no FX fixing is
 projected. A non-started swap also skips the split into paid, running and
 future coupons: every coupon is projected and discounted.
+
+A floating leg discounted on its own index curve, with no coupon realised, is
+valued at par (:func:`._swap_pv._par_leg_pv`) without checking the leg's
+``_par_eligible``: a simplified leg pays on its end dates by construction, and its
+schedule is assumed contiguous with the notional repaid through the amortizations,
+as every builder makes it.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 
 from ..swaps.legs import FixedLeg
-from ._swap_pv import _leg_pv
+from ._swap_pv import (
+    _discounted_on_index_curve,
+    _flows_pv,
+    _nothing_realised,
+    _par_leg_pv,
+    _sum_products,
+)
 
 if TYPE_CHECKING:
     from ...market import Market
@@ -46,19 +57,34 @@ def get_simplified_swap_mtm(
     collateral = swap.collateral_index
     receive, pay = swap.receive_leg, swap.pay_leg
     return market.convert_value_currency(
-        _leg_pv(receive, collateral, market), receive.currency, currency
+        _simplified_leg_pv(receive, collateral, market), receive.currency, currency
     ) - market.convert_value_currency(
-        _leg_pv(pay, collateral, market), pay.currency, currency
+        _simplified_leg_pv(pay, collateral, market), pay.currency, currency
     )
+
+
+def _simplified_leg_pv(leg, collateral, market: Market) -> float:
+    """PV of a simplified leg in its own currency: at par when it is floating,
+    discounted on its index curve and not yet realised; else its unpaid flows."""
+    if (
+        not isinstance(leg, FixedLeg)
+        and _nothing_realised(leg, market.t.toordinal())
+        and _discounted_on_index_curve(leg, collateral, market)
+    ):
+        return _par_leg_pv(leg, market)
+    return _flows_pv(leg, collateral, market)
 
 
 def _non_started_leg_pv(leg, collateral, market: Market) -> float:
     """PV of a leg none of whose coupons has started, in the leg currency.
 
-    A floating leg projects every coupon over ``[start, end]`` on its index curve.
+    A floating leg projects every coupon over ``[start, end]`` on its index curve,
+    or is valued at par when that curve also discounts it.
     """
     if isinstance(leg, FixedLeg):
         flows = leg.flows
+    elif _discounted_on_index_curve(leg, collateral, market):
+        return _par_leg_pv(leg, market)
     else:
         accruals = market.get_index_curve(leg.index)._accrual_at_ordinals(
             leg._start_ordinals, leg._end_ordinals
@@ -67,7 +93,7 @@ def _non_started_leg_pv(leg, collateral, market: Market) -> float:
     dfs = market._dfs_at_ordinals(
         leg.currency, leg._payment_ordinals, collateral=collateral
     )
-    return float(np.dot(flows, dfs))
+    return _sum_products(flows, dfs)
 
 
 def get_non_started_swap_mtm(
