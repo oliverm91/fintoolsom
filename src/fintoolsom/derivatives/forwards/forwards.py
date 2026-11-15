@@ -4,6 +4,8 @@ from dataclasses import KW_ONLY, dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING
 
+from fintoolsom import settings
+
 if TYPE_CHECKING:
     from ...market.currencies import CurrencyPair
     from ...market.index import InterestIndex
@@ -58,9 +60,12 @@ class Forward:
     collateral_index: InterestIndex | None = None
 
     sign: int = field(init=False)
+    # Backend of "derivatives" when created: valued in C++ when True (settings).
+    _native: bool = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         self.sign = 1 if self.is_buy else -1
+        self._native = settings.get_backend("derivatives") == "cpp"
         if self.currency_pair is None:
             raise ValueError(f"currency_pair is required for a {type(self).__name__}.")
         self._check_settlement()

@@ -1,4 +1,8 @@
-"""Deliverable and non-deliverable FX forwards."""
+"""Deliverable and non-deliverable FX forwards.
+
+A forward created under the ``"cpp"`` backend of ``"derivatives"`` is valued by
+:mod:`._native_fx`, with the same result to the bit.
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,8 @@ def get_forward_mtm(
     float
         MTM in `currency`.
     """
+    if forward._native:
+        return _cpp.forward_mtm(forward, market, currency)
     cp = forward.currency_pair
     if forward.payment_date <= market.t:
         return 0.0
@@ -80,6 +86,8 @@ def get_ndf_mtm(
     float
         MTM in `currency`.
     """
+    if ndf._native:
+        return _cpp.ndf_mtm(ndf, market, currency)
     cp = ndf.currency_pair
     if ndf.payment_date <= market.t:
         return 0.0
@@ -92,3 +100,6 @@ def get_ndf_mtm(
         cp.quote_currency, ndf.payment_date, collateral=ndf.collateral_index
     )
     return market.convert_value_currency(mtm, cp.quote_currency, currency)
+
+
+from . import _native_fx as _cpp  # noqa: E402

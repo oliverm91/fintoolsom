@@ -8,10 +8,11 @@ calculation in a debugger.
 What each backend covers:
 
 - ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``).
-- ``"derivatives"``: swap valuation arithmetic (leg PVs and flows).
+- ``"derivatives"``: swap, forward, NDF and option valuation arithmetic.
 
-The backend is read when an object is created: a curve or leg built under ``"cpp"``
-keeps its C++ core after the setting changes.
+The backend is read when an object is created (a curve, leg, forward or option built
+under ``"cpp"`` keeps its C++ path after the setting changes), or, for
+``get_strike_from_delta``, when called.
 
 Set it from the environment before importing fintoolsom::
 

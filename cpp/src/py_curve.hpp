@@ -148,5 +148,6 @@ struct PySwapLeg : swaps::SwapLegCore {
 };
 
 void bind_swaps(nb::module_& m);
+void bind_fx(nb::module_& m);
 
 }  // namespace fts::py

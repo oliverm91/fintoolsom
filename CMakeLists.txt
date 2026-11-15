@@ -19,6 +19,7 @@ nanobind_add_module(_native NB_STATIC
   cpp/src/curves/pillar_curve.cpp
   cpp/src/curves/fits.cpp
   cpp/src/bind_swaps.cpp
+  cpp/src/bind_fx.cpp
   cpp/src/swaps/swap_leg.cpp)
 target_include_directories(_native PRIVATE cpp/src)
 

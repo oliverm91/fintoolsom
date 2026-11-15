@@ -83,4 +83,5 @@ NB_MODULE(_native, m) {
             "Integral of the forward from the first knot at each tau.");
 
     bind_swaps(m);
+    bind_fx(m);
 }

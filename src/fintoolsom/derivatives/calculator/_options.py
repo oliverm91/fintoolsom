@@ -1,4 +1,9 @@
-"""FX options: Garman-Kohlhagen (Black-Scholes for FX) pricing and greeks."""
+"""FX options: Garman-Kohlhagen (Black-Scholes for FX) pricing and greeks.
+
+Scalar arithmetic is done with :mod:`math` and :mod:`._normal` (not numpy or scipy) so
+the C++ backend (:mod:`._native_fx`), which an option created under the ``"cpp"``
+backend of ``"derivatives"`` uses, gives the same result to the bit.
+"""
 
 from __future__ import annotations
 
@@ -6,11 +11,10 @@ import math
 from datetime import date
 from typing import TYPE_CHECKING
 
-import numpy as np
-from scipy.special import ndtr, ndtri
-
+from ... import settings
 from ...dates import ActualDayCountConvention
 from ...rates import Curve, ExponentialInterestConvention, RateConvention
+from ._normal import ndtr, ndtri
 
 if TYPE_CHECKING:
     from ...market import Market
@@ -36,10 +40,12 @@ def get_option_log_moneyness(
     domestic_curve: Curve,
     foreign_curve: Curve,
 ) -> float:
+    if option._native:
+        return _cpp.option_log_moneyness(option, spot, domestic_curve, foreign_curve)
     df_r = domestic_curve.get_df(option.maturity)
     df_q = foreign_curve.get_df(option.maturity)
     fwd_price = spot * df_q / df_r
-    return np.log(option.strike / fwd_price)
+    return math.log(option.strike / fwd_price)
 
 
 def _get_option_yf(option: Option, t: date) -> float:
@@ -121,6 +127,10 @@ def get_option_mtm(
     foreign_curve: Curve,
     rate_convention: RateConvention = None,
 ) -> float:
+    if option._native:
+        return _cpp.option_mtm(
+            option, t, spot, volatility, domestic_curve, foreign_curve, rate_convention
+        )
     d1, d2 = _get_option_d2(
         option,
         t,
@@ -153,6 +163,10 @@ def get_option_delta(
     foreign_curve: Curve,
     rate_convention: RateConvention = None,
 ) -> float:
+    if option._native:
+        return _cpp.option_delta(
+            option, t, spot, volatility, domestic_curve, foreign_curve, rate_convention
+        )
     _, q = _get_option_rates(option, t, domestic_curve, foreign_curve, rate_convention)
     yf = _get_option_yf(option, t)
     d1 = _get_option_d1(
@@ -171,6 +185,10 @@ def get_option_gamma(
     foreign_curve: Curve,
     rate_convention: RateConvention = None,
 ) -> float:
+    if option._native:
+        return _cpp.option_gamma(
+            option, t, spot, volatility, domestic_curve, foreign_curve, rate_convention
+        )
     _, q = _get_option_rates(option, t, domestic_curve, foreign_curve, rate_convention)
     yf = _get_option_yf(option, t)
     d1, vol_sqrt_yf = _get_option_d1(
@@ -196,6 +214,10 @@ def get_option_vega(
     foreign_curve: Curve,
     rate_convention: RateConvention = None,
 ) -> float:
+    if option._native:
+        return _cpp.option_vega(
+            option, t, spot, volatility, domestic_curve, foreign_curve, rate_convention
+        )
     _, q = _get_option_rates(option, t, domestic_curve, foreign_curve, rate_convention)
     yf = _get_option_yf(option, t)
     d1 = _get_option_d1(
@@ -215,6 +237,17 @@ def get_strike_from_delta(
     sign: int,
     rate_convention: RateConvention = None,
 ) -> float:
+    if settings.get_backend("derivatives") == "cpp":
+        return _cpp.strike_from_delta(
+            delta,
+            spot,
+            volatility,
+            domestic_curve,
+            foreign_curve,
+            maturity,
+            sign,
+            rate_convention,
+        )
     rc = rate_convention or _default_option_rate_convention
     df_r = domestic_curve.get_df(maturity)
     t = domestic_curve.curve_date
@@ -223,9 +256,9 @@ def get_strike_from_delta(
     df_q = foreign_curve.get_df(maturity)
     q = rc.interest_convention.get_rate_from_df(df_q, yf)
 
-    k = spot * np.exp(
+    k = spot * math.exp(
         -(
-            sign * ndtri(sign * delta * (1 / df_q)) * volatility * np.sqrt(yf)
+            sign * ndtri(sign * delta * (1 / df_q)) * volatility * math.sqrt(yf)
             - (r - q + volatility * volatility / 2) * yf
         )
     )
@@ -306,3 +339,6 @@ def get_mtm_option(instrument: Option, market: Market) -> float:
     return get_option_mtm(
         instrument, market.t, spot, volatility, domestic_curve, foreign_curve
     )
+
+
+from . import _native_fx as _cpp  # noqa: E402
