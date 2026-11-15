@@ -9,6 +9,7 @@ import numpy as np
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
+from .. import settings
 from ..rates import Rate, Curve, IndexCurve, LegacyCurve
 from ..dates import Calendar, get_calendar
 from ..dates.date_counts import date_ordinals
@@ -46,8 +47,12 @@ class Market:
     volatility_surfaces: dict[CurrencyPair, VolatilitySurface] = field(
         default_factory=dict
     )
+    # Backend of "market" when created: when True (settings), instruments with a C++
+    # core are valued in one C++ call that also does this market's lookups.
+    _native: bool = field(init=False, default=False, repr=False, compare=False)
 
     def __post_init__(self):
+        self._native = settings.get_backend("market") == "cpp"
         if self.risk_free_index is not None and self.risk_free_index.currency is None:
             raise ValueError(
                 f"risk_free_index '{self.risk_free_index.name}' needs a currency: it funds that currency."

@@ -84,4 +84,5 @@ NB_MODULE(_native, m) {
 
     bind_swaps(m);
     bind_fx(m);
+    bind_market(m);
 }

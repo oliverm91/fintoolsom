@@ -43,6 +43,8 @@ def _to_currency(market: Market, from_currency: Currency, currency: Currency) ->
 
 def forward_mtm(forward: Forward, market: Market, currency: Currency) -> float:
     """:func:`._forwards.get_forward_mtm`; on a C++ market, in one C++ call."""
+    if market._native:
+        return settings.native().market_forward_mtm(forward, market, currency)
     cp = forward.currency_pair
     if forward.payment_date <= market.t:
         return 0.0
@@ -85,6 +87,8 @@ def _settlement_fx(ndf: NDF, market: Market) -> float:
 
 def ndf_mtm(ndf: NDF, market: Market, currency: Currency) -> float:
     """:func:`._forwards.get_ndf_mtm`; on a C++ market, in one C++ call."""
+    if market._native:
+        return settings.native().market_ndf_mtm(ndf, market, currency)
     cp = ndf.currency_pair
     if ndf.payment_date <= market.t:
         return 0.0

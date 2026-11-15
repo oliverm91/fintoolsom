@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ... import settings
 from ..swaps.legs import FixedLeg, FloatingLeg, TermRateLeg
-from ..swaps.swaps import LegSide
+from ..swaps.swaps import LegSide, Swap
 from ...market.currencies import CurrencyPair
 
 if TYPE_CHECKING:
@@ -321,6 +322,8 @@ def get_swap_mtm(swap: Swap, market: Market, currency: Currency) -> float:
     float
         PV of the received leg minus PV of the paid leg, in `currency`.
     """
+    if _on_cpp_market(swap, market):
+        return settings.native().market_swap_mtm(swap, market, currency)
     return get_leg_pv(swap, LegSide.RECEIVE, market, currency) - get_leg_pv(
         swap, LegSide.PAY, market, currency
     )
@@ -348,10 +351,26 @@ def get_leg_pv(swap: Swap, side: LegSide, market: Market, currency: Currency) ->
     float
         PV of the unpaid flows, positive for a leg that pays to its holder.
     """
+    if _on_cpp_market(swap, market) and isinstance(side, LegSide):
+        return settings.native().market_swap_leg_pv(
+            swap, side is LegSide.RECEIVE, market, currency
+        )
     leg = swap.leg(side)
     settlement = swap.leg_settlement_currency(leg)
     pv = _leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
     return market.convert_value_currency(pv, settlement, currency)
+
+
+def _on_cpp_market(swap, market: Market) -> bool:
+    """Whether `swap` is valued in one C++ call (``fintoolsom._native.market_*``): a
+    market and both legs created under the C++ backend, and the settlement currencies
+    of :class:`Swap` (not a subclass overriding them)."""
+    return (
+        market._native
+        and swap.receive_leg._native
+        and swap.pay_leg._native
+        and type(swap).leg_settlement_currency is Swap.leg_settlement_currency
+    )
 
 
 # Imported last: it reads this module's helpers.

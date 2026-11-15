@@ -9,9 +9,11 @@ What each backend covers:
 
 - ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``).
 - ``"derivatives"``: swap, forward, NDF and option valuation arithmetic.
+- ``"market"``: the market lookups (curves, FX rates) of a valuation: an instrument
+  with a C++ core valued on a C++ market runs in one C++ call.
 
-The backend is read when an object is created (a curve, leg, forward or option built
-under ``"cpp"`` keeps its C++ path after the setting changes), or, for
+The backend is read when an object is created (a curve, leg, forward, option or
+market built under ``"cpp"`` keeps its C++ path after the setting changes), or, for
 ``get_strike_from_delta``, when called.
 
 Set it from the environment before importing fintoolsom::
@@ -41,7 +43,7 @@ Backend = Literal["python", "cpp"]
 BACKENDS: tuple[str, ...] = ("python", "cpp")
 SUBPACKAGES: tuple[str, ...] = ("rates", "market", "derivatives")
 # Subpackages with a C++ implementation.
-PORTED: frozenset[str] = frozenset({"rates", "derivatives"})
+PORTED: frozenset[str] = frozenset({"rates", "market", "derivatives"})
 
 DEFAULT_BACKEND: Backend = "python"
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 
+from ... import settings
 from ..swaps.legs import FixedLeg
 from . import _native_swap_pv as _cpp
 from ._swap_pv import (
@@ -55,6 +56,8 @@ def get_simplified_swap_mtm(
     float
         PV of the received leg minus PV of the paid leg, in `currency`.
     """
+    if _on_cpp_market(swap, market):
+        return settings.native().market_simplified_swap_mtm(swap, market, currency)
     collateral = swap.collateral_index
     receive, pay = swap.receive_leg, swap.pay_leg
     return market.convert_value_currency(
@@ -76,6 +79,12 @@ def _simplified_leg_pv(leg, collateral, market: Market) -> float:
     ):
         return _par_leg_pv(leg, market)
     return _flows_pv(leg, collateral, market)
+
+
+def _on_cpp_market(swap, market: Market) -> bool:
+    """Whether `swap` is valued in one C++ call: a market and both legs created under
+    the C++ backend."""
+    return market._native and swap.receive_leg._native and swap.pay_leg._native
 
 
 def _non_started_leg_pv(leg, collateral, market: Market) -> float:
@@ -130,6 +139,8 @@ def get_non_started_swap_mtm(
         (an index curve's spot segment reaches back past its curve date), so the
         value would be wrong without an error.
     """
+    if _on_cpp_market(swap, market):
+        return settings.native().market_non_started_swap_mtm(swap, market, currency)
     if market.t > swap.effective_date:
         raise ValueError(
             f"A NonStartedSimplifiedSwap effective {swap.effective_date} cannot be "
