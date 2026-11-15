@@ -113,7 +113,9 @@ def test_payment_lag_is_dropped_without_touching_the_original_legs(market):
         assert original.payment_dates != original.end_dates
 
     no_lag = Swap(
-        receive_leg=_clp_leg(builders.fixed_leg, rate=_rate(0.05), currency=Currency.CLP),
+        receive_leg=_clp_leg(
+            builders.fixed_leg, rate=_rate(0.05), currency=Currency.CLP
+        ),
         pay_leg=_clp_leg(builders.overnight_leg, index=CAMARA, spread=SPREAD),
         payment_currency=Currency.CLP,
     )
