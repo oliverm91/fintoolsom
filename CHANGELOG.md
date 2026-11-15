@@ -11,6 +11,7 @@
 ### Fix
 
 - **calculator**: an overnight or cross-currency floating leg with a payment lag values every started, unpaid coupon. When the valuation date fell between a coupon's end and its lagged payment date, the next coupon, already accruing, was given the previous coupon's flow.
+- **market**: the `Currency` constants (`Currency.USD`, `Currency.CLF`, ...) are declared as `ClassVar`s on the class, so type checkers know them. They are assigned after the class, and Pyright reported every use as an unknown attribute. Nothing changes at runtime.
 
 ### Perf
 

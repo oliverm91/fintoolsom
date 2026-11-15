@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Self
+from typing import ClassVar, Self
 
 import numpy as np
 
@@ -79,6 +79,32 @@ class Currency:
     locality : Locality
         Locality whose calendar the currency uses.
     """
+
+    # One constant per CurrencyName, assigned after the class (they are instances
+    # of it). Declared here so type checkers know them.
+    USD: ClassVar["Currency"]
+    EUR: ClassVar["Currency"]
+    GBP: ClassVar["Currency"]
+    JPY: ClassVar["Currency"]
+    CHF: ClassVar["Currency"]
+    CLP: ClassVar["Currency"]
+    BRL: ClassVar["Currency"]
+    RUB: ClassVar["Currency"]
+    CNY: ClassVar["Currency"]
+    INR: ClassVar["Currency"]
+    AUD: ClassVar["Currency"]
+    NZD: ClassVar["Currency"]
+    HKD: ClassVar["Currency"]
+    SGD: ClassVar["Currency"]
+    KRW: ClassVar["Currency"]
+    THB: ClassVar["Currency"]
+    COP: ClassVar["Currency"]
+    MXN: ClassVar["Currency"]
+    BND: ClassVar["Currency"]
+    SEK: ClassVar["Currency"]
+    NOK: ClassVar["Currency"]
+    PEN: ClassVar["Currency"]
+    CLF: ClassVar["Currency"]
 
     def __init__(self, name: CurrencyName, settles_in: "Currency | None" = None):
         self.name = name
