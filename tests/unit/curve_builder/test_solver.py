@@ -89,14 +89,14 @@ class _ToyInstrument:
 
 
 def test_date_by_date_and_joint_solves_agree(monkeypatch):
-    from fintoolsom.curve_builder import _solver
+    from fintoolsom.derivatives.calculator import Calculator
 
     market = Market(T, risk_free_index=SOFR)
     dates = [T + _days(365), T + _days(730), T + _days(1095)]
     targets = [0.96, 0.91, 0.87]
     instruments = [_ToyInstrument(d, x) for d, x in zip(dates, targets)]
     monkeypatch.setattr(
-        _solver.Calculator,
+        Calculator,  # the batch leaves toy instruments to it
         "valuate",
         staticmethod(
             lambda i, m, ccy: m.get_discount_curve(CLP).get_df(i.d) - i.target

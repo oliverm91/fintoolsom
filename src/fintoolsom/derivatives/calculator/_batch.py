@@ -1,0 +1,468 @@
+"""Many instruments valued at once on one market, the curves read once per call.
+
+:class:`ValuationBatch` is compiled once for a list of instruments and a market, then
+:meth:`ValuationBatch.values` gives every MTM, as often as the market's curves change
+(the curve builder's solver calls it once per iteration). Each value is, to the bit,
+what :meth:`Calculator.valuate` gives for that instrument alone:
+
+* Instruments :meth:`Calculator.valuate` values in one C++ market call (a market and
+  instrument created under the ``"cpp"`` backend) go to ``market_valuate_many``: one
+  call, one view of the market, each curve, known-until date and spot rate looked up
+  once.
+* Python swaps (``Swap`` itself, legs settled in their own currency or not) and NDFs
+  are compiled: what depends only on the market's date, histories and risk-free index
+  (which coupons are unpaid, which legs are valued at par, the flows of fixed legs, the
+  spot conversion) is computed once, and each call evaluates the curves once per
+  source (a discounting, an index curve, a projection or an FX pair) on every date the
+  batch needs from it. The flows, FX and discount factors are then multiplied
+  elementwise and each leg summed with :func:`math.fsum` on its own slice: the
+  arithmetic of the calculator, so the same values.
+* Anything else (another instrument type, a coupon already running or fixed, a C++
+  leg on a Python market) is valued by :meth:`Calculator.valuate`.
+
+The batch assumes only the curves change between calls: not the instruments, nor the
+market's date, FX or index histories or risk-free index. A call that raises anything
+is redone instrument by instrument, so the error raised is the calculator's.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING
+
+import numpy as np
+
+from ... import settings
+from ...market.currencies import CurrencyPair
+from ..forwards.forwards import NDF, Forward
+from ..swaps.legs import FixedLeg, FloatingLeg, TermRateLeg
+from ..swaps.simplified import NonStartedSimplifiedSwap, SimplifiedSwap
+from ..swaps.swaps import Swap
+from ._swap_pv import _discounted_on_index_curve, _nothing_realised, _on_cpp_market
+
+if TYPE_CHECKING:
+    from ...market import Market
+    from ...market.currencies import Currency
+
+__all__ = ["ValuationBatch"]
+
+# Kinds of market_valuate_many (one market call each in Calculator.valuate).
+_CPP_SWAP, _CPP_SIMPLIFIED, _CPP_NON_STARTED, _CPP_FORWARD, _CPP_NDF = 1, 2, 3, 4, 5
+
+
+def _cpp_kind(instrument, market: Market) -> int:
+    """The market_valuate_many kind of `instrument`, 0 when Calculator.valuate does not
+    value it in one C++ market call. The checks of Calculator.valuate, in its order."""
+    if not market._native:
+        return 0
+    if isinstance(instrument, NDF):
+        return _CPP_NDF if instrument._native else 0
+    if isinstance(instrument, Forward):
+        return _CPP_FORWARD if instrument._native else 0
+    if not isinstance(instrument, Swap):
+        return 0
+    legs_native = instrument.receive_leg._native and instrument.pay_leg._native
+    if isinstance(instrument, NonStartedSimplifiedSwap):
+        return _CPP_NON_STARTED if legs_native else 0
+    if isinstance(instrument, SimplifiedSwap):
+        return _CPP_SIMPLIFIED if legs_native else 0
+    return _CPP_SWAP if _on_cpp_market(instrument, market) else 0
+
+
+class _Source:
+    """One curve lookup of the market, evaluated once per call on every date the batch
+    asks of it (``_dfs_at_ordinals`` and its kin are elementwise)."""
+
+    __slots__ = ("kind", "args", "chunks", "size", "ordinals")
+
+    def __init__(self, kind: str, args: tuple):
+        self.kind, self.args = kind, args
+        self.chunks: list = []
+        self.size = 0
+
+    def add(self, *ordinals: np.ndarray) -> tuple[int, int]:
+        start = self.size
+        self.chunks.append(ordinals)
+        self.size += len(ordinals[0])
+        return start, len(ordinals[0])
+
+    def freeze(self) -> None:
+        self.ordinals = tuple(
+            np.concatenate([c[k] for c in self.chunks]).astype(np.int64, copy=False)
+            for k in range(len(self.chunks[0]))
+        )
+        self.chunks = []
+
+    def evaluate(self, market: Market) -> np.ndarray:
+        kind, args = self.kind, self.args
+        if kind == "discount":  # Market._dfs_at_ordinals
+            currency, collateral = args
+            return market._dfs_at_ordinals(
+                currency, *self.ordinals, collateral=collateral
+            )
+        if kind == "index":  # the index curve's dfs (_par_leg_pv)
+            return market.get_index_curve(args[0])._dfs_at_ordinals(*self.ordinals)
+        if kind == "accrual":  # the index curve's accruals (_projected_flows)
+            return market.get_index_curve(args[0])._accrual_at_ordinals(*self.ordinals)
+        return market._future_fx_rates_at_ordinals(args[0], *self.ordinals)  # "fx"
+
+
+class _Uncompiled(Exception):
+    """An instrument left to Calculator.valuate."""
+
+
+class _Leg:
+    """One compiled leg: its terms ``flow * fx * df`` are ``[start, stop)`` of the
+    batch's products, plus the head ``residual_0 * df(start_0)`` of a par leg; its PV
+    is converted to the reporting currency at ``spot``."""
+
+    __slots__ = ("start", "stop", "head", "spot")
+
+    def __init__(self, start: int, stop: int, head: int | None, spot: float):
+        self.start, self.stop, self.head, self.spot = start, stop, head, spot
+
+
+class _Ndf:
+    """One compiled NDF: ``a * (s_t - strike) * df * spot``, ``s_t`` fixed or the
+    batch's FX value ``fx``."""
+
+    __slots__ = ("a", "strike", "s_t", "fx", "df", "spot")
+
+    def __init__(self, a, strike, s_t, fx, df, spot):
+        self.a, self.strike, self.s_t, self.fx, self.df, self.spot = (
+            a,
+            strike,
+            s_t,
+            fx,
+            df,
+            spot,
+        )
+
+
+class ValuationBatch:
+    """The MTMs of `instruments` on `market` in `currency`, compiled once.
+
+    Parameters
+    ----------
+    instruments : list
+        Instruments :meth:`Calculator.valuate` values.
+    market : Market
+        Market they are valued on; only its curves may change between calls.
+    currency : Currency
+        Reporting currency.
+    """
+
+    def __init__(self, instruments, market: Market, currency: Currency):
+        self.instruments = list(instruments)
+        self.market, self.currency = market, currency
+        kinds = [_cpp_kind(i, market) for i in self.instruments]
+        self._all_cpp = all(kinds)
+        if self._all_cpp:  # one C++ call: nothing to compile (the solver's blocks)
+            self._cpp_instruments = self.instruments
+            self._cpp_kinds = np.array(kinds, dtype=np.int64)
+            return
+        self._cpp_pos = [k for k, kind in enumerate(kinds) if kind]
+        self._cpp_instruments = [self.instruments[k] for k in self._cpp_pos]
+        self._cpp_kinds = np.array([kind for kind in kinds if kind], dtype=np.int64)
+
+        self._sources: dict = {}
+        self._terms: list = []  # (flows, fx refs, df refs) per leg, before freezing
+        self._projected: list = []  # (positions in the flows, residuals, fixed, refs)
+        self._heads: list = []  # (residual_0, df ref) per par leg
+        self._compiled: list = []  # (position, plan) per compiled instrument
+        self._fallback: list = []  # positions left to Calculator.valuate
+        self._n_terms = 0
+        for k, (instrument, kind) in enumerate(zip(self.instruments, kinds)):
+            if kind:
+                continue
+            checkpoint = self._checkpoint()
+            try:
+                self._compiled.append((k, self._compile(instrument)))
+            except Exception:  # _Uncompiled, or an error the calculator will raise
+                self._rollback(checkpoint)
+                self._fallback.append(k)
+        self._freeze()
+
+    def _checkpoint(self) -> tuple:
+        return (
+            len(self._terms),
+            len(self._projected),
+            len(self._heads),
+            self._n_terms,
+            {key: (len(s.chunks), s.size) for key, s in self._sources.items()},
+        )
+
+    def _rollback(self, checkpoint: tuple) -> None:
+        """Drop what a failed compilation added."""
+        n_terms, n_projected, n_heads, self._n_terms, sources = checkpoint
+        del self._terms[n_terms:], self._projected[n_projected:], self._heads[n_heads:]
+        for key in [k for k in self._sources if k not in sources]:
+            del self._sources[key]
+        for key, (n_chunks, size) in sources.items():
+            source = self._sources[key]
+            del source.chunks[n_chunks:]
+            source.size = size
+
+    # ── Compilation ────────────────────────────────────────────────────────────
+
+    def _source(self, kind: str, *args) -> _Source:
+        # Indexes and currencies by identity (equal objects at worst split a source);
+        # a pair by value, as the market keys its FX histories (one is built per leg).
+        key = (kind, args[0]) if kind == "fx" else (kind, *(id(a) for a in args))
+        source = self._sources.get(key)
+        if source is None:
+            source = self._sources[key] = _Source(kind, args)
+        return source
+
+    def _ref(self, source: _Source, *ordinals: np.ndarray) -> tuple:
+        return (source, *source.add(*ordinals))
+
+    def _spot(self, settlement) -> float:
+        """Market.convert_value_currency's rate, ``value * rate``."""
+        market = self.market
+        return market.get_fx_rate(
+            market.t, CurrencyPair(settlement, self.currency)
+        ).value
+
+    def _compile(self, instrument):
+        if type(instrument) is NDF and not instrument._native:
+            return self._compile_ndf(instrument)
+        if type(instrument) is not Swap:
+            raise _Uncompiled
+        receive, pay = instrument.receive_leg, instrument.pay_leg
+        if receive._native or pay._native:
+            raise _Uncompiled
+        collateral = instrument.collateral_index
+        return tuple(
+            self._compile_leg(leg, collateral, instrument.leg_settlement_currency(leg))
+            for leg in (receive, pay)
+        )
+
+    def _compile_leg(self, leg, collateral, settlement) -> _Leg:
+        """_swap_pv._leg_pv_non_deliverable, its static part."""
+        market = self.market
+        t = market.t.toordinal()
+        start = self._n_terms
+        spot = self._spot(settlement)
+        if leg.currency == settlement:  # _leg_pv
+            if (
+                isinstance(leg, FloatingLeg)
+                and leg._par_eligible
+                and _nothing_realised(leg, t)
+                and _discounted_on_index_curve(leg, collateral, market)
+            ):  # _par_leg_pv
+                index = self._source("index", leg.index)
+                self._heads.append(
+                    (leg.residuals[0], self._ref(index, leg._start_ordinals[:1]))
+                )
+                head = len(self._heads) - 1
+                if leg._has_spread:
+                    self._add_terms(
+                        leg.spreads_values, None, self._ref(index, leg._end_ordinals)
+                    )
+                return _Leg(start, self._n_terms, head, spot)
+            future = self._unpaid_flows(leg, t)
+            if future is None:
+                return _Leg(start, start, None, spot)
+            payment = leg._payment_ordinals[future]
+            discount = self._ref(
+                self._source("discount", leg.currency, collateral), payment
+            )
+            self._add_terms(self._flows, None, discount)
+            return _Leg(start, self._n_terms, None, spot)
+        future = self._unpaid_flows(leg, t)
+        if future is None:
+            return _Leg(start, start, None, spot)
+        pair = CurrencyPair(leg.currency, settlement)
+        fx = self._ref(self._source("fx", pair), leg._fx_fixing_ordinals[future])
+        payment = leg._payment_ordinals[future]
+        discount = self._ref(self._source("discount", settlement, collateral), payment)
+        self._add_terms(self._flows, fx, discount)
+        return _Leg(start, self._n_terms, None, spot)
+
+    def _unpaid_flows(self, leg, t: int):
+        """_swap_pv._leg_flows when nothing is realised: the mask of the unpaid coupons
+        (None if there is none), their flows left in ``self._flows`` (projected ones
+        filled in by each call)."""
+        future = leg._payment_ordinals > t
+        if not future.any():
+            return None
+        if isinstance(leg, FixedLeg):
+            self._flows = leg.flows[future]
+            return future
+        started = (
+            leg._fixing_ordinals
+            if isinstance(leg, TermRateLeg)
+            else leg._start_ordinals
+        )
+        if (future & (started <= t)).any():  # a running or fixed coupon
+            raise _Uncompiled
+        n = int(future.sum())
+        self._flows = np.zeros(n)
+        accrual = self._source("accrual", leg.index)
+        self._projected.append(
+            (
+                self._n_terms + np.arange(n),
+                leg.residuals[future],
+                leg.fixed_flows[future],
+                self._ref(
+                    accrual, leg._start_ordinals[future], leg._end_ordinals[future]
+                ),
+            )
+        )
+        return future
+
+    def _add_terms(self, flows, fx, df) -> None:
+        self._terms.append((np.asarray(flows, dtype=float), fx, df))
+        self._n_terms += len(flows)
+
+    def _compile_ndf(self, ndf: NDF) -> _Ndf:
+        """_forwards.get_ndf_mtm, its static part."""
+        market = self.market
+        cp = ndf.currency_pair
+        if ndf.payment_date <= market.t:
+            return _Ndf(None, None, None, None, None, None)
+        fx = None
+        s_t = None
+        if ndf.fixing_date <= market.t:
+            s_t = market.get_fx_rate(ndf.fixing_date, cp).value
+        elif ndf.fixing_date <= market.get_fx_known_until(cp):  # get_future_fx_rate
+            s_t = market.get_fx_rate(ndf.fixing_date, cp).value
+        else:
+            fx = self._ref(
+                self._source("fx", cp), np.array([ndf.fixing_date.toordinal()])
+            )
+        discount = self._source("discount", cp.quote_currency, ndf.collateral_index)
+        df = self._ref(discount, np.array([ndf.payment_date.toordinal()]))
+        return _Ndf(
+            ndf.sign * ndf.notional,
+            ndf.strike,
+            s_t,
+            fx,
+            df,
+            self._spot(cp.quote_currency),
+        )
+
+    def _freeze(self) -> None:
+        """Lay the sources end to end, then turn every reference into its positions in
+        the values of one call (the last one is a 1, the FX of a deliverable flow)."""
+        offset = {}
+        n = 0
+        for source in self._sources.values():
+            source.freeze()
+            offset[source] = n
+            n += source.size
+        one = n
+
+        def at(ref):
+            source, start, size = ref
+            return offset[source] + start + np.arange(size)
+
+        terms = self._terms
+        self._static_flows = (
+            np.concatenate([f for f, _, _ in terms]) if terms else np.zeros(0)
+        )
+        self._fx_at = np.concatenate(
+            [at(fx) if fx is not None else np.full(len(f), one) for f, fx, _ in terms]
+            or [np.zeros(0, dtype=np.int64)]
+        ).astype(np.intp)
+        self._df_at = np.concatenate(
+            [at(df) for _, _, df in terms] or [np.zeros(0, dtype=np.int64)]
+        ).astype(np.intp)
+        projected = self._projected
+        self._projected_pos = np.concatenate(
+            [p for p, *_ in projected] or [np.zeros(0, dtype=np.int64)]
+        ).astype(np.intp)
+        self._residuals = np.concatenate(
+            [r for _, r, _, _ in projected] or [np.zeros(0)]
+        )
+        self._fixed = np.concatenate([f for *_, f, _ in projected] or [np.zeros(0)])
+        self._accrual_at = np.concatenate(
+            [at(a) for *_, a in projected] or [np.zeros(0, dtype=np.int64)]
+        ).astype(np.intp)
+        self._head_residuals = np.array([r for r, _ in self._heads], dtype=float)
+        self._head_at = np.concatenate(
+            [at(d) for _, d in self._heads] or [np.zeros(0, dtype=np.int64)]
+        ).astype(np.intp)
+        for _, plan in self._compiled:
+            if isinstance(plan, _Ndf):
+                plan.fx = None if plan.fx is None else int(at(plan.fx)[0])
+                plan.df = None if plan.df is None else int(at(plan.df)[0])
+        self._sources_list = list(self._sources.values())
+        del self._terms, self._projected, self._heads
+
+    # ── Evaluation ─────────────────────────────────────────────────────────────
+
+    def values(self) -> np.ndarray:
+        """Every MTM, in the order of the instruments."""
+        try:
+            return self._values()
+        except Exception:
+            # The calculator, one instrument at a time, raises its own error.
+            from . import Calculator
+
+            return np.array(
+                [
+                    Calculator.valuate(i, self.market, self.currency)
+                    for i in self.instruments
+                ]
+            )
+
+    def _values(self) -> np.ndarray:
+        market, currency = self.market, self.currency
+        if self._all_cpp:
+            return settings.native().market_valuate_many(
+                self._cpp_instruments, self._cpp_kinds, market, currency
+            )
+        out = np.empty(len(self.instruments))
+        if self._cpp_pos:
+            out[self._cpp_pos] = settings.native().market_valuate_many(
+                self._cpp_instruments, self._cpp_kinds, market, currency
+            )
+        if self._compiled:
+            values = np.concatenate(
+                [s.evaluate(market) for s in self._sources_list] + [np.ones(1)]
+            )
+            flows = self._static_flows.copy()
+            if self._projected_pos.size:
+                # _projected_flows: residual * accrual + fixed flows
+                flows[self._projected_pos] = (
+                    self._residuals * values[self._accrual_at] + self._fixed
+                )
+            # flows * fx * dfs (deliverable: fx = 1, which leaves flows * dfs)
+            products = (flows * values[self._fx_at] * values[self._df_at]).tolist()
+            heads = (self._head_residuals * values[self._head_at]).tolist()
+            fsum = math.fsum
+            for k, plan in self._compiled:
+                if isinstance(plan, _Ndf):
+                    out[k] = _ndf_value(plan, values)
+                    continue
+                mtm = []
+                for leg in plan:
+                    pv = fsum(products[leg.start : leg.stop])
+                    if leg.head is not None:
+                        head = heads[leg.head]
+                        pv = head + pv if leg.stop > leg.start else head
+                    mtm.append(pv * leg.spot)
+                out[k] = mtm[0] - mtm[1]
+        if self._fallback:
+            from . import Calculator
+
+            for k in self._fallback:
+                out[k] = Calculator.valuate(self.instruments[k], market, currency)
+        return out
+
+
+def _ndf_value(plan: _Ndf, values: np.ndarray) -> float:
+    """_forwards.get_ndf_mtm on the values of one call."""
+    if plan.a is None:  # paid
+        return 0.0
+    if plan.s_t is not None:
+        s_t = plan.s_t
+    else:
+        rate = float(values[plan.fx])
+        if rate <= 0:  # FX_Rate rejects it, with its own message
+            raise ValueError(rate)
+        s_t = rate
+    fv = plan.a * (s_t - plan.strike)
+    return fv * float(values[plan.df]) * plan.spot

@@ -48,6 +48,10 @@ public:
     std::size_t dfs_from_days(const std::int64_t* days, std::size_t n, std::int64_t shift,
                               double* out) const noexcept;
 
+    // New segment forwards (and the log df at the first knot), refitted as the
+    // constructor fits them; the grid is dropped.
+    void set_forwards(std::span<const double> forwards, double log_df_effective);
+
     // Daily dfs for days [0, horizon]: becomes the grid of later lookups.
     std::shared_ptr<const std::vector<double>> precalculate(std::int64_t horizon);
 
@@ -61,6 +65,8 @@ public:
     [[nodiscard]] double forward_integral(double tau) const noexcept;
 
 private:
+    // cum_, the fit and the first and last forwards, from knot_tau_ and forwards_.
+    void fit();
     [[nodiscard]] double df_formula(std::int64_t day) const noexcept;
     // Formula dfs for every day of [lo, hi), in order: one pass per segment.
     void fill_formula(std::int64_t lo, std::int64_t hi, double* out) const noexcept;

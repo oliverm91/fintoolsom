@@ -7,7 +7,12 @@
 // with the same errors and messages: Market.get_index_curve, get_discount_curve,
 // _dfs_at_ordinals (its curves), get_fx_rate, get_fx_known_until and
 // convert_value_currency. On top of it, a whole swap, simplified swap, forward or NDF is
-// valued in one call, as the calculator functions do.
+// valued in one call, as the calculator functions do, and a batch of them in one call on
+// one view (market_valuate_many).
+//
+// A view lives for one call. It remembers the curves, the known-until dates and the spot
+// rates it has looked up (by the identity of the index, currency or pair asked for): the
+// market cannot change during the call, so a batch looks each one up once.
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -155,6 +160,21 @@ public:
 
     // Market.get_index_curve.
     [[nodiscard]] nb::object index_curve(nb::handle index) const {
+        if (PyObject* hit = memo_find(index_curves_, index)) return nb::borrow(hit);
+        nb::object curve = index_curve_lookup(index);
+        index_curves_.emplace_back(nb::borrow(index), curve);
+        return curve;
+    }
+
+    // Market.get_discount_curve, under the market's risk-free index.
+    [[nodiscard]] nb::object discount_curve(nb::handle currency) const {
+        if (PyObject* hit = memo_find(discount_curves_, currency)) return nb::borrow(hit);
+        nb::object curve = discount_curve_lookup(currency);
+        discount_curves_.emplace_back(nb::borrow(currency), curve);
+        return curve;
+    }
+
+    [[nodiscard]] nb::object index_curve_lookup(nb::handle index) const {
         const nb::object name = index.attr("name");
         PyObject* curve = PyDict_GetItemWithError(curves_.ptr(), name.ptr());
         if (curve == nullptr && PyErr_Occurred()) throw nb::python_error();
@@ -164,8 +184,7 @@ public:
         return nb::borrow(curve);
     }
 
-    // Market.get_discount_curve, under the market's risk-free index.
-    [[nodiscard]] nb::object discount_curve(nb::handle currency) const {
+    [[nodiscard]] nb::object discount_curve_lookup(nb::handle currency) const {
         if (rfi_.is_none()) {
             throw_py(PyExc_ValueError,
                   nb::str("Market has no risk_free_index; cannot resolve discount curves."));
@@ -224,6 +243,13 @@ public:
 
     // Market.get_fx_known_until(pair).
     [[nodiscard]] nb::object fx_known_until(nb::handle pair) const {
+        if (PyObject* hit = memo_find(known_until_, pair)) return nb::borrow(hit);
+        nb::object until = fx_known_until_lookup(pair);
+        known_until_.emplace_back(nb::borrow(pair), until);
+        return until;
+    }
+
+    [[nodiscard]] nb::object fx_known_until_lookup(nb::handle pair) const {
         PyObject* data = PyDict_GetItemWithError(fx_history_.ptr(), pair.ptr());
         if (data == nullptr && PyErr_Occurred()) throw nb::python_error();
         if (data == nullptr) return nb::borrow(t_date_);
@@ -250,8 +276,15 @@ public:
     }
 
     // Market.convert_value_currency(value, from, to).
+    // The pair comes from currency_pair: one object per pair for the process.
     [[nodiscard]] double convert(double value, nb::handle from, nb::handle to) const {
-        return value * fx_rate(t_date_, currency_pair(from, to));
+        const nb::handle pair = currency_pair(from, to);
+        for (const auto& [p, rate] : spot_) {
+            if (p == pair.ptr()) return value * rate;
+        }
+        const double rate = fx_rate(t_date_, pair);
+        spot_.emplace_back(pair.ptr(), rate);
+        return value * rate;
     }
 
     // Market.get_index(index.name): the history holding the index's fixings.
@@ -340,9 +373,20 @@ public:
     }
 
 private:
+    using Memo = std::vector<std::pair<nb::object, nb::object>>;
+    static PyObject* memo_find(const Memo& memo, nb::handle key) {
+        for (const auto& [k, v] : memo) {
+            if (k.is(key)) return v.ptr();
+        }
+        return nullptr;
+    }
+
     nb::handle market_;
     nb::object curves_, fx_history_, t_date_, rfi_;
     std::int64_t t_;
+    // Lookups already made, for the call this view lives in (few entries: linear scans).
+    mutable Memo index_curves_, discount_curves_, known_until_;
+    mutable std::vector<std::pair<const PyObject*, double>> spot_;
 };
 
 // ── Swap legs (_native_swap_pv, with the lookups here) ─────────────────────
@@ -548,8 +592,7 @@ double swap_leg_pv(nb::handle swap, nb::handle leg, nb::handle collateral, const
     return m.convert(pv, settlement, currency);
 }
 
-double swap_mtm(nb::handle swap, nb::handle market, nb::handle currency) {
-    const MarketView m(market);
+double swap_mtm(nb::handle swap, const MarketView& m, nb::handle currency) {
     const nb::object collateral = swap.attr("collateral_index");
     const double receive = swap_leg_pv(swap, swap.attr("receive_leg"), collateral, m, currency);
     const double pay = swap_leg_pv(swap, swap.attr("pay_leg"), collateral, m, currency);
@@ -563,8 +606,7 @@ double swap_leg_pv_of_side(nb::handle swap, bool receive, nb::handle market,
                        swap.attr("collateral_index"), m, currency);
 }
 
-double simplified_swap_mtm(nb::handle swap, nb::handle market, nb::handle currency) {
-    const MarketView m(market);
+double simplified_swap_mtm(nb::handle swap, const MarketView& m, nb::handle currency) {
     const nb::object collateral = swap.attr("collateral_index");
     const nb::object receive = swap.attr("receive_leg"), pay = swap.attr("pay_leg");
     const double r = m.convert(leg_pv(receive, collateral, m, true),
@@ -574,8 +616,7 @@ double simplified_swap_mtm(nb::handle swap, nb::handle market, nb::handle curren
     return r - p;
 }
 
-double non_started_swap_mtm(nb::handle swap, nb::handle market, nb::handle currency) {
-    const MarketView m(market);
+double non_started_swap_mtm(nb::handle swap, const MarketView& m, nb::handle currency) {
     const nb::object effective = swap.attr("effective_date");
     if (m.t() > ordinal_of(effective)) {
         throw_py(PyExc_ValueError,
@@ -671,8 +712,7 @@ nb::object accrue_custom_days(nb::handle market, double notional, nb::handle nam
 
 // ── Forwards (_native_fx.forward_mtm / ndf_mtm, with the lookups here) ─────
 
-double forward_mtm(nb::handle forward, nb::handle market, nb::handle currency) {
-    const MarketView m(market);
+double forward_mtm(nb::handle forward, const MarketView& m, nb::handle currency) {
     const nb::object pair = forward.attr("currency_pair");
     const std::int64_t pay = ordinal_of(forward.attr("payment_date"));
     if (pay <= m.t()) return 0.0;
@@ -710,8 +750,7 @@ double settlement_fx(nb::handle ndf, const MarketView& m, nb::handle pair) {
     return rate;
 }
 
-double ndf_mtm(nb::handle ndf, nb::handle market, nb::handle currency) {
-    const MarketView m(market);
+double ndf_mtm(nb::handle ndf, const MarketView& m, nb::handle currency) {
     const nb::object pair = ndf.attr("currency_pair");
     const std::int64_t pay = ordinal_of(ndf.attr("payment_date"));
     if (pay <= m.t()) return 0.0;
@@ -724,24 +763,69 @@ double ndf_mtm(nb::handle ndf, nb::handle market, nb::handle currency) {
                        to_currency);
 }
 
+// ── Batches (_batch.ValuationBatch) ────────────────────────────────────────
+
+// What Calculator.valuate runs for each instrument kind, in one market call.
+enum class Kind : std::int64_t { Swap = 1, Simplified = 2, NonStarted = 3, Forward = 4, Ndf = 5 };
+
+using Valuation = double (*)(nb::handle, const MarketView&, nb::handle);
+
+template <Valuation F>
+double on_new_view(nb::handle instrument, nb::handle market, nb::handle currency) {
+    return F(instrument, MarketView(market), currency);
+}
+
+// The MTMs of `instruments` (a list), each valued as its `kinds` entry says, in order, on
+// one view of `market`: the values, and errors, of one call per instrument.
+DoublesOut valuate_many(nb::handle instruments, DaysIn kinds, nb::handle market,
+                        nb::handle currency) {
+    if (!PyList_CheckExact(instruments.ptr())) {
+        throw_py(PyExc_TypeError, nb::str("instruments must be a list."));
+    }
+    const auto n = static_cast<std::size_t>(PyList_GET_SIZE(instruments.ptr()));
+    if (kinds.shape(0) != n) throw_py(PyExc_ValueError, nb::str("One kind per instrument."));
+    const MarketView m(market);
+    auto [out, mtm] = new_array<double>(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const nb::handle instrument =
+            PyList_GET_ITEM(instruments.ptr(), static_cast<Py_ssize_t>(i));
+        switch (static_cast<Kind>(kinds.data()[i])) {
+            case Kind::Swap: mtm[i] = swap_mtm(instrument, m, currency); break;
+            case Kind::Simplified: mtm[i] = simplified_swap_mtm(instrument, m, currency); break;
+            case Kind::NonStarted: mtm[i] = non_started_swap_mtm(instrument, m, currency); break;
+            case Kind::Forward: mtm[i] = forward_mtm(instrument, m, currency); break;
+            case Kind::Ndf: mtm[i] = ndf_mtm(instrument, m, currency); break;
+            default:
+                throw_py(PyExc_ValueError,
+                         fmt_str("Unknown valuation kind {}.", kinds.data()[i]));
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 void bind_market(nb::module_& m) {
     PyDateTime_IMPORT;
     if (PyDateTimeAPI == nullptr) throw nb::python_error();
 
-    m.def("market_swap_mtm", &swap_mtm, nb::arg("swap"), nb::arg("market"), nb::arg("currency"),
+    m.def("market_swap_mtm", &on_new_view<swap_mtm>, nb::arg("swap"), nb::arg("market"), nb::arg("currency"),
           "_swap_pv.get_swap_mtm with the market lookups in C++.");
     m.def("market_swap_leg_pv", &swap_leg_pv_of_side, nb::arg("swap"), nb::arg("receive"),
           nb::arg("market"), nb::arg("currency"),
           "_swap_pv.get_leg_pv of the receive (True) or pay leg.");
-    m.def("market_simplified_swap_mtm", &simplified_swap_mtm, nb::arg("swap"),
+    m.def("market_simplified_swap_mtm", &on_new_view<simplified_swap_mtm>, nb::arg("swap"),
           nb::arg("market"), nb::arg("currency"));
-    m.def("market_non_started_swap_mtm", &non_started_swap_mtm, nb::arg("swap"),
+    m.def("market_non_started_swap_mtm", &on_new_view<non_started_swap_mtm>, nb::arg("swap"),
           nb::arg("market"), nb::arg("currency"));
-    m.def("market_forward_mtm", &forward_mtm, nb::arg("forward"), nb::arg("market"),
+    m.def("market_forward_mtm", &on_new_view<forward_mtm>, nb::arg("forward"), nb::arg("market"),
           nb::arg("currency"));
-    m.def("market_ndf_mtm", &ndf_mtm, nb::arg("ndf"), nb::arg("market"), nb::arg("currency"));
+    m.def("market_ndf_mtm", &on_new_view<ndf_mtm>, nb::arg("ndf"), nb::arg("market"),
+          nb::arg("currency"));
+    m.def("market_valuate_many", &valuate_many, nb::arg("instruments"), nb::arg("kinds"),
+          nb::arg("market"), nb::arg("currency"),
+          "The MTMs of a list of instruments on one market view: kinds 1 swap, 2 simplified "
+          "swap, 3 non-started simplified swap, 4 forward, 5 NDF (the market_* calls).");
 
     m.def("market_leg_duration", &leg_duration, nb::arg("swap"), nb::arg("receive"),
           nb::arg("market"), "_swap_risk.get_leg_duration of the receive (True) or pay leg.");

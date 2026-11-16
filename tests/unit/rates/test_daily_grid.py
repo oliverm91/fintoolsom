@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 
+from fintoolsom import settings
 from fintoolsom.curve_builder import _solver, build_curves
 from fintoolsom.curve_builder._keys import _built
 from fintoolsom.market import Currency
@@ -121,10 +122,14 @@ def test_build_skips_the_grid_while_solving_local_curves(monkeypatch):
     assert all(c._grid is not None for c in market.curves.values())
 
 
-def test_build_keeps_the_grid_while_solving_cubic_curves(monkeypatch):
-    market, flags = _build(
-        monkeypatch,
-        interp_method=METHOD.CubicSpline,
-    )
-    assert flags and all(flags)
+@pytest.mark.parametrize("backend", ["python", "cpp"])
+def test_build_keeps_the_grid_while_solving_python_cubic_curves(monkeypatch, backend):
+    """Python spline curves get the grid while solving; C++ ones, whose formula is as
+    fast as a grid read, only once solved."""
+    if backend == "cpp":
+        pytest.importorskip("fintoolsom._native")
+    with settings.use_backend(backend, "rates"):
+        market, flags = _build(monkeypatch, interp_method=METHOD.CubicSpline)
+    assert flags and all(flags) is (backend == "python")
+    assert backend == "python" or not any(flags)
     assert all(c._grid is not None for c in market.curves.values())

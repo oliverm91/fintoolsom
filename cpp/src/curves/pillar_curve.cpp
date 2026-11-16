@@ -99,6 +99,22 @@ PillarCurveCore::PillarCurveCore(std::span<const double> knot_tau,
     if (n < 3 || forwards_.size() != n - 1) {
         throw std::invalid_argument("PillarCurveCore needs n >= 3 knots and n - 1 forwards.");
     }
+    fit();
+}
+
+void PillarCurveCore::set_forwards(std::span<const double> forwards, double log_df_effective) {
+    if (forwards.size() != forwards_.size()) {
+        throw std::invalid_argument("set_forwards needs one forward per segment.");
+    }
+    std::copy(forwards.begin(), forwards.end(), forwards_.begin());
+    log_df_effective_ = log_df_effective;
+    grid_.reset();
+    horizon_ = -1;
+    fit();
+}
+
+void PillarCurveCore::fit() {
+    const std::size_t n = knot_tau_.size();
     // np.concatenate(([0.0], np.cumsum(forward_rates * np.diff(knot_tau)))): sequential.
     cum_.resize(n);
     cum_[0] = 0.0;

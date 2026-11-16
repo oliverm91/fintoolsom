@@ -53,6 +53,8 @@ The Python code stays the reference, and each port must give the same results.
 | `tests/unit/market/test_cpp_market_parity.py` | Parity of whole valuations on Python and C++ markets, errors included. |
 | `tests/unit/market/test_cpp_market_methods_parity.py` | Parity of realised fixings, duration and DV01, the par check, the Market methods and accrual loops, the index histories and the UF extension. |
 | `tests/unit/rates/test_cpp_rates_parity.py` | Parity of `Rate` factors (result types included), year fractions and knot checks. |
+| `tests/unit/rates/test_set_forward_rates.py` | Forwards updated in place give the curve built on them; the solver builds each curve once per solve. |
+| `tests/unit/derivatives/test_valuation_batch.py` | A `ValuationBatch` gives `Calculator.valuate`'s values and errors for every swap case, simplified swap, forward and NDF, on both backends, as the curves move; the solver values through batches. |
 | `tests/unit/dates/test_cpp_schedule_parity.py` | Parity of calendars, conventions and schedules. |
 | `tests/unit/dates/test_cpp_dates_parity.py` | Parity of day counts, time fractions, ordinals, tenors, terms and CPI/UF dates; the one-call holiday load. |
 | `tests/unit/test_settings.py` | The settings module. |
@@ -428,13 +430,81 @@ fractions and knot checks, the par check, realised fixings, histories; a later r
 | CubicSpline | 288.6 ± 1.6 ms | 85.1 ± 0.9 ms (3.39×) | 57.0 ± 0.5 ms (5.06×) | 46.4 ± 0.2 ms (6.22×) | 45.6 ± 0.3 ms (6.33×) |
 | ConvexMonotone | 316.4 ± 1.6 ms | 85.4 ± 0.9 ms (3.71×) | 57.6 ± 0.2 ms (5.49×) | 47.9 ± 1.5 ms (6.60×) | 48.1 ± 0.6 ms (6.58×) |
 
+Then without the daily grid while solving C++ spline curves (below; a later run):
+
+| Interpolation | Python | C++ rates + derivatives | + market | + dates (all C++) | all C++, simplified |
+|---|---:|---:|---:|---:|---:|
+| PiecewiseConstant | 55.4 ± 0.5 ms | 28.7 ± 0.2 ms (1.93×) | 26.3 ± 0.3 ms (2.11×) | 15.6 ± 0.1 ms (3.54×) | 15.9 ± 0.1 ms (3.48×) |
+| CubicSpline | 283.7 ± 1.2 ms | 72.0 ± 0.2 ms (3.94×) | 44.7 ± 0.2 ms (6.35×) | 34.0 ± 0.1 ms (8.34×) | 32.7 ± 0.2 ms (8.68×) |
+| ConvexMonotone | 309.4 ± 1.5 ms | 72.5 ± 0.4 ms (4.27×) | 45.4 ± 0.1 ms (6.82×) | 34.8 ± 0.2 ms (8.88×) | 33.5 ± 0.2 ms (9.24×) |
+
+**The grid while solving.** The solver rebuilds its curves on every iteration. A
+Python spline curve gets its daily grid on each rebuild: scipy's evaluation is slow
+per call, so the grid pays for itself (without it the Python spline builds take
+1.8x longer). A C++ curve evaluates its formula as fast as it reads a grid, so the
+grid filled on each rebuild was wasted, about a quarter of the build: the solver now
+skips it on the "cpp" backend of "rates" and the builder adds it to the final curves,
+which are identical.
+
+**Forwards updated in place.** The solver used to construct new curves on every
+iteration. Now each solve builds its curves once and then sets the new forwards on
+them (`PillarCurve._set_forward_rates`; on C++ curves `PillarCurveCore.set_forwards`
+refits in place with the constructor's arithmetic). The curves are bit-identical; a
+curve the solve did not build (its rollback snapshot) is never changed. Before and
+after, same benchmark (3 warm-ups, 10 builds, 2 slowest dropped):
+
+| Interpolation | Backend | New curves each iteration | In place | Gain |
+|---|---|---:|---:|---:|
+| PiecewiseConstant | Python | 54.8 ± 0.5 ms | 51.5 ± 0.2 ms | 6% |
+| PiecewiseConstant | C++ | 15.6 ± 0.2 ms | 13.5 ± 0.1 ms | 14% |
+| CubicSpline | Python | 291.9 ± 5.1 ms | 273.3 ± 0.6 ms | 6% |
+| CubicSpline | C++ | 35.0 ± 0.7 ms | 32.5 ± 0.2 ms | 7% |
+
+**Batch valuation.** The solver's residuals come from a `ValuationBatch`
+(`derivatives/calculator/_batch.py`, also `Calculator.valuate_many`), compiled once per
+list of instruments (the whole solve, and each date block of a sweep) and called on
+every iteration. Each value is, to the bit, `Calculator.valuate`'s for that instrument
+alone:
+
+- Instruments valued in one C++ market call go to `market_valuate_many`: one call and
+  one `MarketView` for the batch. The view remembers the curves, known-until dates and
+  spot rates it has looked up, so each is looked up once per call rather than once per
+  instrument. A batch of 68 swaps and NDFs takes 66 µs instead of 159 µs.
+- Python swaps (`Swap` itself) and NDFs are compiled. The parts that depend only on the
+  market's date, histories and risk-free index are computed once: the unpaid coupons,
+  the par-leg decision, fixed flows, settlement and spot rates. Each call then evaluates
+  every curve source (a discounting, an index curve's dfs or accruals, an FX pair) once,
+  on all the dates the batch needs from it. The flows, FX and dfs are multiplied
+  elementwise and each leg summed with `math.fsum` on its slice, which is the
+  calculator's arithmetic. For 68 instruments a call takes 196 µs instead of
+  1,419 µs.
+- The rest goes to `Calculator.valuate`: other instrument types, coupons already
+  running or fixed, and C++ legs on a Python market. If a call raises, it is redone
+  instrument by instrument, so the error is the calculator's.
+
+Same benchmark, before and after (the curves are bit-identical within a process):
+
+| Interpolation | Backend | One by one | Batch | Gain |
+|---|---|---:|---:|---:|
+| PiecewiseConstant | Python | 51.5 ± 0.2 ms | 45.8 ± 0.6 ms | 1.12x |
+| PiecewiseConstant | C++ | 13.5 ± 0.1 ms | 13.5 ± 0.1 ms | 1.00x |
+| CubicSpline | Python | 273.3 ± 0.6 ms | 128.1 ± 0.9 ms | 2.13x |
+| CubicSpline | C++ | 32.5 ± 0.2 ms | 22.3 ± 0.3 ms | 1.46x |
+
+PiecewiseConstant gains little because its sweep solves blocks of 1 to 3 instruments,
+each valued about 6 times, so compiling a batch costs about as much as it saves. A
+build's curves depend on `PYTHONHASHSEED`: they can land on one of two results about
+4e-15 apart, with or without the batch, because some set or dict of strings in the
+builder is iterated in hash order. So compare curves from two processes with a fixed
+seed.
+
 The market port takes the per-valuation Python lookups out of the solver loop (most of
 a fitted build); the dates port takes schedules, conventions, tenors, day counts and
 `date_ordinals` out of building the instruments from the quotes (most of what was
 left of a PiecewiseConstant build).
 Simplified swaps no longer matter on C++: what they saved was Python glue. What
 remains is mostly Python: building the leg and coupon objects, the solver's own loop
-(scipy `hybr`) and the curve objects it rebuilds each iteration.
+(scipy `hybr` and its finite-difference Jacobian) and, on Python curves, the refits.
 
 ## Not ported yet / caveats
 

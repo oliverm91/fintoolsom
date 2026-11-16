@@ -69,6 +69,13 @@ NB_MODULE(_native, m) {
             },
             "Dfs at day offsets from the formula, never the grid.")
         .def(
+            "set_forwards",
+            [](PyPillarCurve& c, DoublesIn forwards, double log_df_effective) {
+                c.core.set_forwards(view(forwards), log_df_effective);
+            },
+            nb::arg("forwards"), nb::arg("log_df_effective"),
+            "Refit on new segment forwards, in place; drops the grid.")
+        .def(
             "precalculate",
             [](PyPillarCurve& c, std::int64_t horizon) {
                 return grid_view(c.core.precalculate(horizon));

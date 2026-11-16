@@ -15,7 +15,8 @@ from typing import Callable
 import numpy as np
 from scipy.optimize import root
 
-from ..derivatives.calculator import Calculator
+from .. import settings
+from ..derivatives.calculator import ValuationBatch
 from ..market.currencies import Currency
 from ..market.index import Index
 from ..market.market import Market
@@ -119,6 +120,9 @@ class _GroupSolve:
     y0: list[float]
     _snapshot: dict = field(init=False, default=None)
     methods: dict = field(init=False, default=None)
+    # Curves this solve built and still holds in the market: later iterations update
+    # their forwards in place instead of building new curves.
+    _owned: dict = field(init=False, default=None)
 
     @classmethod
     def from_free_pillars(
@@ -154,6 +158,7 @@ class _GroupSolve:
 
     def __post_init__(self):
         self._snapshot = {c: _built(self.market, c) for c in self.curve_slice}
+        self._owned = {}
         # Interpolation of each rebuilt curve: an existing curve keeps its own.
         self.methods = {
             c: prev.interpolation_method if prev is not None else self.method
@@ -176,13 +181,25 @@ class _GroupSolve:
         """Rebuild every group curve from its fixed part plus the unknowns `y`.
 
         Local curves are read at few dates per rebuild, so a daily grid would cost more
-        than it saves. A spline curve is read everywhere and pays for its grid.
+        than it saves. A Python spline curve is read everywhere and pays for its grid
+        (scipy's evaluation is slow per call); a C++ one evaluates its formula as fast
+        as it reads a grid, so filling one per rebuild is wasted (about 25% of the
+        build). The builder adds the grid to the final curves either way.
+
+        The first call builds the curves; later ones set the new forwards on them in
+        place (:meth:`PillarCurve._set_forward_rates`), which gives the same curves
+        without constructing and checking them again. Curves this solve did not build
+        (the snapshot, or one replaced in the market since) are never changed.
         """
-        precalculate = not self.local
+        precalculate = not self.local and not settings.is_cpp("rates")
         for curve, (s, e) in self.curve_slice.items():
             fixed = self.fixed_pillars[curve]
-            knots = [*fixed.knots, *self.free_dates[curve]]
             forwards = [*fixed.forwards, *(float(v) for v in y[s:e])]
+            owned = self._owned.get(curve)
+            if owned is not None and _built(self.market, curve) is owned:
+                owned._set_forward_rates(forwards)
+                continue
+            knots = [*fixed.knots, *self.free_dates[curve]]
             if isinstance(curve, Index):
                 built = IndexCurve(
                     self.t,
@@ -204,9 +221,11 @@ class _GroupSolve:
                     precalculate=precalculate,
                 )
             self.market.set_curve(built)
+            self._owned[curve] = built
 
     def restore(self) -> None:
         """Put back the curves as they were before the solve."""
+        self._owned.clear()
         for curve, previous in self._snapshot.items():
             if previous is None:
                 self.market.curves.pop(
@@ -253,9 +272,17 @@ def _solve_unknowns(
         Solved unknowns.
     """
 
+    batches: dict[int, ValuationBatch] = {}
+
     def values(instrs, y) -> list[float]:
+        """The residuals of `instrs` (one list each: the batch is compiled once)."""
         solve.apply(y)
-        return [Calculator.valuate(i, solve.market, report_currency) for i in instrs]
+        batch = batches.get(id(instrs))
+        if batch is None:
+            batch = batches[id(instrs)] = ValuationBatch(
+                instrs, solve.market, report_currency
+            )
+        return batch.values().tolist()
 
     # Each instrument owns one pillar (its primary curve, at its maturity): blocks of
     # same-date pillars are square by construction.

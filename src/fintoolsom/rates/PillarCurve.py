@@ -139,6 +139,34 @@ class PillarCurve(DailyGridCurve):
         if self.precalculate:
             self.precalculate_dfs()
 
+    def _set_forward_rates(self, forward_rates) -> None:
+        """Replace the forwards in place, the curve then being the one
+        ``__post_init__`` would build on them (knots, method, spot and backend kept).
+
+        For the curve builder's solver, which updates its curves on every iteration:
+        it skips the construction and the knot checks. The C++ core, when the curve
+        has one, refits in place. The daily grid is recomputed if the curve keeps one.
+        Only for curves nothing else holds: a shared curve would change for all.
+        """
+        forward_rates = np.asarray(forward_rates, dtype=float)
+        if forward_rates.shape != self.forward_rates.shape:
+            raise ValueError(
+                f"forward_rates must have one entry per segment: expected "
+                f"{len(self.forward_rates)}, got {len(forward_rates)}."
+            )
+        self.forward_rates = forward_rates
+        self._log_df_effective = self._log_df_first_knot()
+        self._grid, self._grid_horizon = None, -1
+        if self._core is not None:
+            self._core.set_forwards(forward_rates, self._log_df_effective)
+        else:
+            self._cum = np.concatenate(
+                ([0.0], np.cumsum(forward_rates * np.diff(self._knot_tau)))
+            )
+            self._forward_integral = self._build_forward_integral()
+        if self.precalculate:
+            self.precalculate_dfs()
+
     def _build_core(self):
         """The C++ core computing this curve's dfs (``fintoolsom._native``)."""
         if self.interpolation_method is InterpolationMethod.PiecewiseLinear:
