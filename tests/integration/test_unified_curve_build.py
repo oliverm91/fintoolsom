@@ -101,15 +101,21 @@ def _assert_same_curves(a, b, rel):
 
 
 def _spy_block_sizes(monkeypatch) -> list[int]:
-    """Number of unknowns of every root solve the builder runs."""
+    """Number of unknowns of every root solve the builder runs: hybr's, and the sweep
+    blocks' Newton solves (a block Newton gives up on then counts twice)."""
     sizes: list[int] = []
-    solve = _solver._solve_or_rollback
+    solve, newton = _solver._solve_or_rollback, _solver._newton
 
     def spy(residual, y0, restore, what, jac=None):
         sizes.append(len(y0))
         return solve(residual, y0, restore, what, jac)
 
+    def newton_spy(residual, x0, jac=None):
+        sizes.append(len(x0))
+        return newton(residual, x0, jac)
+
     monkeypatch.setattr(_solver, "_solve_or_rollback", spy)
+    monkeypatch.setattr(_solver, "_newton", newton_spy)
     return sizes
 
 

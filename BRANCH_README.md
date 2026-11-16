@@ -54,6 +54,7 @@ The Python code stays the reference, and each port must give the same results.
 | `tests/unit/market/test_cpp_market_methods_parity.py` | Parity of realised fixings, duration and DV01, the par check, the Market methods and accrual loops, the index histories and the UF extension. |
 | `tests/unit/rates/test_cpp_rates_parity.py` | Parity of `Rate` factors (result types included), year fractions and knot checks. |
 | `tests/unit/rates/test_set_forward_rates.py` | Forwards updated in place give the curve built on them; the solver builds each curve once per solve. |
+| `tests/unit/curve_builder/test_block_newton.py` | The sweep blocks' Newton solver: small linear solves, convergence and reuse of a block's Jacobian, giving up (non-decreasing or non-finite residuals); sweeps solve by Newton, match hybr's curves, fall back to hybr, and keep the backends bit-identical. |
 | `tests/unit/curve_builder/test_jacobian.py` | The solver's analytic Jacobian matches central differences of the residuals on both backends; it solves the same curves as hybr's differencing, keeps the backends bit-identical, and is left to hybr when an instrument is not compiled. |
 | `tests/unit/derivatives/test_valuation_batch.py` | A `ValuationBatch` gives `Calculator.valuate`'s values and errors for every swap case, simplified swap, forward and NDF, on both backends, as the curves move; the solver values through batches. |
 | `tests/unit/dates/test_cpp_schedule_parity.py` | Parity of calendars, conventions and schedules. |
@@ -539,14 +540,44 @@ PiecewiseConstant and PiecewiseLinear are unchanged (their sweeps converge here
 without a joint solve). On C++ most of what is left of the Jacobian's cost is
 compiling the Python plan (about 1 ms per solve).
 
+**Block Newton.** The date blocks of a piecewise-constant/linear sweep (1 or 2
+unknowns here, 55 per build) are solved by `_solver._newton` instead of hybr. The
+Jacobian is a forward difference at the seed (1e-7), or the block's own from the
+previous sweep, and each step updates it by Broyden's rank-one formula, so a step
+costs one evaluation. A step below 1e-12 is taken without evaluating it. If the steps
+stop lowering the residuals, or a residual is not finite or raises, the block goes to
+hybr from its seed. The algebra is on Python floats: numpy's per-call cost (about 11 µs
+for `linalg.solve`) exceeded a C++ evaluation's and cancelled the gain in a first
+version. hybr took 5 to 7 evaluations per block, even 5 for a block already solved by
+the previous sweep, because it stops on its step size alone.
+
+Same benchmark (`PYTHONHASHSEED=0`): 237 evaluations per PiecewiseConstant build
+instead of 363 (240 instead of 370 for PiecewiseLinear), no hybr fallback. The
+forwards move by at most 2.2e-12 (2e-8 bp), the largest repricing error drops from
+3.2e-10 to 2.9e-11 (2.4e-9 to 1.5e-11 for PiecewiseLinear), and Python and C++
+builds stay bit-identical:
+
+| Interpolation | Backend | hybr | Newton | Gain |
+|---|---|---:|---:|---:|
+| PiecewiseConstant | Python | 46.3 ± 0.5 ms | 40.6 ± 0.3 ms | 1.14x |
+| PiecewiseConstant | C++ | 13.6 ± 0.2 ms | 12.1 ± 0.1 ms | 1.12x |
+| PiecewiseLinear | Python | 91.3 ± 1.0 ms | 72.3 ± 2.0 ms | 1.26x |
+| PiecewiseLinear | C++ | 14.8 ± 0.2 ms | 14.1 ± 1.4 ms | 1.05x |
+
+A C++ evaluation of a block costs about 30 µs, so the 126 evaluations saved are about
+4 ms of a 13.6 ms build; the rest of a C++ piecewise build is mostly building the
+instruments from the quotes. The joint solves keep hybr with the analytic Jacobian:
+5 calls per build, coupled unknowns and, for the monotone methods, kinks where hybr's
+trust region matters.
+
 The market port takes the per-valuation Python lookups out of the solver loop (most of
 a fitted build); the dates port takes schedules, conventions, tenors, day counts and
 `date_ordinals` out of building the instruments from the quotes (most of what was
 left of a PiecewiseConstant build).
 Simplified swaps no longer matter on C++: what they saved was Python glue. What
 remains is mostly Python: building the leg and coupon objects, the solver's own loop
-(scipy `hybr`, and the finite-difference Jacobian of the sweep blocks) and, on Python
-curves, the refits.
+(scipy `hybr` on the joint solves, Newton on the sweep blocks) and, on Python curves,
+the refits.
 
 ## Not ported yet / caveats
 

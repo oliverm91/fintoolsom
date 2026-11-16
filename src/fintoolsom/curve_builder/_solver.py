@@ -7,6 +7,7 @@ rebuilds its curves from it; :func:`_solve_unknowns` bootstraps them date by dat
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
@@ -42,6 +43,101 @@ _ANALYTIC_JACOBIAN = True
 # Forward bump that reads the curve part of the Jacobian off the curves: exact
 # (up to rounding) on affine curves, a forward difference on the others.
 _LINEAR_BUMP, _NONLINEAR_BUMP = 1e-2, 1e-7
+# Solve the date blocks of a sweep by Newton (Broyden-updated), falling back to hybr.
+_BLOCK_NEWTON = True
+# Newton: forward-difference bump of the first Jacobian; a step of the forwards below
+# _NEWTON_XTOL is the last (taken without evaluating it); one below _NEWTON_NOISE that
+# no longer lowers the residuals has reached their rounding; at most _NEWTON_STEPS.
+_NEWTON_BUMP, _NEWTON_XTOL, _NEWTON_NOISE, _NEWTON_STEPS = 1e-7, 1e-12, 1e-10, 8
+
+
+def _newton(
+    residual: Callable[[list[float]], list[float]],
+    x0,
+    jac: list[list[float]] | None = None,
+) -> tuple[list[float], list[list[float]]] | None:
+    """Solve a small square ``residual(x) = 0`` by Newton steps, Broyden-updated.
+
+    The Jacobian is `jac` (one from an earlier solve of the same block) or a forward
+    difference at `x0`; each step then updates it by Broyden's rank-one formula, so a
+    step costs one evaluation. A sweep's blocks are nearly linear and well seeded:
+    this takes 2 to 4 evaluations where hybr takes 5 to 7. Blocks have 1 to 3
+    unknowns, so the algebra is on Python floats (numpy's per-call cost would exceed
+    an evaluation's).
+
+    Returns
+    -------
+    tuple or None
+        The solution and the last Jacobian; None when the steps stop lowering the
+        residuals before converging, or a residual is not finite (the caller falls
+        back to hybr).
+    """
+    n = len(x0)
+    x = [float(v) for v in x0]
+    r = residual(x)
+    if not all(map(math.isfinite, r)):
+        return None
+    if jac is None:
+        jac = [[0.0] * n for _ in range(n)]
+        for k in range(n):
+            bumped = x.copy()
+            bumped[k] += _NEWTON_BUMP
+            for i, (up, base) in enumerate(zip(residual(bumped), r)):
+                jac[i][k] = (up - base) / _NEWTON_BUMP
+    else:
+        jac = [row.copy() for row in jac]
+    norm = max(map(abs, r))
+    for _ in range(_NEWTON_STEPS):
+        dx = _solve_small(jac, [-v for v in r])
+        if dx is None:
+            return None
+        step = max(map(abs, dx))
+        if not math.isfinite(step):
+            return None
+        if step <= _NEWTON_XTOL:
+            return [a + b for a, b in zip(x, dx)], jac
+        x_new = [a + b for a, b in zip(x, dx)]
+        r_new = residual(x_new)
+        norm_new = max(map(abs, r_new))
+        if not math.isfinite(norm_new):
+            return None
+        if norm_new >= norm:
+            # Not lower: converged to the residuals' rounding, or diverging.
+            return (x, jac) if step <= _NEWTON_NOISE else None
+        # Broyden: J += (dr - J dx) dx^T / (dx . dx)
+        dd = math.fsum(v * v for v in dx)
+        for i in range(n):
+            row = jac[i]
+            u = (r_new[i] - r[i] - math.fsum(row[k] * dx[k] for k in range(n))) / dd
+            for k in range(n):
+                row[k] += u * dx[k]
+        x, r, norm = x_new, r_new, norm_new
+    return None
+
+
+def _solve_small(a: list[list[float]], b: list[float]) -> list[float] | None:
+    """``a x = b`` by Gaussian elimination with partial pivoting; None if singular."""
+    n = len(b)
+    if n == 1:
+        return [b[0] / a[0][0]] if a[0][0] != 0.0 else None
+    m = [[*row, v] for row, v in zip(a, b)]
+    for c in range(n):
+        p = max(range(c, n), key=lambda i: abs(m[i][c]))
+        if m[p][c] == 0.0:
+            return None
+        m[c], m[p] = m[p], m[c]
+        pivot = m[c]
+        for i in range(c + 1, n):
+            f = m[i][c] / pivot[c]
+            if f:
+                row = m[i]
+                for k in range(c, n + 1):
+                    row[k] -= f * pivot[k]
+    x = [0.0] * n
+    for i in range(n - 1, -1, -1):
+        row = m[i]
+        x[i] = (row[n] - math.fsum(row[k] * x[k] for k in range(i + 1, n))) / row[i]
+    return x
 
 
 def _solve_or_rollback(
@@ -480,6 +576,7 @@ def _solve_unknowns(
         instruments_at[d].append(instr)
 
     y = np.array(solve.y0, dtype=float)
+    block_jacs: dict[date, list] = {}  # Newton's last Jacobian of each block
     if date_by_date and solve.local:
         # Ascending sweeps (Gauss-Seidel): exact in one pass when every quote's
         # curves have pillars at its maturity; a quote reading another curve between
@@ -492,11 +589,22 @@ def _solve_unknowns(
                     y[pos] = x
                     return values(block, y)
 
-                # A block has 1-3 unknowns: hybr differences it in as many
-                # evaluations, less than setting up its Jacobian costs.
-                y[pos] = _solve_or_rollback(
-                    block_residual, list(y[pos]), solve.restore, what
-                ).x
+                # A block has 1-3 unknowns: its Jacobian is differenced (hybr's, or
+                # Newton's first), cheaper than the analytic one's setup.
+                x0 = y[pos].copy()
+                solved = None
+                if _BLOCK_NEWTON:
+                    try:
+                        solved = _newton(block_residual, x0, block_jacs.get(d))
+                    except Exception:  # hybr below raises it as it would
+                        solved = None
+                if solved is not None:
+                    y[pos], block_jacs[d] = solved
+                else:
+                    y[pos] = x0
+                    y[pos] = _solve_or_rollback(
+                        block_residual, list(x0), solve.restore, what
+                    ).x
             if max(abs(v) for v in values(instruments, y)) <= _SWEEP_TOL:
                 return y
     jac = jacobian(instruments)
