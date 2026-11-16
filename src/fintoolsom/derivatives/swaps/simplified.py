@@ -27,17 +27,14 @@ from .swaps import Swap
 def _without_payment_lag(leg: SwapLeg) -> SwapLeg:
     """`leg` paying (and fixing FX) on its accrual end dates.
 
-    The same leg when it already does; otherwise a copy with new coupons.
+    The same leg when it already does; otherwise a copy with the payment and FX
+    fixing dates left to their defaults, the end dates.
     """
     if np.array_equal(leg._payment_ordinals, leg._end_ordinals) and np.array_equal(
         leg._fx_fixing_ordinals, leg._end_ordinals
     ):
         return leg
-    coupons = [
-        replace(c, payment_date=c.end_date, fx_fixing_date=c.end_date)
-        for c in leg.coupons
-    ]
-    return replace(leg, coupons=coupons)
+    return replace(leg, payment_dates=None, fx_fixing_dates=None)
 
 
 @dataclass(kw_only=True)

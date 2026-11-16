@@ -8,13 +8,53 @@ from .. import settings
 
 
 def date_ordinals(dates) -> np.ndarray:
-    """Proleptic Gregorian ordinals of `dates`, as integers."""
+    """Proleptic Gregorian ordinals of `dates`, as integers (``date.toordinal()``).
+
+    Parameters
+    ----------
+    dates : iterable of date, or numpy.ndarray of shape (n, 3)
+        Dates, or the integer ``(year, month, day)`` rows of `n` dates.
+
+    Raises
+    ------
+    ValueError
+        For an ``(n, 3)`` array with a row that is not a valid date.
+    """
+    if type(dates) is np.ndarray and dates.ndim == 2:
+        return _ymd_ordinals(dates)
     if type(dates) in _SEQUENCES and settings.is_cpp("dates"):
         return settings.native().date_ordinals(dates)
     return np.array([d.toordinal() for d in dates], dtype=np.int64)
 
 
 _SEQUENCES = (list, tuple)
+_DAYS_IN_MONTH = np.array([0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])
+# date(1970, 1, 1).toordinal(): days_from_civil counts from 1970-01-01.
+_EPOCH_ORDINAL = 719163
+
+
+def _ymd_ordinals(ymd: np.ndarray) -> np.ndarray:
+    """Ordinals of ``(year, month, day)`` rows, vectorised (Howard Hinnant's
+    ``days_from_civil``); the same on both backends."""
+    if ymd.shape[1] != 3 or not np.issubdtype(ymd.dtype, np.integer):
+        raise ValueError(
+            f"Expected integer (year, month, day) rows, shape (n, 3); got shape "
+            f"{ymd.shape} of {ymd.dtype}."
+        )
+    y, m, d = (ymd[:, k].astype(np.int64) for k in range(3))
+    leap = (y % 4 == 0) & ((y % 100 != 0) | (y % 400 == 0))
+    month_ok = (m >= 1) & (m <= 12)
+    days_in_month = _DAYS_IN_MONTH[np.where(month_ok, m, 0)] + (leap & (m == 2))
+    bad = ~((y >= 1) & (y <= 9999) & month_ok & (d >= 1) & (d <= days_in_month))
+    if bad.any():
+        i = int(np.argmax(bad))
+        raise ValueError(f"Row {i} is not a date: {ymd[i].tolist()}.")
+    y = y - (m <= 2)
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * ((m + 9) % 12) + 2) // 5 + d - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468 + _EPOCH_ORDINAL
 
 
 def _gdc_dd(cls, sd, ed):

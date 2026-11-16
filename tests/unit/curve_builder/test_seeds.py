@@ -9,6 +9,7 @@ import pytest
 
 from fintoolsom.curve_builder import InsufficientQuotesError
 from fintoolsom.curve_builder._seeds import _Seeder
+from fintoolsom.derivatives.swaps import FixedLeg
 from fintoolsom.dates import ModifiedFollowingConvention
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.market import (
@@ -33,11 +34,12 @@ def test_fixed_leg_seed_compounds_the_coupons_to_the_leg_end():
     starts = [date(2024, 1, 4), date(2024, 7, 4)]
     ends = [date(2024, 7, 4), date(2025, 1, 6)]
     rate = Rate(RateConvention(), 0.05)  # annual compounding, act/365
-    leg = SimpleNamespace(
-        coupons=[
-            SimpleNamespace(start_date=s, end_date=e, rate=rate)
-            for s, e in zip(starts, ends)
-        ]
+    leg = FixedLeg(
+        start_dates=starts,
+        end_dates=ends,
+        residuals=[1.0, 1.0],
+        rate=rate,
+        currency=Currency.CLP,
     )
     z = _seeder(Market(t=t, risk_free_index=RISKLESS)).fixed_leg_zero(leg)
     # Spot gap and both coupons at 5% annual over [t, last end]: continuous rate log(1.05).

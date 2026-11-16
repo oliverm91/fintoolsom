@@ -19,8 +19,8 @@ START = date(2026, 6, 1)
 
 def _leg(payment_date: date) -> TermRateLeg:
     coupon = TermRateCoupon(1e6, 1e6, START, payment_date, payment_date, spread=SPREAD)
-    return TermRateLeg(
-        coupons=[coupon], index=INDEX, spread=SPREAD, fixing_dates=[START]
+    return TermRateLeg.from_coupons(
+        [coupon], index=INDEX, spread=SPREAD, fixing_dates=[START]
     )
 
 

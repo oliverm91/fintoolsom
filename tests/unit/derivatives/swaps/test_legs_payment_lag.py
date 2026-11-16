@@ -86,16 +86,16 @@ def test_negative_payment_lag_raises():
 
 
 def test_leg_rejects_coupons_out_of_schedule_order():
-    coupons = _fixed().coupons
+    coupons = _fixed().get_coupons()
     with pytest.raises(ValueError, match="schedule order"):
-        FixedLeg(coupons=coupons[::-1], currency=USD)
+        FixedLeg.from_coupons(coupons[::-1], currency=USD)
 
 
 def test_leg_rejects_payment_dates_out_of_order():
-    first, second, *rest = _fixed().coupons
+    first, second, *rest = _fixed().get_coupons()
     late = replace(first, payment_date=second.payment_date + timedelta(days=5))
     with pytest.raises(ValueError, match="schedule order"):
-        FixedLeg(coupons=[late, second, *rest], currency=USD)
+        FixedLeg.from_coupons([late, second, *rest], currency=USD)
 
 
 def test_payment_lag_changes_the_payment_ordinals_only():

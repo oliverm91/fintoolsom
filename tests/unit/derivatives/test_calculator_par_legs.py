@@ -82,12 +82,8 @@ def _build_leg(start, index, **kwargs):
 def _amortizing(leg, amortizations):
     """`leg` with its notional repaid by `amortizations` (summing to it)."""
     residuals = N - np.concatenate(([0.0], np.cumsum(amortizations)[:-1]))
-    coupons = [
-        replace(c, residual=float(r), amortization=float(a))
-        for c, r, a in zip(leg.coupons, residuals, amortizations)
-    ]
     with _python():
-        return replace(leg, coupons=coupons)
+        return replace(leg, residuals=residuals)
 
 
 # ── Eligibility, decided at construction ───────────────────────────────────
@@ -107,19 +103,20 @@ def test_an_amortizing_leg_repaying_its_notional_is_par_eligible():
     assert _amortizing(leg, np.full(leg.n_coupons, N / leg.n_coupons))._par_eligible
 
 
-def test_a_leg_not_repaying_its_notional_is_not_par_eligible():
+def test_a_leg_cannot_leave_its_notional_unpaid():
     leg = _leg()
-    coupons = [*leg.coupons[:-1], replace(leg.coupons[-1], amortization=N / 2)]
-    with _python():
-        assert not replace(leg, coupons=coupons)._par_eligible
+    coupons = leg.get_coupons()
+    coupons[-1] = replace(coupons[-1], amortization=N / 2)
+    with pytest.raises(ValueError, match="repay the notional"):
+        type(leg).from_coupons(coupons, index=leg.index, spread=leg.spread)
 
 
 def test_a_gap_in_the_schedule_makes_a_leg_not_par_eligible():
     leg = _leg()
-    gap = replace(leg.coupons[1], start_date=leg.coupons[0].end_date.replace(day=1))
-    coupons = [leg.coupons[0], gap, *leg.coupons[2:]]
+    starts = list(leg.start_dates)
+    starts[1] = leg.end_dates[0].replace(day=1)
     with _python():
-        assert not replace(leg, coupons=coupons)._par_eligible
+        assert not replace(leg, start_dates=starts)._par_eligible
 
 
 def test_the_spread_flag():

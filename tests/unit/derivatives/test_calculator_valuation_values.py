@@ -107,7 +107,7 @@ def _projected_growth(index, s: date, e: date) -> float:
 
 
 def _flow(leg, i: int) -> float:
-    c = leg.coupons[i]
+    c = leg.get_coupons()[i]
     n, s, e = c.residual, c.start_date, c.end_date
     if isinstance(leg, FixedLeg):
         interest = n * c.rate.rate * _yf360(s, e)
@@ -153,7 +153,7 @@ def _settlement(swap: Swap, leg) -> Currency:
 def _hand_leg_pv_clp(swap: Swap, leg) -> float:
     settle = _settlement(swap, leg)
     pv = 0.0
-    for i, c in enumerate(leg.coupons):
+    for i, c in enumerate(leg.get_coupons()):
         if c.payment_date <= T:
             continue
         fx = _fx(leg.currency, settle, leg.fx_fixing_dates[i])
@@ -216,7 +216,7 @@ def test_spread_adds_its_annuity():
     plain, spread = _float_leg(CAMARA), _float_leg(CAMARA, spread=SPREAD)
     annuity = sum(
         N * SPREAD.rate * _yf360(c.start_date, c.end_date) * _df(CAMARA, c.payment_date)
-        for c in spread.coupons
+        for c in spread.get_coupons()
     )
     diff = Calculator._leg_pv(spread, CAMARA, MARKET) - Calculator._leg_pv(
         plain, CAMARA, MARKET
@@ -229,7 +229,7 @@ def test_started_overnight_leg_is_worth_notional_grown_by_realised_fixings(index
     # Projection and discounting on one curve: everything after t telescopes to
     # (realised growth of the running coupon) * N * P(t), with P(t) = 1.
     leg = _float_leg(index, SwapStatus.STARTED)
-    running = next(c for c in leg.coupons if c.start_date <= T < c.payment_date)
+    running = next(c for c in leg.get_coupons() if c.start_date <= T < c.payment_date)
     if index == ICP:
         levels = MARKET.get_index(ICP.name).values
         growth = levels[T] / levels[running.start_date]
@@ -246,9 +246,11 @@ def test_started_term_leg_is_worth_its_fixed_coupons_plus_notional_at_the_last_f
     # pay N R yf; the projected ones telescope to N P(end of the last fixed coupon).
     leg = _float_leg(TAB_3M, SwapStatus.STARTED)
     fixed = [
-        c for c, f in zip(leg.coupons, leg.fixing_dates) if f <= T < c.payment_date
+        c
+        for c, f in zip(leg.get_coupons(), leg.fixing_dates)
+        if f <= T < c.payment_date
     ]
-    assert len(fixed) == 2 and leg.fixing_dates[leg.coupons.index(fixed[1])] == T
+    assert len(fixed) == 2 and leg.fixing_dates[leg.get_coupons().index(fixed[1])] == T
     r = FLAT_RATES[TAB_3M]
     expected = sum(
         N * r * _yf360(c.start_date, c.end_date) * _df(TAB_3M, c.payment_date)
@@ -262,7 +264,7 @@ def test_par_swap_is_worth_zero():
     float_leg = _float_leg(ICP)
     annuity = sum(
         _yf360(c.start_date, c.end_date) * _df(ICP, c.payment_date)
-        for c in float_leg.coupons
+        for c in float_leg.get_coupons()
     )
     par = (
         _df(ICP, float_leg.start_dates[0]) - _df(ICP, float_leg.end_dates[-1])

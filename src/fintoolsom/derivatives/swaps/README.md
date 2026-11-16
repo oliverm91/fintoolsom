@@ -1,9 +1,10 @@
 # fintoolsom.derivatives.swaps
 
-A `Swap` is two legs, one received and one paid. A leg is a list of coupons. The
-builders generate that list from a start date, a term and a frequency. For anything
-they can't generate, such as an amortizing notional or irregular dates, build the
-coupons yourself.
+A `Swap` is two legs, one received and one paid. A leg holds per-coupon arrays:
+accrual start and end dates, payment dates and residual notionals. The builders
+generate them from a start date, a term and a frequency. For anything they can't
+generate, such as an amortizing notional or irregular dates, pass the arrays
+yourself.
 
 Instruments only hold data. Value them with `fintoolsom.derivatives.Calculator`, see
 the [derivatives README](../README.md).
@@ -78,86 +79,79 @@ deliverable = Swap(receive_leg=clp_leg, pay_leg=usd_leg, collateral_index=sofr, 
 
 ## Building a custom swap
 
-`Swap` accepts any legs, so you can write the coupons directly. Every coupon takes
-these fields, the first five in this order:
+`Swap` accepts any legs, so you can build them from their dates and notionals. Every
+leg takes these keyword arguments, one value per coupon:
 
 | Field | Meaning |
 |---|---|
-| `residual` | Outstanding notional the coupon accrues on |
-| `amortization` | Notional repaid with this coupon |
-| `start_date`, `end_date` | Accrual period |
-| `payment_date` | Date the flow is paid |
-| `fx_fixing_date` | Keyword-only. Defaults to `payment_date` |
+| `start_dates`, `end_dates` | Accrual period, each start before its end |
+| `residuals` | Outstanding notional each coupon accrues on |
+| `payment_dates` | Optional. Date each flow is paid, on or after its end date. Defaults to `end_dates` |
+| `fx_fixing_dates` | Optional. On or before each payment date. Defaults to `payment_dates` |
 
-Each coupon type adds its own field, and each leg is built from its own coupon type:
+Each leg type adds its own fields:
 
-| Leg | Coupon | Coupon adds | Leg takes |
-|---|---|---|---|
-| `FixedLeg` | `FixedCoupon` | `rate` | `coupons`, `currency` |
-| `OvernightLeg` | `OvernightCoupon` | `spread` | `coupons`, `index`, `spread` |
-| `XCCYFloatingLeg` | `XCCYCoupon` | `spread` | `coupons`, `index`, `spread` |
-| `TermRateLeg` | `TermRateCoupon` | `spread`, optional `fixing_date` | `coupons`, `index`, `spread`, `fixing_dates` |
+| Leg | Adds |
+|---|---|
+| `FixedLeg` | `rate` (one `Rate` for every coupon), `currency` |
+| `OvernightLeg`, `XCCYFloatingLeg` | `index`, optional `spread` (one `Rate`, zero by default) |
+| `TermRateLeg` | as above, and optional `fixing_dates`, on or before each start date. Defaults to `start_dates` |
+
+The amortizations come from the residuals: the notional is fully repaid by the last
+coupon. Coupon `i` repays `residuals[i] - residuals[i + 1]`, and the last coupon
+repays its residual. A negative amortization is a drawdown, so an accreting notional
+works too. There is no initial notional exchange.
 
 An amortizing swap on irregular dates, continuing the first example:
 
 ```python
-from fintoolsom.derivatives.swaps import FixedCoupon, FixedLeg, OvernightCoupon, OvernightLeg
+from fintoolsom.derivatives.swaps import FixedLeg, OvernightLeg
 
 dates = [start, date(2025, 1, 10), date(2025, 7, 10), date(2026, 1, 12)]
-residuals = [1e9, 7.5e8, 5e8]
-amortizations = [2.5e8, 2.5e8, 5e8]
-periods = list(zip(dates[:-1], dates[1:], residuals, amortizations))
+periods = {
+    "start_dates": dates[:-1],
+    "end_dates": dates[1:],
+    "residuals": [1e9, 7.5e8, 5e8],  # repays 2.5e8, 2.5e8, then 5e8
+}
 
-fixed_rate = Rate(RateConvention(), 0.052)
-zero = Rate(RateConvention(), 0.0)
-
-custom_fixed = FixedLeg(
-    coupons=[FixedCoupon(res, amort, s, e, e, rate=fixed_rate) for s, e, res, amort in periods],
-    currency=Currency.CLP,
-)
-custom_floating = OvernightLeg(
-    coupons=[OvernightCoupon(res, amort, s, e, e, spread=zero) for s, e, res, amort in periods],
-    index=icp,
-    spread=zero,
-)
+custom_fixed = FixedLeg(**periods, rate=Rate(RateConvention(), 0.052), currency=Currency.CLP)
+custom_floating = OvernightLeg(**periods, index=icp)
 amortizing = Swap(receive_leg=custom_fixed, pay_leg=custom_floating, collateral_index=icp)
 
 Calculator.get_swap_mtm(amortizing, market, Currency.CLP)
 ```
 
-A fixed leg has no field for an explicit amount, because a coupon's flow is its
-interest plus its amortization. To pay exact amounts, set `residual` to zero and put
-the amount in `amortization`. The `rate` is still required, but it has no effect:
+A leg is immutable and its arrays are read-only. Use `dataclasses.replace` for a
+changed copy, for example `replace(custom_fixed, payment_dates=lagged_dates)`.
+
+### Coupons
+
+A leg doesn't store coupon objects. `leg.get_coupons()` and `leg.get_coupon(i)` build
+them on request (`FixedCoupon`, `OvernightCoupon`, `XCCYCoupon` or `TermRateCoupon`),
+so changing one doesn't change the leg. Code written against coupon lists can build a
+leg with `from_coupons`:
 
 ```python
-payments = [(date(2025, 1, 10), 3e7), (date(2026, 1, 12), 1.03e9)]
-accrual_starts = [start, payments[0][0]]
-
-explicit_leg = FixedLeg(
-    coupons=[FixedCoupon(0.0, amount, s, d, d, rate=fixed_rate) for s, (d, amount) in zip(accrual_starts, payments)],
-    currency=Currency.CLP,
-)
+leg = FixedLeg.from_coupons(coupons, currency=Currency.CLP)
+floating = OvernightLeg.from_coupons(floating_coupons, index=icp, spread=spread)
 ```
 
-Keep these in mind when building coupons by hand:
+`from_coupons` raises `ValueError` when the coupons' amortizations don't repay the
+notional as described above, or when a fixed leg's coupons don't share one rate. The
+rate defaults to the coupons' rate, and a `TermRateLeg`'s `fixing_dates` default to
+its coupons' fixing dates.
 
-- **Nothing checks the notional.** Each amortization is paid as given. If the
-  repayments don't add up to the notional, or `residual` doesn't follow them, the
-  swap is still valued.
-- **Dates are used exactly as given.** Coupons aren't adjusted for business days, so
-  pass dates that are already adjusted. A `TermRateLeg` warns on creation if a payment
-  date is a holiday of its index's calendar.
-- **There is no initial notional exchange.** Only the repayments in `amortization`
-  are paid.
-- **A floating leg uses the leg's `spread`.** The `spread` on each coupon is not used
-  in valuation, so one floating leg can't vary its spread by coupon. A fixed leg can
-  vary `rate` by coupon.
-- **A `TermRateLeg` reads `fixing_dates` from the leg.** Pass one date per coupon. The
-  `fixing_date` on the coupon is not used in valuation.
-- **Floating flows always come from the index.** Only fixed legs can pay explicit
-  amounts.
+Keep these in mind when building legs by hand:
+
+- **Dates are used exactly as given.** They aren't adjusted for business days, so pass
+  dates that are already adjusted. A `TermRateLeg` warns on creation if a payment date
+  is a holiday of its index's calendar.
 - **Coupons must be in schedule order.** A leg raises `ValueError` if the start or
-  payment dates go backwards along `coupons`.
+  payment dates go backwards, or if the dates of a coupon are inconsistent (a start
+  not before its end, an end after its payment, an FX fixing after its payment).
+- **One rate per leg.** A fixed leg has one rate and a floating leg one spread, for
+  every coupon.
+- **Floating flows always come from the index.** Only fixed legs pay known amounts.
 
 ## Simplified swaps for curve building
 

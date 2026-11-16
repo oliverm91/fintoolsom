@@ -61,11 +61,25 @@ def _started_leg(case: LegCase) -> Any:
 
 
 def _sub_leg(leg: SwapLeg, start: int, stop: int | None = None) -> SwapLeg:
-    """The same leg restricted to coupons[start:stop]."""
+    """The same leg restricted to coupons[start:stop]. It repays its notional on its
+    last coupon, as every leg does."""
     sl = slice(start, stop)
+    fields: dict[str, Any] = {
+        "start_dates": leg.start_dates[sl],
+        "end_dates": leg.end_dates[sl],
+        "payment_dates": leg.payment_dates[sl],
+        "fx_fixing_dates": leg.fx_fixing_dates[sl],
+        "residuals": leg.residuals[sl],
+    }
     if isinstance(leg, TermRateLeg):
-        return replace(leg, coupons=leg.coupons[sl], fixing_dates=leg.fixing_dates[sl])
-    return replace(leg, coupons=leg.coupons[sl])
+        fields["fixing_dates"] = leg.fixing_dates[sl]
+    return replace(leg, **fields)
+
+
+def _coupon_pv(leg: SwapLeg, i: int, market, df: float) -> float:
+    """PV of coupon `i` alone, without the notional a one-coupon sub-leg repays."""
+    sub = _sub_leg(leg, i, i + 1)
+    return _pv(sub, market) - sub.amortizations[0] * df
 
 
 def _pv(leg: SwapLeg, market) -> float:
@@ -113,14 +127,14 @@ def test_paid_coupon_is_dropped(case, market):
 @pytest.mark.parametrize("case", FIXED_CASES, ids=_ids(FIXED_CASES))
 def test_running_fixed_coupon_is_valued_in_full(case, market):
     leg = _started_leg(case)
-    c = leg.coupons[RUNNING]
+    c = leg.get_coupons()[RUNNING]
     notional, rate = NOTIONALS[case.ccy], FIXED_RATES[case.ccy]
     df = _discount_df(market, leg.currency, c.payment_date)
 
     full_flow = notional * rate * (c.end_date - c.start_date).days / 360
     accrued_to_t = notional * rate * (VAL_DATE - c.start_date).days / 360
 
-    pv = _pv(_sub_leg(leg, RUNNING, RUNNING + 1), market)
+    pv = _coupon_pv(leg, RUNNING, market, df)
     assert pv == pytest.approx(full_flow * df, rel=1e-12)
     assert pv > accrued_to_t * df * 1.01  # not just the part accrued so far
 
@@ -128,7 +142,7 @@ def test_running_fixed_coupon_is_valued_in_full(case, market):
 @pytest.mark.parametrize("case", FLOAT_CASES, ids=_ids(FLOAT_CASES))
 def test_running_floating_coupon_combines_realised_and_projected(case, market):
     leg = _started_leg(case)
-    c = leg.coupons[RUNNING]
+    c = leg.get_coupons()[RUNNING]
     index = FLOAT_INDEXES[(case.ccy, case.kind)]
     notional = NOTIONALS[case.ccy]
     df = _discount_df(market, leg.currency, c.payment_date)
@@ -146,6 +160,4 @@ def test_running_floating_coupon_combines_realised_and_projected(case, market):
         interest = notional * (realised_wf * projected_wf - 1)
 
     expected = (interest + _spread_flow(notional, c.start_date, c.end_date)) * df
-    assert _pv(_sub_leg(leg, RUNNING, RUNNING + 1), market) == pytest.approx(
-        expected, rel=1e-12
-    )
+    assert _coupon_pv(leg, RUNNING, market, df) == pytest.approx(expected, rel=1e-12)

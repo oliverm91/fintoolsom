@@ -36,7 +36,7 @@ def test_fixed_term_coupon_keeps_its_notional_repayment():
     leg = _leg(
         builders.term_rate_leg, TAB_3M, start=date(2023, 7, 12), years=1, spread=SPREAD
     )
-    last = leg.coupons[-1]
+    last = leg.get_coupons()[-1]
     assert (
         leg.fixing_dates[-1] < VAL_DATE < last.payment_date
         and last.amortization == 1_000.0
@@ -61,7 +61,7 @@ def test_payment_lag_values_both_running_overnight_coupons(index):
         spread=SPREAD,
         payment_lag=2,
     )
-    ended, accruing = leg.coupons[3], leg.coupons[4]
+    ended, accruing = leg.get_coupons()[3], leg.get_coupons()[4]
     assert ended.end_date < VAL_DATE < ended.payment_date
     assert accruing.start_date < VAL_DATE < accruing.end_date
 

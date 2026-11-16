@@ -200,17 +200,18 @@ class _Seeder:
         The first coupon's rate also covers any gap between the curve date and the
         leg start. None when the leg has no coupon left or the rate is unusable.
         """
-        coupons = [c for c in leg.coupons if c.end_date > self.t]
-        if not coupons:
+        live = [
+            i for i, end in enumerate(leg._end_ordinals) if end > self.t.toordinal()
+        ]
+        if not live:
             return None
+        rate, starts, ends = leg.rate, leg.start_dates, leg.end_dates
         wf = 1.0
-        if coupons[0].start_date > self.t:
-            wf *= float(
-                coupons[0].rate.get_wealth_factor(self.t, coupons[0].start_date)
-            )
-        for c in coupons:
-            wf *= float(c.rate.get_wealth_factor(max(c.start_date, self.t), c.end_date))
-        tau = self.tau(coupons[-1].end_date)
+        if starts[live[0]] > self.t:
+            wf *= float(rate.get_wealth_factor(self.t, starts[live[0]]))
+        for i in live:
+            wf *= float(rate.get_wealth_factor(max(starts[i], self.t), ends[i]))
+        tau = self.tau(ends[live[-1]])
         return math.log(wf) / tau if wf > 0 and math.isfinite(wf) and tau > 0 else None
 
     def forward_zero(

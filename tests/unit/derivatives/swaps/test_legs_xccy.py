@@ -59,7 +59,7 @@ def _fixed(
 def test_xccy_leg_is_a_daily_compounded_leg_of_xccy_coupons():
     leg = _xccy_usd()
     assert isinstance(leg, XCCYFloatingLeg) and isinstance(leg, OvernightLeg)
-    assert all(isinstance(c, XCCYCoupon) for c in leg.coupons)
+    assert all(isinstance(c, XCCYCoupon) for c in leg.get_coupons())
     assert leg.currency == USD
     assert leg.n_coupons == SWAP_TERM_YEARS * 4
 
@@ -74,7 +74,7 @@ def test_only_the_final_notional_is_exchanged():
 def test_fx_fixing_dates_default_to_payment_dates():
     for leg in (_xccy_usd(), _fixed(Ccy.USD)):
         assert leg.fx_fixing_dates == leg.payment_dates
-        assert [c.fx_fixing_date for c in leg.coupons] == leg.payment_dates
+        assert [c.fx_fixing_date for c in leg.get_coupons()] == leg.payment_dates
 
 
 def test_fx_fixing_lag_counts_business_days_back_from_payment():

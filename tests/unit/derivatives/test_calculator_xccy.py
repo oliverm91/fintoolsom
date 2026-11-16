@@ -78,6 +78,18 @@ def _df(market, currency: Currency, d: date) -> float:
     return market.get_discount_curve(currency).get_df(d)
 
 
+def _sub(leg, sl: slice):
+    """`leg` restricted to coupons[sl]; it repays its notional on its last coupon."""
+    return replace(
+        leg,
+        start_dates=leg.start_dates[sl],
+        end_dates=leg.end_dates[sl],
+        payment_dates=leg.payment_dates[sl],
+        fx_fixing_dates=leg.fx_fixing_dates[sl],
+        residuals=leg.residuals[sl],
+    )
+
+
 def _forward_fx(market, d: date) -> float:
     return SPOT * _df(market, USD, d) / _df(market, CLP, d)
 
@@ -89,7 +101,7 @@ def _xccy_flows(market, leg) -> list[float]:
         c.residual * (curve.get_df(c.start_date) / curve.get_df(c.end_date) - 1)
         + c.residual * SPREAD.rate * (c.end_date - c.start_date).days / 360
         + c.amortization
-        for c in leg.coupons
+        for c in leg.get_coupons()
     ]
 
 
@@ -97,7 +109,7 @@ def test_deliverable_xccy_leg_discounts_its_own_flows_in_its_own_currency(market
     leg = _xccy_usd()
     expected = sum(
         f * _df(market, USD, c.payment_date)
-        for f, c in zip(_xccy_flows(market, leg), leg.coupons)
+        for f, c in zip(_xccy_flows(market, leg), leg.get_coupons())
     )
     assert Calculator._leg_pv(leg, None, market) == pytest.approx(expected, rel=1e-12)
 
@@ -116,7 +128,9 @@ def test_non_deliverable_projects_fx_to_each_fixing_date(market):
     usd, clp = _xccy_usd(fx_fixing_lag=2), _fixed(Ccy.CLP)
     expected_usd_leg = sum(
         f * _forward_fx(market, fix) * _df(market, CLP, c.payment_date)
-        for f, fix, c in zip(_xccy_flows(market, usd), usd.fx_fixing_dates, usd.coupons)
+        for f, fix, c in zip(
+            _xccy_flows(market, usd), usd.fx_fixing_dates, usd.get_coupons()
+        )
     )
     swap = Swap(receive_leg=usd, pay_leg=clp, payment_currency=CLP)
     expected = expected_usd_leg - Calculator._leg_pv(clp, None, market)
@@ -136,17 +150,18 @@ def test_flow_with_fx_fixed_but_not_paid_uses_the_realised_fixing(market):
     leg = _fixed(Ccy.USD, SwapStatus.STARTED, fx_fixing_lag=3)
     running = next(
         i
-        for i, c in enumerate(leg.coupons)
+        for i, c in enumerate(leg.get_coupons())
         if c.fx_fixing_date < VAL_DATE < c.payment_date
     )
-    c = leg.coupons[running]
+    c = leg.get_coupons()[running]
     realised = market.get_fx_rate(c.fx_fixing_date, USD_CLP).value
     assert realised == pytest.approx(SPOT * PAST_FX_FACTOR)
 
-    only_running = replace(leg, coupons=[c])
+    only_running = _sub(leg, slice(running, running + 1))
     pv = Calculator._leg_pv_non_deliverable(only_running, None, market, CLP)
+    # The coupon's flow plus the notional the one-coupon leg repays.
     assert pv == pytest.approx(
-        c.flow * realised * _df(market, CLP, c.payment_date), rel=1e-12
+        (c.flow + c.residual) * realised * _df(market, CLP, c.payment_date), rel=1e-12
     )
 
 
@@ -154,22 +169,23 @@ def test_fixing_on_valuation_date_uses_todays_fixing(market):
     leg = _fixed(
         Ccy.USD, SwapStatus.STARTED, fx_fixing_lag=2
     )  # fixes 2024-07-08 == VAL_DATE
-    c = next(c for c in leg.coupons if c.fx_fixing_date == VAL_DATE)
+    i = next(i for i, d in enumerate(leg.fx_fixing_dates) if d == VAL_DATE)
+    c = leg.get_coupon(i)
     pv = Calculator._leg_pv_non_deliverable(
-        replace(leg, coupons=[c]), None, market, CLP
+        _sub(leg, slice(i, i + 1)), None, market, CLP
     )
     assert pv == pytest.approx(
-        c.flow * SPOT * _df(market, CLP, c.payment_date), rel=1e-12
+        (c.flow + c.residual) * SPOT * _df(market, CLP, c.payment_date), rel=1e-12
     )
 
 
 def test_paid_flow_is_dropped_even_though_its_fx_was_fixed(market):
     leg = _fixed(Ccy.USD, SwapStatus.STARTED, fx_fixing_lag=3)
-    paid = [c for c in leg.coupons if c.payment_date <= VAL_DATE]
-    assert paid
+    n_paid = sum(d <= VAL_DATE for d in leg.payment_dates)
+    assert n_paid
     assert (
         Calculator._leg_pv_non_deliverable(
-            replace(leg, coupons=paid), None, market, CLP
+            _sub(leg, slice(0, n_paid)), None, market, CLP
         )
         == 0.0
     )
@@ -180,7 +196,7 @@ def test_started_non_deliverable_xccy_leg_mixes_realised_and_forward_fixings(mar
     mask, flows = Calculator._leg_flows(
         leg, market
     )  # leg-currency flows (tested elsewhere)
-    unpaid = [c for c, m in zip(leg.coupons, mask) if m]
+    unpaid = [c for c, m in zip(leg.get_coupons(), mask) if m]
     assert unpaid[0].fx_fixing_date < VAL_DATE < unpaid[0].payment_date
     fx = [
         market.get_fx_rate(c.fx_fixing_date, USD_CLP).value
