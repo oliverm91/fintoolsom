@@ -23,6 +23,7 @@ from ..market.quotes import InstrumentQuote
 from ._keys import (
     CurveKey,
     _built,
+    _curve_id,
     _curves_needed,
     _get_maturity,
     _instrument_of,
@@ -301,7 +302,10 @@ class _Planner:
         fixed_pillars: dict = {}
         free_dates: dict[CurveKey, list[date]] = {}
         flat_guess: dict[CurveKey, float] = {}
-        for curve in group:
+        # In curve-id order, not the frozenset's: the unknowns' layout (and so the
+        # joint solve's path) must not depend on PYTHONHASHSEED.
+        rfi = self.market.risk_free_index
+        for curve in sorted(group, key=lambda c: _curve_id(c, rfi)):
             maturities = {
                 _get_maturity(curve, instr, self.risk_free_index)
                 for instr, owner in zip(instruments, owners)

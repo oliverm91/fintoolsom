@@ -5,8 +5,21 @@ Branched from `cpp-backend` at `36dc02f` (2026-11-16). Goal: port the whole
 from the quotes to the final curves in C++, with the Python builder kept as the
 reference and as the default.
 
-Status: **not started**. This file is the plan and the acceptance criteria; it is
-updated as the port lands.
+Status: **phase 0 done** (harness, determinism, backend switch); phase 1 next. This
+file is the plan and the acceptance criteria; it is updated as the port lands.
+
+## Verifying
+
+    uv run python cpp/benchmarks/bench_curve_builder.py [--quotes notebook|factory] [--no-timing]
+
+builds with the Python and the C++ curve builder (both on the C++ valuation backend),
+for every method, and prints the timings, the max forward difference (exit status 1
+above 1e-8, or if the builders ditch different quotes) and the valuation error: max /
+RMS / sum |MTM| of the fitted quotes, and the count and max of the ditched ones
+(quotes owning no pillar, not fitted by design: with them the "total" is about 12
+CLP on the notebook quotes whatever the builder, so they are reported apart).
+`tests/unit/curve_builder/test_builder_backends.py` asserts the same on the factory
+quotes, and that builds do not depend on `PYTHONHASHSEED`.
 
 ## Scope
 
@@ -62,6 +75,45 @@ Largest repricing error of the quote instruments on the final curves: 2.9e-11
 (PiecewiseConstant), 1.5e-11 (PiecewiseLinear), 7.3e-11 (CubicSpline, ConvexMonotone),
 2.9e-11 (HermiteCubicSpline). Python and C++ backends give bit-identical curves.
 
+Phase-0 baseline of the harness (both builders still the Python code, so no
+difference; notebook quotes, C++ valuation), fitted quotes' |MTM| max / RMS / sum,
+5 ditched quotes (max |MTM| 12 CLP):
+
+| Interpolation | Build | Fitted max / RMS / sum |MTM| |
+|---|---:|---|
+| PiecewiseConstant | 12.1 ms | 2.9e-11 / 6.8e-12 / 1.9e-10 |
+| PiecewiseLinear | 12.8 ms | 1.5e-11 / 6.1e-12 / 1.7e-10 |
+| CubicSpline | 17.4 ms | 7.3e-11 / 1.6e-11 / 5.0e-10 |
+| HermiteCubicSpline | 19.5 ms | 2.9e-11 / 8.4e-12 / 3.1e-10 |
+| ConvexMonotone | 20.2 ms | 7.3e-11 / 1.6e-11 / 5.1e-10 |
+
+## Phase 0 (done)
+
+- Builds no longer depend on `PYTHONHASHSEED`: `_Planner.free_pillars` walked a
+  group's frozenset of curve keys, so the order of a joint solve's unknowns (and its
+  path) followed the hash seed (CubicSpline differed at ~4e-15 for seed 3). It now
+  walks them in curve-id order. Checked over seeds 0, 1-7 and 11 for every method.
+- `curve_builder` is a backend subpackage (`settings.SUBPACKAGES`, `PORTED`): the
+  global `"cpp"` reaches it, `FINTOOLSOM_BACKEND_CURVE_BUILDER` overrides it. Its C++
+  path is still the Python code.
+- The harness above, and its test.
+
+## Decisions (2026-11-16)
+
+- **Not bit-identical.** The C++ builder may differ from the Python one; what matters
+  is that its forward rates stay within **1e-8** of the Python builder's, on every
+  curve and method. The total valuation error is reported, not bounded.
+- **Phases 0 → 1 → 2** first (below); phase 3 (planning and seeding) later, if worth it.
+- **Backend.** `curve_builder` is a backend subpackage like the others:
+  `settings.set_backend("cpp")` switches it too, and
+  `settings.set_backend("python", "curve_builder")` afterwards keeps the Python builder.
+
 ## Plan
 
-To be agreed before starting.
+0. **Verification harness and determinism (Python).** Builds deterministic whatever
+   `PYTHONHASHSEED`; a `curve_builder` backend subpackage; a benchmark script and
+   tests comparing the two builders on the three criteria.
+1. **Instruments from quotes in C++** (`_instrument_of`).
+2. **The solver in C++**: curve cores and a compiled residual plan held in C++, block
+   Newton and the joint solve with the analytic Jacobian, no Python per iteration.
+3. Later: planning and seeding.

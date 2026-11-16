@@ -18,11 +18,13 @@ What each backend covers:
   valuation: an instrument with a C++ core valued on a C++ market runs in one C++
   call; ``Market.get_dfs``, its FX projection and accrual loops; the index
   histories' day walks (with ``"dates"``) and the UF extension.
+- ``"curve_builder"``: ``build_curves``. Being ported (branch ``cpp-curve-builder``):
+  its C++ path may differ from the Python builder within 1e-8 on the forward rates.
 
 The backend is read when an object is created (a curve, leg, forward, option or
 market built under ``"cpp"`` keeps its C++ path after the setting changes), or, for
-``dates``, ``Rate`` factors, the index histories and ``get_strike_from_delta``, when
-called.
+``dates``, ``Rate`` factors, the index histories, ``get_strike_from_delta`` and
+``build_curves``, when called.
 
 Set it from the environment before importing fintoolsom::
 
@@ -49,9 +51,17 @@ from typing import Literal
 Backend = Literal["python", "cpp"]
 
 BACKENDS: tuple[str, ...] = ("python", "cpp")
-SUBPACKAGES: tuple[str, ...] = ("dates", "rates", "market", "derivatives")
+SUBPACKAGES: tuple[str, ...] = (
+    "dates",
+    "rates",
+    "market",
+    "derivatives",
+    "curve_builder",
+)
 # Subpackages with a C++ implementation.
-PORTED: frozenset[str] = frozenset({"dates", "rates", "market", "derivatives"})
+PORTED: frozenset[str] = frozenset(
+    {"dates", "rates", "market", "derivatives", "curve_builder"}
+)
 
 DEFAULT_BACKEND: Backend = "python"
 
