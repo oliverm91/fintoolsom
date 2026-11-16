@@ -5,8 +5,9 @@ Branched from `cpp-backend` at `36dc02f` (2026-11-16). Goal: port the whole
 from the quotes to the final curves in C++, with the Python builder kept as the
 reference and as the default.
 
-Status: **phase 0 done** (harness, determinism, backend switch); phase 1 next. This
-file is the plan and the acceptance criteria; it is updated as the port lands.
+Status: **phases 0 and 1 done** (harness, determinism, backend switch; legs as
+arrays, built in one C++ call); phase 2 (the solver) next. This file is the plan and
+the acceptance criteria; it is updated as the port lands.
 
 ## Verifying
 
@@ -54,9 +55,14 @@ HermiteCubicSpline, ConvexMonotone):
 3. **Total valuation error**: every quote instrument revalued by
    `Calculator.valuate` on the final curves, in the report currency: max |MTM|, RMS
    and sum |MTM|, for both builders. Target: not worse than the Python builder's.
-4. The whole suite passes in the six backend configurations (python;
-   `FINTOOLSOM_BACKEND=cpp`; `FINTOOLSOM_BACKEND_{RATES,MARKET,DERIVATIVES,DATES}=cpp`),
-   run with `pytest -n auto`; the errors and warnings raised are the Python builder's.
+4. The whole suite passes in the seven backend configurations (python;
+   `FINTOOLSOM_BACKEND=cpp`;
+   `FINTOOLSOM_BACKEND_{RATES,MARKET,DERIVATIVES,DATES,CURVE_BUILDER}=cpp`), run with
+   `pytest -n 4` (fastest: 22 s against 60 s serial and 27 s with `-n auto`); the errors
+   and warnings raised are the Python builder's.
+
+Criterion 2's target is superseded by the decisions below: within 1e-8, not
+bit-identical.
 
 ## Baseline (cpp-backend at 36dc02f)
 
@@ -98,6 +104,54 @@ difference; notebook quotes, C++ valuation), fitted quotes' |MTM| max / RMS / su
   path is still the Python code.
 - The harness above, and its test.
 
+## Phase 1 (done): instruments from quotes
+
+Profiling showed the cost was not the coupon objects but each leg's fixed overhead:
+some fifteen small numpy calls (~1.3 µs each: date conversions, date checks,
+amortizations), about 20 µs per leg, on legs of ~8 coupons.
+
+- **Legs hold per-coupon arrays** (`derivatives/swaps/legs.py`): start, end, optional
+  payment and FX fixing dates and residuals, stored as read-only ordinal and float
+  arrays. The amortizations come from the residuals (the notional is fully repaid by
+  the last coupon; negative amortizations are drawdowns). One rate per fixed leg, one
+  spread per floating leg. Term-rate fixing dates default to the start dates and may
+  not be after them. `get_coupons()` / `get_coupon(i)` build coupon objects on
+  request; `from_coupons()` builds a leg from them, for legacy code. No `__eq__`
+  (identity). The swaps README documents it. Removed: hand-built legs whose
+  amortizations do not repay the notional (the README's "explicit amounts" trick).
+- **One C++ call per leg** on the `derivatives` C++ backend
+  (`fintoolsom._native.leg_arrays`): the ordinals, the date checks, the
+  amortizations and the par-schedule flag. It returns None for inputs it does not
+  take (dates that are not exact `date`s, mismatched lengths, a failed check), and the
+  Python path then raises its usual errors.
+- `dates.date_counts.date_ordinals` also takes an `(n, 3)` integer array of
+  `(year, month, day)` rows (vectorised numpy, both backends).
+
+Forward rates are bit-identical to phase 0's on both backends, every method, both
+quote sets. Results (notebook quotes, C++ valuation, 3 warm-ups + 10 builds, 2
+slowest dropped):
+
+| | Phase 0 | Phase 1 |
+|---|---:|---:|
+| Fixed leg / overnight leg construction | 20.1 / 24.9 µs | 9.1 / 10.6 µs |
+| One IRS instrument | 55.3 µs | 29.9 µs |
+| The 73 notebook instruments | 4.38 ms | 2.24 ms |
+
+| Interpolation | Build, phase 0 | Build, phase 1 | Fitted max / RMS / sum \|MTM\| | Max \|dfwd\| vs Python builder |
+|---|---:|---:|---|---:|
+| PiecewiseConstant | 12.1 ms | 10.4 ± 0.1 ms | 2.9e-11 / 6.8e-12 / 1.9e-10 | 0 |
+| PiecewiseLinear | 12.8 ms | 11.0 ± 0.1 ms | 1.5e-11 / 6.1e-12 / 1.7e-10 | 0 |
+| CubicSpline | 17.4 ms | 15.8 ± 0.2 ms | 7.3e-11 / 1.6e-11 / 5.0e-10 | 0 |
+| HermiteCubicSpline | 19.5 ms | 17.9 ± 0.2 ms | 2.9e-11 / 8.4e-12 / 3.1e-10 | 0 |
+| ConvexMonotone | 20.2 ms | 18.2 ± 0.2 ms | 7.3e-11 / 1.6e-11 / 5.1e-10 | 0 |
+
+The gain is the same for both builders: they share the instruments (the derivatives
+backend), so the "C++ builder" column of the harness still equals the Python one.
+
+Where an all-C++ PiecewiseConstant build spends its time now (cProfile shares): the
+solves ~50% (block Newton and its Python glue: residual values, curve updates), the
+instruments ~20%, planning and seeding ~23%. Phase 2 targets the first.
+
 ## Decisions (2026-11-16)
 
 - **Not bit-identical.** The C++ builder may differ from the Python one; what matters
@@ -110,10 +164,10 @@ difference; notebook quotes, C++ valuation), fitted quotes' |MTM| max / RMS / su
 
 ## Plan
 
-0. **Verification harness and determinism (Python).** Builds deterministic whatever
+0. **Verification harness and determinism (Python)** (done). Builds deterministic whatever
    `PYTHONHASHSEED`; a `curve_builder` backend subpackage; a benchmark script and
    tests comparing the two builders on the three criteria.
-1. **Instruments from quotes in C++** (`_instrument_of`).
+1. **Instruments from quotes in C++** (`_instrument_of`): done, see Phase 1.
 2. **The solver in C++**: curve cores and a compiled residual plan held in C++, block
    Newton and the joint solve with the analytic Jacobian, no Python per iteration.
 3. Later: planning and seeding.

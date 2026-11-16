@@ -6,10 +6,66 @@
 #include <nanobind/stl/pair.h>
 
 #include "py_curve.hpp"
+#include "py_dates.hpp"
 
 namespace fts::py {
 
 namespace {
+
+// Fills `out` with the ordinals of `list`, a list of `n` exact dates; false otherwise.
+bool fill_ordinals(nb::handle list, std::int64_t* out, Py_ssize_t n) {
+    if (!PyList_CheckExact(list.ptr()) || PyList_GET_SIZE(list.ptr()) != n) return false;
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const auto o = dt::exact_ordinal(PyList_GET_ITEM(list.ptr(), i));
+        if (!o) return false;
+        out[i] = *o;
+    }
+    return true;
+}
+
+// SwapLeg.__post_init__'s arrays in one call: the ordinals of the start, end and (when
+// given) payment and FX fixing dates, the amortizations (each residual minus the next,
+// the last residual on the last coupon) and whether the leg pays on its end dates with
+// each coupon starting where the previous one ends. None when the inputs are not plain
+// (lists of exact dates of the residuals' length) or a date check fails, for the
+// Python code to handle them and raise its errors.
+nb::object leg_arrays(nb::handle start, nb::handle end, nb::handle pay, nb::handle fx,
+                      DoublesIn residuals) {
+    if (!PyList_CheckExact(start.ptr())) return nb::none();
+    const Py_ssize_t n = PyList_GET_SIZE(start.ptr());
+    if (static_cast<Py_ssize_t>(residuals.shape(0)) != n) return nb::none();
+    const auto size = static_cast<std::size_t>(n);
+    auto [start_arr, s] = new_array<std::int64_t>(size);
+    auto [end_arr, e] = new_array<std::int64_t>(size);
+    if (!fill_ordinals(start, s, n) || !fill_ordinals(end, e, n)) return nb::none();
+    nb::object pay_obj = nb::none(), fx_obj = nb::none();
+    const std::int64_t* p = e;
+    if (!pay.is_none()) {
+        auto [arr, buf] = new_array<std::int64_t>(size);
+        if (!fill_ordinals(pay, buf, n)) return nb::none();
+        pay_obj = nb::cast(std::move(arr));
+        p = buf;
+    }
+    const std::int64_t* f = p;
+    if (!fx.is_none()) {
+        auto [arr, buf] = new_array<std::int64_t>(size);
+        if (!fill_ordinals(fx, buf, n)) return nb::none();
+        fx_obj = nb::cast(std::move(arr));
+        f = buf;
+    }
+    bool par = n > 0;
+    for (std::size_t i = 0; i < size; ++i) {
+        if (s[i] >= e[i] || e[i] > p[i] || f[i] > p[i]) return nb::none();
+        if (i > 0 && (s[i] < s[i - 1] || p[i] < p[i - 1])) return nb::none();
+        par = par && p[i] == e[i] && (i == 0 || s[i] == e[i - 1]);
+    }
+    const double* r = residuals.data();
+    auto [amort_arr, a] = new_array<double>(size);
+    for (std::size_t i = 0; i + 1 < size; ++i) a[i] = r[i] - r[i + 1];
+    if (size > 0) a[size - 1] = r[size - 1];
+    return nb::make_tuple(std::move(start_arr), std::move(end_arr), pay_obj, fx_obj,
+                          std::move(amort_arr), par);
+}
 
 using swaps::FxProjection;
 using swaps::Known;
@@ -26,6 +82,7 @@ Known known_of(const DaysIn& index, const DoublesIn& flows) {
 }  // namespace
 
 void bind_swaps(nb::module_& m) {
+    dt::import();
     nb::class_<PySwapLeg>(m, "SwapLegCore",
                           "Per-coupon data of a swap leg and its valuation arithmetic.")
         .def(
@@ -153,6 +210,12 @@ void bind_swaps(nb::module_& m) {
         nb::arg("amortizations"),
         "FloatingLeg._repays_at_par on the leg's ordinals and notionals; None when the "
         "lengths differ.");
+
+    m.def("leg_arrays", &leg_arrays, nb::arg("start"), nb::arg("end"),
+          nb::arg("pay").none(), nb::arg("fx").none(), nb::arg("residuals"),
+          "SwapLeg's ordinals, amortizations and par-schedule flag in one call: "
+          "(start, end, pay or None, fx or None, amortizations, par), or None when the "
+          "inputs are not plain or a date check fails.");
 
     m.def(
         "fsum", [](DoublesIn values) { return swaps::fsum(view(values)); }, nb::arg("values"),

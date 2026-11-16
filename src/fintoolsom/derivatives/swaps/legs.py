@@ -13,6 +13,7 @@ from fintoolsom.rates.Rates import Rate, RateConvention
 
 from .coupons import (
     FixedCoupon,
+    FloatingCoupon,
     OvernightCoupon,
     SwapCoupon,
     TermRateCoupon,
@@ -106,6 +107,8 @@ class SwapLeg:
     _start_ordinals: np.ndarray = field(init=False, repr=False)
     _end_ordinals: np.ndarray = field(init=False, repr=False)
     _fx_fixing_ordinals: np.ndarray = field(init=False, repr=False)
+    # Pays on its end dates, each coupon starting where the previous one ends.
+    _par_schedule: bool = field(init=False, repr=False)
 
     # C++ backend (fintoolsom.settings, "derivatives"), read at construction. The
     # leg's fintoolsom._native.SwapLegCore is built on its first valuation.
@@ -142,23 +145,30 @@ class SwapLeg:
                 f"{len(self.fx_fixing_dates)} FX fixing dates and residuals of shape "
                 f"{r.shape}."
             )
-        self._start_ordinals = _read_only(date_ordinals(self.start_dates))
-        end = self._end_ordinals = _read_only(date_ordinals(self.end_dates))
-        pay = self._payment_ordinals = (
-            end
-            if self.payment_dates is self.end_dates
-            else _read_only(date_ordinals(self.payment_dates))
-        )
-        self._fx_fixing_ordinals = (
-            pay
-            if self.fx_fixing_dates is self.payment_dates
-            else _read_only(date_ordinals(self.fx_fixing_dates))
-        )
-        self._check_dates()
         self.residuals = _read_only(r)
-        a = np.empty_like(r)
-        a[:-1] = r[:-1] - r[1:]
-        a[-1:] = r[-1:]
+        own_pay = self.payment_dates is not self.end_dates
+        own_fx = self.fx_fixing_dates is not self.payment_dates
+        arrays = (
+            settings.native().leg_arrays(
+                self.start_dates,
+                self.end_dates,
+                self.payment_dates if own_pay else None,
+                self.fx_fixing_dates if own_fx else None,
+                r,
+            )
+            if self._native
+            else None
+        )
+        if arrays is None:
+            a = self._python_arrays(own_pay, own_fx)
+        else:
+            start, end, pay, fx, a, self._par_schedule = arrays
+            self._start_ordinals = _read_only(start)
+            self._end_ordinals = _read_only(end)
+            self._payment_ordinals = end if pay is None else _read_only(pay)
+            self._fx_fixing_ordinals = (
+                self._payment_ordinals if fx is None else _read_only(fx)
+            )
         self.amortizations = _read_only(a)
         rate = self.fixed_rate
         interest = (
@@ -171,6 +181,29 @@ class SwapLeg:
         )
         self.fixed_interest = _read_only(interest)
         self.fixed_flows = _read_only(interest + a)
+
+    def _python_arrays(self, own_pay: bool, own_fx: bool) -> np.ndarray:
+        """The ordinals (checked) and the amortizations, without the C++ backend; the
+        backend's ``leg_arrays`` gives the same."""
+        self._start_ordinals = _read_only(date_ordinals(self.start_dates))
+        end = self._end_ordinals = _read_only(date_ordinals(self.end_dates))
+        pay = self._payment_ordinals = (
+            _read_only(date_ordinals(self.payment_dates)) if own_pay else end
+        )
+        self._fx_fixing_ordinals = (
+            _read_only(date_ordinals(self.fx_fixing_dates)) if own_fx else pay
+        )
+        self._check_dates()
+        self._par_schedule = bool(
+            len(end)
+            and np.array_equal(pay, end)
+            and np.array_equal(self._start_ordinals[1:], end[:-1])
+        )
+        r = self.residuals
+        a = np.empty_like(r)
+        a[:-1] = r[:-1] - r[1:]
+        a[-1:] = r[-1:]
+        return a
 
     def _check_dates(self) -> None:
         start, end = self._start_ordinals, self._end_ordinals
@@ -551,12 +584,7 @@ class FloatingLeg(SwapLeg):
         Under these, sum over coupons of ``residual * (df(start) - df(end))``
         plus ``amortization * df(end)`` telescopes to ``residuals[0] * df(start_0)``.
         """
-        if not self.n_coupons:
-            return False
-        return bool(
-            np.array_equal(self._payment_ordinals, self._end_ordinals)
-            and np.array_equal(self._start_ordinals[1:], self._end_ordinals[:-1])
-        )
+        return self._par_schedule
 
     @property
     def currency(self) -> Currency:
@@ -714,12 +742,9 @@ class TermRateLeg(FloatingLeg):
             long_stub,
             maturity_date,
         )
-        if fixing_lag is None:
-            fixing_lag = getattr(index, "spot_lag", 0)
+        lag: int = getattr(index, "spot_lag", 0) if fixing_lag is None else fixing_lag
         calendar = adj_convention.calendar
-        fixing_dates = [
-            calendar.add_business_days(d, -fixing_lag) for d in schedule[:-1]
-        ]
+        fixing_dates = [calendar.add_business_days(d, -lag) for d in schedule[:-1]]
         return cls(
             **cls._schedule_dates(schedule, adj_convention, payment_lag, fx_fixing_lag),
             residuals=np.full(len(schedule) - 1, float(notional)),
@@ -735,7 +760,7 @@ class OvernightLeg(FloatingLeg):
 
     _label: ClassVar[str] = "Overnight"
 
-    def _coupon(self, i: int, **common) -> OvernightCoupon:
+    def _coupon(self, i: int, **common) -> FloatingCoupon:
         return OvernightCoupon(**common, spread=self.spread)  # type: ignore[arg-type]
 
     @classmethod
@@ -798,7 +823,7 @@ class XCCYFloatingLeg(OvernightLeg):
 
     _label: ClassVar[str] = "XCCY Overnight"
 
-    def _coupon(self, i: int, **common) -> XCCYCoupon:
+    def _coupon(self, i: int, **common) -> FloatingCoupon:
         return XCCYCoupon(**common, spread=self.spread)  # type: ignore[arg-type]
 
     @classmethod
