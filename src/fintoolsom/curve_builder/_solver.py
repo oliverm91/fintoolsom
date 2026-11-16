@@ -34,6 +34,14 @@ _LOCAL_METHODS = frozenset(
     }
 )
 _MAX_SWEEPS = 4
+# Interpolations where log(df) is affine in the forwards: the curve part of the
+# Jacobian is then constant over a solve.
+_LINEAR_METHODS = _LOCAL_METHODS | {InterpolationMethod.CubicSpline}
+# Give hybr the Jacobian of the residuals instead of letting it difference them.
+_ANALYTIC_JACOBIAN = True
+# Forward bump that reads the curve part of the Jacobian off the curves: exact
+# (up to rounding) on affine curves, a forward difference on the others.
+_LINEAR_BUMP, _NONLINEAR_BUMP = 1e-2, 1e-7
 
 
 def _solve_or_rollback(
@@ -41,6 +49,7 @@ def _solve_or_rollback(
     y0: list[float],
     restore: Callable[[], None],
     what: str,
+    jac: Callable[[list[float]], np.ndarray] | None = None,
 ):
     """Solve ``residual(y) = 0`` with ``scipy.optimize.root`` (hybr), atomically.
 
@@ -57,6 +66,8 @@ def _solve_or_rollback(
         Rolls the market back to its state before the solve.
     what : str
         Description used in error messages.
+    jac : callable, optional
+        Jacobian of `residual`; None lets hybr difference it.
 
     Returns
     -------
@@ -68,7 +79,7 @@ def _solve_or_rollback(
         On non-convergence or non-finite residuals.
     """
     try:
-        result = root(residual, y0, method="hybr")
+        result = root(residual, y0, method="hybr", jac=jac)
     except ValueError as exc:
         # scipy raises on non-finite residuals: the instruments are nearly insensitive
         # to these pillars, so the solver wandered where valuation blows up.
@@ -191,37 +202,54 @@ class _GroupSolve:
         without constructing and checking them again. Curves this solve did not build
         (the snapshot, or one replaced in the market since) are never changed.
         """
-        precalculate = not self.local and not settings.is_cpp("rates")
         for curve, (s, e) in self.curve_slice.items():
-            fixed = self.fixed_pillars[curve]
-            forwards = [*fixed.forwards, *(float(v) for v in y[s:e])]
-            owned = self._owned.get(curve)
-            if owned is not None and _built(self.market, curve) is owned:
-                owned._set_forward_rates(forwards)
-                continue
-            knots = [*fixed.knots, *self.free_dates[curve]]
-            if isinstance(curve, Index):
-                built = IndexCurve(
-                    self.t,
-                    curve,
-                    knots,
-                    forwards,
-                    fixed.spot_rate,
-                    self.methods[curve],
-                    precalculate=precalculate,
-                )
-            else:
-                built = DiscountCurve(
-                    self.t,
-                    curve,
-                    self.market.risk_free_index,
-                    knots,
-                    forwards,
-                    self.methods[curve],
-                    precalculate=precalculate,
-                )
-            self.market.set_curve(built)
-            self._owned[curve] = built
+            self.set_curve(curve, y[s:e])
+
+    def set_curve(self, curve: CurveKey, values) -> None:
+        """Rebuild one group curve from its fixed part plus its unknowns `values`."""
+        fixed = self.fixed_pillars[curve]
+        forwards = [*fixed.forwards, *(float(v) for v in values)]
+        owned = self._owned.get(curve)
+        if owned is not None and _built(self.market, curve) is owned:
+            owned._set_forward_rates(forwards)
+            return
+        precalculate = not self.local and not settings.is_cpp("rates")
+        built = self._new_curve(curve, forwards, precalculate)
+        self.market.set_curve(built)
+        self._owned[curve] = built
+
+    def private_curve(self, curve: CurveKey, values) -> DiscountCurve | IndexCurve:
+        """A new curve as :meth:`set_curve` would build it from `values`, without a
+        grid and outside the market (to bump freely)."""
+        fixed = self.fixed_pillars[curve]
+        return self._new_curve(
+            curve, [*fixed.forwards, *(float(v) for v in values)], False
+        )
+
+    def _new_curve(
+        self, curve: CurveKey, forwards, precalculate: bool
+    ) -> DiscountCurve | IndexCurve:
+        fixed = self.fixed_pillars[curve]
+        knots = [*fixed.knots, *self.free_dates[curve]]
+        if isinstance(curve, Index):
+            return IndexCurve(
+                self.t,
+                curve,
+                knots,
+                forwards,
+                fixed.spot_rate,
+                self.methods[curve],
+                precalculate=precalculate,
+            )
+        return DiscountCurve(
+            self.t,
+            curve,
+            self.market.risk_free_index,
+            knots,
+            forwards,
+            self.methods[curve],
+            precalculate=precalculate,
+        )
 
     def restore(self) -> None:
         """Put back the curves as they were before the solve."""
@@ -233,6 +261,152 @@ class _GroupSolve:
                 )
             else:
                 self.market.set_curve(previous)
+
+
+class _Jacobian:
+    """``d residuals / d y[columns]`` of one batch, for hybr.
+
+    By the chain rule through the values ``v`` the batch reads off the market:
+    ``d r / d y = (d r / d v) (d v / d y)``. The first factor is the batch's analytic
+    :meth:`~ValuationBatch.gradient`. For the second, every value is a product of
+    curve dfs to the powers +-1, so ``g = log(v + shift)`` is a signed sum of
+    ``log df`` of the curves solved (:meth:`_source_terms`), and
+    ``d v / d y = (v + shift) d g / d y``.
+
+    ``d log df / d y`` of each curve solved is read off a private copy of it, bumping
+    one forward at a time, at the dates the batch reads. It is constant over the solve
+    on piecewise-constant/linear and spline curves, where ``log df`` is affine in the
+    forwards (the bump is then exact up to rounding), and a forward difference
+    recomputed at each call on the monotone methods. A C++ batch, valued in one
+    ``market_valuate_many`` call, is compiled again in Python for its gradient.
+
+    Parameters
+    ----------
+    solve : _GroupSolve
+        Layout of the unknowns, and the curves they rebuild.
+    batch : ValuationBatch
+        Batch of the residual instruments.
+    columns : array of int
+        Unknowns the Jacobian is taken with respect to.
+    """
+
+    def __init__(self, solve: _GroupSolve, batch: ValuationBatch, columns):
+        self.solve = solve
+        self.columns = np.asarray(columns, dtype=np.intp)
+        self.plan = (
+            batch
+            if batch.differentiable
+            else ValuationBatch(
+                batch.instruments, batch.market, batch.currency, compile_all=True
+            )
+        )
+        self.ok = self.plan.differentiable
+        self.linear = all(m in _LINEAR_METHODS for m in solve.methods.values())
+        self._terms = None
+        self._dg = None
+
+    def __call__(self, y) -> np.ndarray:
+        y = np.asarray(y, dtype=float)
+        self.solve.apply(y)
+        v = self.plan.source_values()
+        if self._terms is None:
+            self._terms = self._source_terms()
+        dg = self._dg if self._dg is not None else self._curve_part(y, len(v))
+        if self.linear:
+            self._dg = dg
+        return self.plan.gradient(v) @ ((v + self.plan.log_shift)[:, None] * dg)
+
+    def _source_terms(self) -> dict:
+        """Curve solved to ``(ordinals, [(value rows, ordinal rows, sign)])``: the
+        ``log df`` terms of ``log(v + shift)``, as the market computes each source."""
+        market = self.solve.market
+        key_of = {id(c): key for key, c in self.solve._owned.items()}
+        terms: dict = defaultdict(list)
+
+        def add(curve, rows, ordinals, sign):
+            key = key_of.get(id(curve))
+            if key is not None and len(rows):
+                terms[key].append((rows, np.asarray(ordinals, dtype=np.int64), sign))
+
+        offset = 0
+        for source in self.plan._sources_list:
+            rows = offset + np.arange(source.size)
+            offset += source.size
+            kind, args, ords = source.kind, source.args, source.ordinals
+            if kind == "discount":  # Market._dfs_at_ordinals
+                currency, collateral = args
+                if collateral is None:
+                    add(market.get_discount_curve(currency), rows, ords[0], 1.0)
+                elif collateral.currency == currency:
+                    add(market.get_index_curve(collateral), rows, ords[0], 1.0)
+                else:
+                    add(market.get_discount_curve(currency), rows, ords[0], 1.0)
+                    add(market.get_index_curve(collateral), rows, ords[0], 1.0)
+                    add(
+                        market.get_discount_curve(collateral.currency),
+                        rows,
+                        ords[0],
+                        -1.0,
+                    )
+            elif kind == "index":
+                add(market.get_index_curve(args[0]), rows, ords[0], 1.0)
+            elif kind == "accrual":  # 1 + accrual = df(start) / df(end)
+                curve = market.get_index_curve(args[0])
+                add(curve, rows, ords[0], 1.0)
+                add(curve, rows, ords[1], -1.0)
+            else:  # Market._future_fx_rates_at_ordinals: anchor * df ratios
+                pair = args[0]
+                base, quote = pair.base_currency, pair.quote_currency
+                if base == quote:
+                    continue
+                last = market.get_fx_known_until(pair).toordinal()
+                future = ords[0] > last
+                rows, dates = rows[future], ords[0][future]
+                anchor = np.full(len(dates), last)
+                for currency, sign in ((base, 1.0), (quote, -1.0)):
+                    curve = market.get_discount_curve(currency)
+                    add(curve, rows, dates, sign)
+                    add(curve, rows, anchor, -sign)
+        out = {}
+        for key, entries in terms.items():
+            ordinals, inverse = np.unique(
+                np.concatenate([o for _, o, _ in entries]), return_inverse=True
+            )
+            split = np.cumsum([len(o) for _, o, _ in entries])[:-1]
+            out[key] = (
+                ordinals,
+                [
+                    (rows, at, sign)
+                    for (rows, _, sign), at in zip(entries, np.split(inverse, split))
+                ],
+            )
+        return out
+
+    def _curve_part(self, y: np.ndarray, n_values: int) -> np.ndarray:
+        """``d log(v + shift) / d y[columns]``."""
+        solve = self.solve
+        h = _LINEAR_BUMP if self.linear else _NONLINEAR_BUMP
+        position = {int(k): j for j, k in enumerate(self.columns)}
+        dg = np.zeros((n_values, len(self.columns)))
+        for key, (ordinals, entries) in self._terms.items():
+            s, e = solve.curve_slice[key]
+            free = [k for k in range(s, e) if k in position]
+            if not free:
+                continue
+            curve = solve.private_curve(key, y[s:e])
+            forwards = np.array(curve.forward_rates, dtype=float)
+            first = len(forwards) - (e - s)  # the free forwards come last
+            base = np.log(curve._dfs_at_ordinals(ordinals))
+            dlog = np.empty((len(ordinals), len(free)))
+            for j, k in enumerate(free):
+                bumped = forwards.copy()
+                bumped[first + k - s] += h
+                curve._set_forward_rates(bumped)
+                dlog[:, j] = (np.log(curve._dfs_at_ordinals(ordinals)) - base) / h
+            cols = [position[k] for k in free]
+            for rows, at, sign in entries:
+                dg[np.ix_(rows, cols)] += sign * dlog[at]
+        return dg
 
 
 def _solve_unknowns(
@@ -274,15 +448,26 @@ def _solve_unknowns(
 
     batches: dict[int, ValuationBatch] = {}
 
-    def values(instrs, y) -> list[float]:
-        """The residuals of `instrs` (one list each: the batch is compiled once)."""
-        solve.apply(y)
+    def batch_of(instrs) -> ValuationBatch:
+        """The batch of `instrs` (one list each: the batch is compiled once)."""
         batch = batches.get(id(instrs))
         if batch is None:
             batch = batches[id(instrs)] = ValuationBatch(
                 instrs, solve.market, report_currency
             )
-        return batch.values().tolist()
+        return batch
+
+    def values(instrs, y) -> list[float]:
+        """The residuals of `instrs`."""
+        solve.apply(y)
+        return batch_of(instrs).values().tolist()
+
+    def jacobian(instrs) -> _Jacobian | None:
+        """The Jacobian of `instrs` in every unknown, None to let hybr difference it."""
+        if not _ANALYTIC_JACOBIAN:
+            return None
+        jac = _Jacobian(solve, batch_of(instrs), np.arange(solve.n_unknowns))
+        return jac if jac.ok else None
 
     # Each instrument owns one pillar (its primary curve, at its maturity): blocks of
     # same-date pillars are square by construction.
@@ -307,11 +492,14 @@ def _solve_unknowns(
                     y[pos] = x
                     return values(block, y)
 
+                # A block has 1-3 unknowns: hybr differences it in as many
+                # evaluations, less than setting up its Jacobian costs.
                 y[pos] = _solve_or_rollback(
                     block_residual, list(y[pos]), solve.restore, what
                 ).x
             if max(abs(v) for v in values(instruments, y)) <= _SWEEP_TOL:
                 return y
+    jac = jacobian(instruments)
     return _solve_or_rollback(
-        lambda v: values(instruments, v), list(y), solve.restore, what
+        lambda v: values(instruments, v), list(y), solve.restore, what, jac
     ).x

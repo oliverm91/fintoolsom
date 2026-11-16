@@ -150,12 +150,23 @@ class ValuationBatch:
         Market they are valued on; only its curves may change between calls.
     currency : Currency
         Reporting currency.
+    compile_all : bool, optional
+        Compile C++ instruments in Python too, for :meth:`gradient` (their values are
+        then the Python plan's, not ``market_valuate_many``'s).
     """
 
-    def __init__(self, instruments, market: Market, currency: Currency):
+    def __init__(
+        self,
+        instruments,
+        market: Market,
+        currency: Currency,
+        *,
+        compile_all: bool = False,
+    ):
         self.instruments = list(instruments)
         self.market, self.currency = market, currency
-        kinds = [_cpp_kind(i, market) for i in self.instruments]
+        self._compile_all = compile_all
+        kinds = [0 if compile_all else _cpp_kind(i, market) for i in self.instruments]
         self._all_cpp = all(kinds)
         if self._all_cpp:  # one C++ call: nothing to compile (the solver's blocks)
             self._cpp_instruments = self.instruments
@@ -166,6 +177,7 @@ class ValuationBatch:
         self._cpp_kinds = np.array([kind for kind in kinds if kind], dtype=np.int64)
 
         self._sources: dict = {}
+        self._spots: dict = {}  # spot rate by settlement currency (identity)
         self._terms: list = []  # (flows, fx refs, df refs) per leg, before freezing
         self._projected: list = []  # (positions in the flows, residuals, fixed, refs)
         self._heads: list = []  # (residual_0, df ref) per par leg
@@ -218,19 +230,23 @@ class ValuationBatch:
         return (source, *source.add(*ordinals))
 
     def _spot(self, settlement) -> float:
-        """Market.convert_value_currency's rate, ``value * rate``."""
-        market = self.market
-        return market.get_fx_rate(
-            market.t, CurrencyPair(settlement, self.currency)
-        ).value
+        """Market.convert_value_currency's rate, ``value * rate`` (once per currency)."""
+        spot = self._spots.get(id(settlement))
+        if spot is None:
+            market = self.market
+            spot = self._spots[id(settlement)] = market.get_fx_rate(
+                market.t, CurrencyPair(settlement, self.currency)
+            ).value
+        return spot
 
     def _compile(self, instrument):
-        if type(instrument) is NDF and not instrument._native:
+        native_ok = self._compile_all
+        if type(instrument) is NDF and (native_ok or not instrument._native):
             return self._compile_ndf(instrument)
         if type(instrument) is not Swap:
             raise _Uncompiled
         receive, pay = instrument.receive_leg, instrument.pay_leg
-        if receive._native or pay._native:
+        if not native_ok and (receive._native or pay._native):
             raise _Uncompiled
         collateral = instrument.collateral_index
         return tuple(
@@ -389,6 +405,17 @@ class ValuationBatch:
                 plan.fx = None if plan.fx is None else int(at(plan.fx)[0])
                 plan.df = None if plan.df is None else int(at(plan.df)[0])
         self._sources_list = list(self._sources.values())
+        # log(value + shift) of every value is affine in the curves' forwards on
+        # piecewise-constant/linear or spline curves: dfs, FX (anchor * df ratios) and
+        # 1 + accrual (a df ratio); the trailing 1 is constant.
+        self._log_shift = np.concatenate(
+            [
+                np.full(s.size, 1.0 if s.kind == "accrual" else 0.0)
+                for s in self._sources_list
+            ]
+            + [np.zeros(1)]
+        )
+        self._gradient_rows = None
         del self._terms, self._projected, self._heads
 
     # ── Evaluation ─────────────────────────────────────────────────────────────
@@ -451,6 +478,82 @@ class ValuationBatch:
             for k in self._fallback:
                 out[k] = Calculator.valuate(self.instruments[k], market, currency)
         return out
+
+    # ── Sensitivities ──────────────────────────────────────────────────────────
+
+    @property
+    def differentiable(self) -> bool:
+        """Whether every instrument is compiled, so :meth:`gradient` covers them all."""
+        return not (self._all_cpp or self._cpp_pos or self._fallback)
+
+    @property
+    def log_shift(self) -> np.ndarray:
+        """Per value, the shift making ``log(value + shift)`` affine in the forwards
+        of piecewise-constant/linear and spline curves (1 for an accrual, else 0)."""
+        return self._log_shift
+
+    def source_values(self) -> np.ndarray:
+        """The values one call reads off the market: every source end to end, then 1."""
+        market = self.market
+        return np.concatenate(
+            [s.evaluate(market) for s in self._sources_list] + [np.ones(1)]
+        )
+
+    def gradient(self, values: np.ndarray) -> np.ndarray:
+        """``d MTM / d values``: one row per instrument, one column per value of
+        :meth:`source_values` (the trailing constant 1 included), at `values`.
+
+        Only for a :attr:`differentiable` batch. The MTMs are sums of products of the
+        values (``flow * fx * df`` per term, ``residual_0 * df`` per par head, ``a *
+        (s_t - strike) * df * spot`` per NDF) with constant coefficients, so each
+        derivative is a product of the others.
+        """
+        if self._gradient_rows is None:
+            self._gradient_rows = self._gradient_layout()
+        term_row, term_scale, head_row, head_scale = self._gradient_rows
+        grad = np.zeros((len(self.instruments), len(values)))
+        flows = self._static_flows.copy()
+        projected = self._projected_pos
+        if projected.size:
+            flows[projected] = self._residuals * values[self._accrual_at] + self._fixed
+        fx, df = values[self._fx_at], values[self._df_at]
+        np.add.at(grad, (term_row, self._df_at), flows * fx * term_scale)
+        np.add.at(grad, (term_row, self._fx_at), flows * df * term_scale)
+        if projected.size:  # flow = residual * accrual + fixed
+            np.add.at(
+                grad,
+                (term_row[projected], self._accrual_at),
+                self._residuals * fx[projected] * df[projected] * term_scale[projected],
+            )
+        if head_row.size:
+            np.add.at(
+                grad, (head_row, self._head_at), self._head_residuals * head_scale
+            )
+        for k, plan in self._compiled:
+            if not isinstance(plan, _Ndf) or plan.a is None:
+                continue
+            s_t = plan.s_t if plan.s_t is not None else values[plan.fx]
+            grad[k, plan.df] += plan.a * (s_t - plan.strike) * plan.spot
+            if plan.fx is not None:
+                grad[k, plan.fx] += plan.a * values[plan.df] * plan.spot
+        return grad
+
+    def _gradient_layout(self) -> tuple:
+        """Instrument row and ``sign * spot`` of every term and par head."""
+        term_row = np.zeros(self._static_flows.size, dtype=np.intp)
+        term_scale = np.zeros(self._static_flows.size)
+        head_row = np.zeros(self._head_residuals.size, dtype=np.intp)
+        head_scale = np.zeros(self._head_residuals.size)
+        for k, plan in self._compiled:
+            if isinstance(plan, _Ndf):
+                continue
+            for leg, sign in zip(plan, (1.0, -1.0)):  # receive - pay
+                term_row[leg.start : leg.stop] = k
+                term_scale[leg.start : leg.stop] = sign * leg.spot
+                if leg.head is not None:
+                    head_row[leg.head] = k
+                    head_scale[leg.head] = sign * leg.spot
+        return term_row, term_scale, head_row, head_scale
 
 
 def _ndf_value(plan: _Ndf, values: np.ndarray) -> float:

@@ -54,6 +54,7 @@ The Python code stays the reference, and each port must give the same results.
 | `tests/unit/market/test_cpp_market_methods_parity.py` | Parity of realised fixings, duration and DV01, the par check, the Market methods and accrual loops, the index histories and the UF extension. |
 | `tests/unit/rates/test_cpp_rates_parity.py` | Parity of `Rate` factors (result types included), year fractions and knot checks. |
 | `tests/unit/rates/test_set_forward_rates.py` | Forwards updated in place give the curve built on them; the solver builds each curve once per solve. |
+| `tests/unit/curve_builder/test_jacobian.py` | The solver's analytic Jacobian matches central differences of the residuals on both backends; it solves the same curves as hybr's differencing, keeps the backends bit-identical, and is left to hybr when an instrument is not compiled. |
 | `tests/unit/derivatives/test_valuation_batch.py` | A `ValuationBatch` gives `Calculator.valuate`'s values and errors for every swap case, simplified swap, forward and NDF, on both backends, as the curves move; the solver values through batches. |
 | `tests/unit/dates/test_cpp_schedule_parity.py` | Parity of calendars, conventions and schedules. |
 | `tests/unit/dates/test_cpp_dates_parity.py` | Parity of day counts, time fractions, ordinals, tenors, terms and CPI/UF dates; the one-call holiday load. |
@@ -498,13 +499,54 @@ build's curves depend on `PYTHONHASHSEED`: they can land on one of two results a
 builder is iterated in hash order. So compare curves from two processes with a fixed
 seed.
 
+**Analytic Jacobian.** A joint solve hands scipy's `hybr` the Jacobian of its residuals
+(`_solver._Jacobian`) instead of letting it difference them, which cost one residual
+evaluation per unknown each time hybr rebuilt the Jacobian. It is a chain rule through
+the values a batch reads off the market, `dr/dy = (dr/dv)(dv/dy)`:
+
+- `dr/dv` is analytic (`ValuationBatch.gradient`): each MTM is a sum of products of the
+  values (`flow * fx * df`, `residual_0 * df` for a par head, `a * (s_t - strike) * df *
+  spot` for an NDF) with constant coefficients. A C++ batch is compiled again in Python
+  for it (`compile_all=True`).
+- Every value is a product of curve dfs to the powers +-1 (collateral `D * I / D`, FX
+  `anchor * D_b / D_q` from the known-until date, `1 + accrual = I(s) / I(e)`), so `dv/dy`
+  is a signed sum of `d log df / dy` of the curves solved. That is read off a private copy
+  of each curve, bumping one forward at a time, at the dates the batch reads. On
+  piecewise-constant/linear and spline curves `log df` is affine in the forwards, so it
+  is computed once per solve and the bump is exact up to rounding. On the monotone
+  methods it is a forward difference (1e-7) recomputed at each call.
+
+It matches central differences of the residuals to about 4e-10 relative on splines
+(1e-6 on ConvexMonotone, whose curve part is differenced). The date blocks of a
+piecewise-constant/linear sweep keep hybr's differencing: with 1 to 3 unknowns it costs
+1 to 3 evaluations, less than setting up a Jacobian.
+
+On the notebook quotes (3 warm-ups, 10 builds, 2 slowest dropped, `PYTHONHASHSEED=0`),
+a CubicSpline build goes from 165 residual evaluations to 29 plus 5 Jacobians. The
+forwards differ from the differenced solve's by at most 9e-15 (9e-11 bp), the largest
+repricing error stays below 1e-10, and Python and C++ builds stay bit-identical:
+
+| Interpolation | Backend | Differenced | Analytic | Gain |
+|---|---|---:|---:|---:|
+| CubicSpline | Python | 127.6 ± 0.8 ms | 65.9 ± 0.5 ms | 1.94x |
+| CubicSpline | C++ | 22.4 ± 0.2 ms | 18.3 ± 0.8 ms | 1.22x |
+| HermiteCubicSpline | Python | 142.9 ± 0.5 ms | 89.3 ± 0.4 ms | 1.60x |
+| HermiteCubicSpline | C++ | 24.5 ± 0.1 ms | 20.0 ± 0.3 ms | 1.22x |
+| ConvexMonotone | Python | 157.3 ± 1.0 ms | 113.3 ± 0.8 ms | 1.39x |
+| ConvexMonotone | C++ | 23.3 ± 0.2 ms | 20.0 ± 0.3 ms | 1.17x |
+
+PiecewiseConstant and PiecewiseLinear are unchanged (their sweeps converge here
+without a joint solve). On C++ most of what is left of the Jacobian's cost is
+compiling the Python plan (about 1 ms per solve).
+
 The market port takes the per-valuation Python lookups out of the solver loop (most of
 a fitted build); the dates port takes schedules, conventions, tenors, day counts and
 `date_ordinals` out of building the instruments from the quotes (most of what was
 left of a PiecewiseConstant build).
 Simplified swaps no longer matter on C++: what they saved was Python glue. What
 remains is mostly Python: building the leg and coupon objects, the solver's own loop
-(scipy `hybr` and its finite-difference Jacobian) and, on Python curves, the refits.
+(scipy `hybr`, and the finite-difference Jacobian of the sweep blocks) and, on Python
+curves, the refits.
 
 ## Not ported yet / caveats
 

@@ -105,9 +105,9 @@ def _spy_block_sizes(monkeypatch) -> list[int]:
     sizes: list[int] = []
     solve = _solver._solve_or_rollback
 
-    def spy(residual, y0, restore, what):
+    def spy(residual, y0, restore, what, jac=None):
         sizes.append(len(y0))
-        return solve(residual, y0, restore, what)
+        return solve(residual, y0, restore, what, jac)
 
     monkeypatch.setattr(_solver, "_solve_or_rollback", spy)
     return sizes

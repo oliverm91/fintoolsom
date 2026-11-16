@@ -120,6 +120,14 @@ def test_the_solver_builds_each_curve_once_per_solve(monkeypatch, backend, metho
         solves.append(len(self.curve_slice))
 
     monkeypatch.setattr(_solver._GroupSolve, "__post_init__", counting_init)
+    # The Jacobian bumps private copies, which never reach the market.
+    private = []
+    private_curve = _solver._GroupSolve.private_curve
+    monkeypatch.setattr(
+        _solver._GroupSolve,
+        "private_curve",
+        lambda self, *a: private.append(1) or private_curve(self, *a),
+    )
     with settings.use_backend(backend, "rates"):
         build_curves(
             quote_factory.load_quotes(),
@@ -127,7 +135,7 @@ def test_the_solver_builds_each_curve_once_per_solve(monkeypatch, backend, metho
             interp_method=method,
         )
     # One construction per curve of each solve; every other iteration in place.
-    assert len(built) == sum(solves)
+    assert len(built) - len(private) == sum(solves)
     assert len(updated) > 3 * len(built)
 
 
