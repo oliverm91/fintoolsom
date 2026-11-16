@@ -41,6 +41,7 @@ dev = [
     "commitizen>=4.16.4",
     "pytest",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "ruff",
     "sqlalchemy>=2.1.8",
 ]
