@@ -44,7 +44,7 @@ or in code::
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Literal
 
@@ -116,7 +116,7 @@ def set_backend(backend: Backend, *subpackages: str) -> None:
 
 
 @contextmanager
-def use_backend(backend: Backend, *subpackages: str) -> Iterator[None]:
+def use_backend(backend: Backend, *subpackages: str) -> Generator[None, None, None]:
     """Use `backend` inside the ``with`` block, as :func:`set_backend` does."""
     previous = dict(_backends)
     set_backend(backend, *subpackages)
