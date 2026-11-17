@@ -11,6 +11,38 @@ _EXTRA_CATEGORIES: dict[str, tuple[str, ...]] = {"CL": ("bank",), "JP": ("bank",
 
 @dataclass(slots=True)
 class Calendar:
+    """Business-day calendar: weekends plus the holidays of a country.
+
+    A day is a holiday if it falls on a Saturday or Sunday, is a public holiday of
+    `country` (plus its bank holidays for CL and JP), or is one of the custom
+    holidays. Without a country only weekends and custom holidays close it.
+    Calendars of several countries can be merged with `combine` or ``+``.
+
+    Parameters
+    ----------
+    country : str, optional
+        ISO 3166-1 country code (``"CL"``, ``"US"``). None for weekends only.
+    subdiv : str, optional
+        Subdivision of `country` (``"NY"`` for ``"US"``).
+    custom_holidays : list of date, optional
+        Extra holidays on top of the country's.
+
+    Notes
+    -----
+    Use `get_calendar` or `resolve_calendar` to get the shared instance of a
+    country: building one is costly, and a holiday added to a shared calendar is
+    seen by every consumer.
+
+    Examples
+    --------
+    >>> from datetime import date
+    >>> cal = Calendar("CL")
+    >>> cal.is_holiday(date(2026, 12, 8))
+    True
+    >>> cal.add_business_days(date(2026, 12, 9), -1)
+    datetime.date(2026, 12, 7)
+    """
+
     country: str = field(default=None)
     subdiv: str = field(default=None)
     custom_holidays: list[date] = field(default_factory=list)
@@ -49,19 +81,24 @@ class Calendar:
             self._calendar.update(self.custom_holidays)
 
     def add_custom_holiday(self, custom_holiday: date):
+        """Make `custom_holiday` a holiday of this calendar."""
         self._calendar.append(custom_holiday)
 
     def add_custom_holidays(self, custom_holidays: list[date]):
+        """Make each date of `custom_holidays` a holiday of this calendar."""
         for ch in custom_holidays:
             self.add_custom_holiday(ch)
 
     def is_holiday(self, date: date) -> bool:
+        """True if `date` is a weekend day or a holiday (i.e. not a business day)."""
         return date in self._calendar or date.weekday() in self._weekend_weekdays
 
     def add_business_days(self, t: date, business_days: int) -> date:
+        """The date `business_days` business days after `t` (before if negative)."""
         return self._calendar.get_nth_working_day(t, business_days)
 
     def combine(self, other: Self) -> Self:
+        """New calendar that is closed whenever this one or `other` is."""
         combined_calendar = self._calendar + other._calendar
         return Calendar(
             custom_holidays=[
@@ -73,6 +110,7 @@ class Calendar:
         )
 
     def __add__(self, other: Self) -> Self:
+        """Same as `combine`."""
         return self.combine(other)
 
     def __repr__(self) -> str:

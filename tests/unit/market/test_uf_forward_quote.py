@@ -12,11 +12,12 @@ CLFCLP = CurrencyPair(Currency.CLF, Currency.CLP)
 @pytest.mark.parametrize(
     "quote_date, n, settlement",
     [
-        # Before the 6-Nov-2026 release: Dec-2026's release is the first unknown UF.
-        (date(2026, 11, 5), 1, date(2026, 12, 7)),  # 8-Dec is a holiday
-        # After it: the UF is known up to 9-Dec, so n=1 is the Jan-2027 release.
+        # Before the 6-Nov-2026 release the UF is known up to 9-Nov: n=1 is 9-Dec.
+        (date(2026, 11, 5), 1, date(2026, 12, 9)),  # business day, not adjusted
+        # On the release day the UF is known up to 9-Dec: n=1 is 9-Jan-2027 (Sat).
+        (date(2026, 11, 6), 1, date(2027, 1, 8)),
         (date(2026, 11, 13), 1, date(2027, 1, 8)),
-        (date(2026, 11, 13), 12, date(2027, 12, 7)),
+        (date(2026, 11, 13), 12, date(2027, 12, 9)),
         (date(2026, 11, 13), 24, date(2028, 12, 7)),
     ],
 )

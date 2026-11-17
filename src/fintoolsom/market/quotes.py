@@ -15,8 +15,9 @@ from .index import InterestIndex
 from ..dates import (
     AdjustmentDateConventionBase,
     ModifiedFollowingConvention,
+    PrecedingConvention,
     get_calendar,
-    next_cpi_publication_date,
+    last_known_uf_date,
 )
 from ..dates.term import Term
 
@@ -374,11 +375,11 @@ class ForwardPointsQuote(_ForwardQuote):
 class UFForward(InstrumentQuote):
     """UF forward: a ``CLF/CLP`` NDF quoted as the outright UF level.
 
-    It settles on a CPI release, not on a tenor: the fixing and payment date
-    (payment lag 0) is
-    ``next_cpi_publication_date(quote_date + relativedelta(months=n))``, with
-    ``n = next_n_cpi_settlements``. ``n = 1`` is the first release whose UF is not
-    yet known on `quote_date`.
+    It settles on a UF period end, not on a tenor: the fixing and payment date
+    (payment lag 0) is the 9th of the month ``n`` months after
+    ``last_known_uf_date(quote_date)``, with ``n = next_n_cpi_settlements``,
+    moved to the preceding business day (``CL`` calendar) if it is not one.
+    ``n = 1`` is the first period whose UF is not yet known on `quote_date`.
 
     Parameters
     ----------
@@ -414,10 +415,11 @@ class UFForward(InstrumentQuote):
 
     @property
     def settlement_date(self) -> date:
-        """Fixing and payment date: the CPI release after ``quote_date + n`` months."""
-        return next_cpi_publication_date(
-            self.quote_date + relativedelta(months=self.next_n_cpi_settlements)
+        """Fixing and payment date: last known UF date plus ``n`` months, preceding."""
+        ninth = last_known_uf_date(self.quote_date) + relativedelta(
+            months=self.next_n_cpi_settlements
         )
+        return PrecedingConvention("CL").adjust(ninth)
 
     def get_instrument(self) -> NDF:
         from ..derivatives.forwards.forwards import NDF
