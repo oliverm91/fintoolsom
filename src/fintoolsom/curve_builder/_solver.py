@@ -28,7 +28,7 @@ from ._keys import CurveKey, _built, _curve_id
 
 # A date-by-date bootstrap is accepted when every instrument reprices to this
 # (report currency); otherwise the group falls back to one joint solve.
-_SWEEP_TOL = 1e-6
+_SWEEP_TOL = 1e-4
 # Interpolations where a pillar only moves the curve between its neighbours.
 _LOCAL_METHODS = frozenset(
     {
@@ -509,13 +509,14 @@ def _solve_unknowns(
     what: str,
     *,
     date_by_date: bool = True,
+    sweep_tol: float = _SWEEP_TOL,
 ) -> np.ndarray:
     """Bootstrap the free pillars date by date, falling back to one joint solve.
 
     With local interpolation (piecewise-constant or linear forwards) an instrument depends only on pillars up to its own last free pillar, so
     ascending dates give small square blocks, one per pillar date. The joint
     solve runs, warm-started from the sweep, when the interpolation is not local,
-    a block is not square, or the sweep leaves a residual above ``_SWEEP_TOL``.
+    a block is not square, or the sweep leaves a residual above `sweep_tol`.
 
     Parameters
     ----------
@@ -531,6 +532,8 @@ def _solve_unknowns(
         Description used in error messages.
     date_by_date : bool, optional
         False always runs the joint solve.
+    sweep_tol : float, optional
+        Largest residual a sweep may leave before the joint solve runs from it.
 
     Returns
     -------
@@ -602,7 +605,7 @@ def _solve_unknowns(
                     y[pos] = _solve_or_rollback(
                         block_residual, list(x0), solve.restore, what
                     ).x
-            if max(abs(v) for v in values(instruments, y)) <= _SWEEP_TOL:
+            if max(abs(v) for v in values(instruments, y)) <= sweep_tol:
                 return y
     jac = jacobian(instruments)
     return _solve_or_rollback(

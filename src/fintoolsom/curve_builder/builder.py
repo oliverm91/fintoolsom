@@ -15,6 +15,7 @@ pillar still reprices and warns about the quotes it ditched (no pillar of their 
 from __future__ import annotations
 
 import dataclasses
+import math
 import warnings
 from collections import defaultdict
 from datetime import date
@@ -32,14 +33,17 @@ from ._errors import InsufficientQuotesError, RedundantQuoteWarning, RepricingEr
 from ._keys import CurveKey, _built, _curve_id, _instrument_of
 from ._plan import _Planner
 from ._seeds import _Seeder
-from ._solver import _LOCAL_METHODS, _GroupSolve, _solve_unknowns
+from ._solver import _LOCAL_METHODS, _SWEEP_TOL, _GroupSolve, _solve_unknowns
 
-# Curve-solve residuals are valued in one reporting currency; a par/MTM==0 residual
-# is zero in any currency, so the choice is arbitrary — CLP by convention.
+# Defaults of build_curves. Curve-solve residuals are valued in one reporting
+# currency; a par/MTM==0 residual is zero in any currency, so the choice is arbitrary:
+# CLP by convention.
 _REPORT_CURRENCY = Currency(CurrencyName.CLP)
 # After the whole build every quote that pinned a pillar must reprice to this (report
 # currency): a larger residual means a later group moved a curve it was fitted on.
-_REPRICE_TOL = 1e-4
+_REPRICE_TOL = 1e-2
+# ... and the |MTM| of the fitted quotes of each solve group must sum to at most this.
+_GROUP_TOL = 1.0
 
 
 class _CurveBuilder:
@@ -60,11 +64,13 @@ class _CurveBuilder:
     interp_method : InterpolationMethod, optional
         Interpolation of the discount and index curves it creates (``PiecewiseConstant``
         by default).
+    report_currency, reprice_tol, sweep_tol, group_tol : optional
+        As in :func:`build_curves`.
 
     Raises
     ------
     ValueError
-        If the market has no `risk_free_index`.
+        If the market has no `risk_free_index`, or a tolerance is not positive.
     """
 
     # Bootstrap each group date by date when its interpolation allows it; False always
@@ -76,16 +82,35 @@ class _CurveBuilder:
         quotes: list,
         market: Market,
         interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
+        *,
+        report_currency: Currency = _REPORT_CURRENCY,
+        reprice_tol: float = _REPRICE_TOL,
+        sweep_tol: float = _SWEEP_TOL,
+        group_tol: float = _GROUP_TOL,
     ):
         if market.risk_free_index is None:
             raise ValueError("Market has no risk_free_index; curve building needs one.")
+        for name, tol in (
+            ("reprice_tol", reprice_tol),
+            ("sweep_tol", sweep_tol),
+            ("group_tol", group_tol),
+        ):
+            if not (isinstance(tol, (int, float)) and math.isfinite(tol) and tol > 0):
+                raise ValueError(
+                    f"{name} must be a positive finite number; got {tol!r}."
+                )
         self.market = market
         self.t = market.t
         self.interp_method = interp_method
+        self.report_currency = report_currency
+        self.reprice_tol = float(reprice_tol)
+        self.sweep_tol = float(sweep_tol)
+        self.group_tol = float(group_tol)
         self.seeder = _Seeder(market, market.risk_free_index)
         self.plan = _Planner(quotes, market, self.seeder)
         self._pinning: list = []  # (instrument, report currency) of every quote that owned a pillar
         self._pinned_dates: list[date] = []  # the pillar each of `_pinning` owns
+        self._pinned_groups: list = []  # the group each of `_pinning` was solved in
         self._fixed: dict = {}  # curve -> its fixed part before this build's first pillar
         self._free_dates: dict[CurveKey, list[date]] = defaultdict(list)
 
@@ -98,7 +123,8 @@ class _CurveBuilder:
             If the remaining groups can neither be solved nor merged: they are
             under-determined or read a curve no quote builds.
         RepricingError
-            If a quote that pinned a pillar no longer reprices at the end.
+            If a quote that pinned a pillar no longer reprices at the end, or the
+            fitted quotes of a group add up to more than group_tol.
 
         Warns
         -----
@@ -159,7 +185,7 @@ class _CurveBuilder:
         self,
         group,
         instruments,
-        report_currency: Currency = _REPORT_CURRENCY,
+        report_currency: Currency | None = None,
         candidates: list | None = None,
     ) -> str:
         """Solve the free pillars of `group` so the instruments owning them reprice.
@@ -171,7 +197,7 @@ class _CurveBuilder:
         instruments : list
             Instruments of the group.
         report_currency : Currency, optional
-            Currency the residuals are valued in.
+            Currency the residuals are valued in; the build's by default.
         candidates : list of tuple, optional
             Candidate curves of each instrument; default: every curve of `group`.
 
@@ -182,6 +208,8 @@ class _CurveBuilder:
             curve it reads does not exist or the system is not square.
         """
         plan = self.plan
+        if report_currency is None:
+            report_currency = self.report_currency
         if candidates is None:  # a single-curve solve: every instrument pins that curve
             candidates = [tuple(group)] * len(instruments)
         owners = plan.assign_pillars(instruments, candidates)
@@ -221,10 +249,12 @@ class _CurveBuilder:
             report_currency,
             f"Curve solve for group {set(free_dates)}",
             date_by_date=self.date_by_date,
+            sweep_tol=self.sweep_tol,
         )
         solve.apply(y)  # root's last f-eval is not guaranteed to be at the solution.
         self._pinning += [(i, report_currency) for i in residual_instruments]
         self._pinned_dates += pillar_dates
+        self._pinned_groups += [group] * len(residual_instruments)
         for curve, dates in free_dates.items():
             self._fixed.setdefault(curve, fixed_pillars[curve])
             self._free_dates[curve] += dates
@@ -260,24 +290,37 @@ class _CurveBuilder:
             solve,
             [instrument for instrument, _ in self._pinning],
             self._pinned_dates,
-            _REPORT_CURRENCY,
+            self.report_currency,
             "Joint solve of the cubic-spline curves",
             date_by_date=False,
         )
         solve.apply(y)
 
     def _check_repricing(self) -> None:
-        """Raise if a quote that pinned a pillar was moved off par by a later group."""
-        off = [
-            (abs(v), i)
-            for i, ccy in self._pinning
-            if abs(v := Calculator.valuate(i, self.market, ccy)) > _REPRICE_TOL
+        """Raise if a quote that pinned a pillar was moved off par by a later group, or
+        the fitted quotes of a group add up to more than `group_tol`."""
+        mtms = [
+            abs(Calculator.valuate(i, self.market, ccy)) for i, ccy in self._pinning
         ]
+        off = [(v, i) for v, (i, _) in zip(mtms, self._pinning) if v > self.reprice_tol]
         if off:
             worst, instr = max(off, key=lambda p: p[0])
             raise RepricingError(
                 f"{len(off)} quote(s) no longer reprice after the build (worst |MTM| = {worst:.3g} "
                 f"on a {type(instr).__name__}): a curve they were fitted on was changed afterwards."
+            )
+        totals: dict = defaultdict(float)
+        for v, group in zip(mtms, self._pinned_groups):
+            totals[group] += v
+        over = {g: total for g, total in totals.items() if total > self.group_tol}
+        if over:
+            group, total = max(over.items(), key=lambda gt: gt[1])
+            rfi = self.market.risk_free_index
+            curves = ", ".join(sorted(_curve_id(c, rfi) for c in group))
+            raise RepricingError(
+                f"{len(over)} group(s) of quotes do not reprice after the build: the "
+                f"fitted quotes on {{{curves}}} sum to |MTM| = {total:.3g} "
+                f"{self.report_currency}, above group_tol = {self.group_tol:g}."
             )
 
     def ditched_quotes(self) -> list[tuple]:
@@ -286,18 +329,19 @@ class _CurveBuilder:
         See :class:`RedundantQuoteWarning` for the fields.
         """
         pinning = {id(i) for i, _ in self._pinning}
+        ccy = self.report_currency
         out = []
         for quote, instr in self.plan.instrument.items():
             if id(instr) in pinning:
                 continue
-            mtm = Calculator.valuate(instr, self.market, _REPORT_CURRENCY)
+            mtm = Calculator.valuate(instr, self.market, ccy)
             if isinstance(instr, Forward):  # no quoted rate: MTM against its notional
-                notional = _forward_notional(instr, self.market, _REPORT_CURRENCY)
+                notional = _forward_notional(instr, self.market, ccy)
                 out.append(
                     (quote, mtm, mtm / notional if notional else float("nan"), None)
                 )
             else:  # a swap: MTM in bp of its quoted rate
-                dv01 = _quote_dv01(quote, mtm, self.market)
+                dv01 = _quote_dv01(quote, mtm, self.market, ccy)
                 out.append((quote, mtm, None, mtm / abs(dv01) if dv01 else None))
         return out
 
@@ -307,7 +351,7 @@ class _CurveBuilder:
         if not ditched:
             return
         lines = [
-            f"  {_describe(q, self.plan.instrument[q], self.market)}: MTM {mtm:,.4f} {_REPORT_CURRENCY}"
+            f"  {_describe(q, self.plan.instrument[q], self.market)}: MTM {mtm:,.4f} {self.report_currency}"
             + (f" = {pct:.4%} of notional" if pct is not None else "")
             + (f" = {bp:+.4f} bp" if bp is not None else "")
             for q, mtm, pct, bp in ditched
@@ -348,8 +392,9 @@ def _forward_notional(forward: Forward, market: Market, currency: Currency) -> f
     )
 
 
-def _quote_dv01(quote, mtm: float, market: Market) -> float | None:
-    """MTM change, in the report currency, for +1bp on the quote's quoted rate.
+def _quote_dv01(quote, mtm: float, market: Market, currency: Currency) -> float | None:
+    """MTM change, in `currency` (the one `mtm` is in), for +1bp on the quote's
+    quoted rate.
 
     The fixed rate of a fixed-float swap quote, the receive-leg spread of a
     float-float one; None for a quote that is not a swap (an FX forward).
@@ -374,10 +419,7 @@ def _quote_dv01(quote, mtm: float, market: Market) -> float | None:
         )
     else:
         return None
-    return (
-        Calculator.valuate(_instrument_of(bumped, market), market, _REPORT_CURRENCY)
-        - mtm
-    )
+    return Calculator.valuate(_instrument_of(bumped, market), market, currency) - mtm
 
 
 def _describe(quote, instrument, market: Market) -> str:
@@ -405,6 +447,10 @@ def build_curves(
     market: Market,
     *,
     interp_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
+    report_currency: Currency = _REPORT_CURRENCY,
+    reprice_tol: float = _REPRICE_TOL,
+    sweep_tol: float = _SWEEP_TOL,
+    group_tol: float = _GROUP_TOL,
 ) -> None:
     """Bootstrap the curves that reprice `quotes` into `market`, in place.
 
@@ -424,16 +470,38 @@ def build_curves(
         A curve already in the market keeps its own method when the build extends it.
         With a ``CubicSpline`` curve every pillar is finally solved jointly, since
         a spline pillar moves the whole curve.
+    report_currency : Currency, optional
+        Currency the quotes' MTMs are valued in: the solve residuals, the repricing
+        check and the MTMs of :class:`RedundantQuoteWarning` (CLP by default). The
+        market needs the FX to it from every currency the quotes pay in.
+    reprice_tol : float, optional
+        Largest |MTM|, in `report_currency`, a quote that pinned a pillar may have
+        once every curve is built (``1e-2`` by default); above it,
+        :class:`RepricingError`. Absolute, so it depends on the quotes' notionals and
+        on the currency.
+    sweep_tol : float, optional
+        Largest |MTM|, in `report_currency`, a date-by-date sweep of a group with
+        piecewise-constant or piecewise-linear curves may leave on its quotes
+        (``1e-4`` by default); above it the group is solved again jointly, warm-started
+        from the sweep. It does not loosen the solves themselves. Keep it below
+        `reprice_tol`: a sweep accepted above it fails the repricing check.
+    group_tol : float, optional
+        Largest sum of |MTM|, in `report_currency`, of the quotes that pinned a pillar
+        in one solve group, once every curve is built (``1`` by default); above it,
+        :class:`RepricingError`. Quotes that owned no pillar are not counted: they
+        are only reported, in :class:`RedundantQuoteWarning`.
 
     Raises
     ------
     ValueError
         If no quote has a quote date, the dates differ, or they differ from
-        ``market.t``.
+        ``market.t``; or `reprice_tol`, `sweep_tol` or `group_tol` is not a positive
+        finite number.
     InsufficientQuotesError
         If the quotes under-determine a curve.
     RepricingError
-        If a quote that pinned a pillar does not reprice once every curve is built.
+        If a quote that pinned a pillar does not reprice once every curve is built
+        (`reprice_tol`), or the quotes of a solve group do not together (`group_tol`).
 
     Warns
     -----
@@ -463,4 +531,8 @@ def build_curves(
         quotes,
         market,
         interp_method=interp_method,
+        report_currency=report_currency,
+        reprice_tol=reprice_tol,
+        sweep_tol=sweep_tol,
+        group_tol=group_tol,
     ).build()

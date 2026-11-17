@@ -5,6 +5,7 @@ that pins a pillar reprices to zero MTM.
 
 ```python
 from fintoolsom.curve_builder import build_curves
+from fintoolsom.market import Currency
 from fintoolsom.rates import InterpolationMethod
 
 build_curves(quotes, market)  # fills market.curves in place
@@ -13,8 +14,22 @@ build_curves(
     quotes,
     market,
     interp_method=InterpolationMethod.PiecewiseConstant,
+    report_currency=Currency.CLP,  # the defaults
+    reprice_tol=1e-2,
+    sweep_tol=1e-4,
+    group_tol=1.0,
 )
 ```
+
+## Options
+
+| Keyword | Default | Meaning |
+|---|---|---|
+| `interp_method` | `PiecewiseConstant` | Interpolation of the curves the build creates |
+| `report_currency` | `CLP` | Currency every quote's MTM is valued in: the solve residuals, the repricing check and the MTMs of `RedundantQuoteWarning`. The market needs the FX to it. The curves do not depend on it beyond rounding |
+| `reprice_tol` | `1e-2` | Largest \|MTM\|, in `report_currency`, a fitted quote may have after the whole build; above it, `RepricingError`. Absolute, so it depends on the notionals and the currency |
+| `sweep_tol` | `1e-4` | Largest \|MTM\| a date-by-date sweep may leave before its group is solved again jointly. Keep it below `reprice_tol` |
+| `group_tol` | `1` | Largest sum of \|MTM\|, in `report_currency`, of the fitted quotes of one solve group after the whole build; above it, `RepricingError`. Quotes that owned no pillar are not counted |
 
 ## What it builds
 
@@ -106,15 +121,18 @@ The build is split in private modules, driven by `builder._CurveBuilder`.
    reads. Groups waiting on each other are merged into one joint solve.
 4. **Solving.** The unknowns are log discount factors on discount curves and segment
    forwards on index curves. With local interpolation a group is bootstrapped date
-   by date. A spline curve is solved jointly with `scipy.optimize.root`, and with a
-   `CubicSpline` every pillar is re-solved jointly at the end.
+   by date, each date's block by Newton steps (falling back to `hybr`), and solved
+   again jointly if the sweep leaves a residual above `sweep_tol`. A spline curve is
+   solved jointly with `scipy.optimize.root` given the analytic Jacobian, and with a
+   `CubicSpline` every pillar is re-solved jointly at the end. The residuals are
+   valued through a `ValuationBatch` compiled once per instrument list.
 
 ## Errors and warnings
 
 | Name | When |
 |---|---|
 | `InsufficientQuotesError` | A group has more free pillars than quotes, reads a curve nobody builds, or a term index has no rate history |
-| `RepricingError` | A pinning quote no longer reprices after the whole build |
+| `RepricingError` | A pinning quote no longer reprices after the whole build (`reprice_tol`), or the pinning quotes of a group add up past `group_tol` |
 | `RedundantQuoteWarning` | Quotes owned no pillar. `.ditched` holds `(quote, mtm, mtm_pct, mtm_bp)` |
 
 ## Notes
