@@ -47,6 +47,71 @@ def test_calendars_add_with_plus():
     )
 
 
+# ── Combining country calendars ─────────────────────────────────────────────
+
+US_INDEPENDENCE = date(2024, 7, 4)  # Thursday
+CL_FIESTAS = [date(2024, 9, 18), date(2024, 9, 19), date(2024, 9, 20)]  # Wed-Fri
+CL_BANK_HOLIDAY = date(2024, 12, 31)  # Tuesday: the "bank" category of CL
+
+
+def test_combine_merges_country_calendars_either_way():
+    us, cl = Calendar(country="US"), Calendar(country="CL")
+    for combined in (us.combine(cl), cl.combine(us), us + cl):
+        for d in (US_INDEPENDENCE, *CL_FIESTAS, CL_BANK_HOLIDAY):
+            assert combined.is_holiday(d), d
+        assert not combined.is_holiday(date(2024, 3, 4))  # an ordinary Monday
+        assert combined.is_holiday(date(2024, 3, 2))  # Saturday
+
+
+def test_combine_covers_years_neither_calendar_has_loaded_yet():
+    combined = Calendar(country="US") + Calendar(country="CL")
+    assert combined.is_holiday(date(2040, 7, 4))
+    assert combined.is_holiday(date(2040, 9, 18))
+    assert combined.is_holiday(date(2040, 12, 31))  # CL bank holiday
+
+
+def test_combine_keeps_a_subdivision():
+    combined = Calendar(country="US", subdiv="NY") + Calendar(country="CL")
+    assert combined.is_holiday(date(2024, 2, 12))  # Lincoln's Birthday, NY only
+    assert not (Calendar(country="US") + Calendar(country="CL")).is_holiday(
+        date(2024, 2, 12)
+    )
+
+
+def test_business_days_on_a_combined_calendar_skip_both_calendars_holidays():
+    us, cl = Calendar(country="US"), Calendar(country="CL")
+    combined = us + cl
+    assert combined.add_business_days(date(2024, 7, 3), 1) == date(2024, 7, 5)
+    assert combined.add_business_days(date(2024, 7, 5), -1) == date(2024, 7, 3)
+    # Fiestas Patrias then the weekend: Tuesday 17 -> Monday 23.
+    assert combined.add_business_days(date(2024, 9, 17), 1) == date(2024, 9, 23)
+    assert us.add_business_days(date(2024, 9, 17), 1) == date(2024, 9, 18)
+    assert cl.add_business_days(date(2024, 7, 3), 1) == date(2024, 7, 4)
+
+
+def test_combine_chains_and_takes_a_weekends_only_calendar():
+    custom = date(2024, 3, 8)  # Friday
+    combined = (
+        Calendar(country="US")
+        + Calendar(country="CL")
+        + Calendar(custom_holidays=[custom])
+    )
+    assert all(combined.is_holiday(d) for d in (US_INDEPENDENCE, CL_FIESTAS[0], custom))
+    weekends_only = Calendar() + Calendar(country="US")
+    assert weekends_only.is_holiday(US_INDEPENDENCE)
+    assert not (Calendar() + Calendar()).is_holiday(date(2024, 3, 4))
+
+
+def test_combine_leaves_its_calendars_unchanged():
+    us, cl = Calendar(country="US"), Calendar(country="CL")
+    combined = us + cl
+    assert not us.is_holiday(CL_FIESTAS[0]) and not cl.is_holiday(US_INDEPENDENCE)
+    extra = date(2024, 3, 5)  # an ordinary Tuesday
+    combined.add_custom_holiday(extra)
+    assert combined.is_holiday(extra)
+    assert not us.is_holiday(extra) and not cl.is_holiday(extra)
+
+
 # ── Shared per-country calendars ────────────────────────────────────────────
 
 
@@ -106,3 +171,19 @@ def test_repr_is_short():
     cal = Calendar(country="CL", subdiv=None, custom_holidays=[date(2025, 1, 2)])
     assert repr(cal) == "Calendar(CL, 1 custom)"
     assert str(cal) == repr(cal)
+    assert repr(Calendar(country="US", subdiv="NY")) == "Calendar(US-NY)"
+
+
+def test_a_combined_calendar_repr_names_every_calendar_in_order():
+    cl, us = Calendar(country="CL"), Calendar(country="US")
+    assert repr(cl + us) == "Calendar(CL + US)"
+    assert repr(us + cl) == "Calendar(US + CL)"
+    ny = Calendar(country="US", subdiv="NY")
+    assert repr(cl + ny + Calendar(country="JP")) == "Calendar(CL + US-NY + JP)"
+    assert repr(cl + us + cl) == "Calendar(CL + US)"  # each once
+    assert repr(cl + Calendar()) == "Calendar(CL)"  # weekends add no label
+    assert repr(Calendar() + Calendar()) == "Calendar(weekends only)"
+    custom = Calendar(custom_holidays=[date(2025, 1, 2), date(2025, 1, 3)])
+    assert repr(cl + custom) == "Calendar(CL, 2 custom)"
+    assert (cl + us)._countries == ["CL", "US"]
+    assert cl._countries == ["CL"] and us._countries == ["US"]  # inputs unchanged

@@ -16,11 +16,18 @@ class Calendar:
     custom_holidays: list[date] = field(default_factory=list)
     _calendar: HolidayBase = field(default=None)
     _extra_categories: tuple = field(default_factory=tuple)
+    # The calendars it holds, as ISO 3166-2 labels ("CL", "US-NY"); a combined calendar
+    # holds every input's, in order. Only for the repr.
+    _countries: list[str] = field(default_factory=list)
 
     _weekend_weekdays: set[int] = field(init=False, default_factory=set)
 
     def __post_init__(self):
         self._weekend_weekdays = {5, 6}
+        if not self._countries and self.country is not None:
+            self._countries = [
+                self.country if not self.subdiv else f"{self.country}-{self.subdiv}"
+            ]
 
         if self._calendar is None:
             if self.custom_holidays is None:
@@ -56,16 +63,21 @@ class Calendar:
 
     def combine(self, other: Self) -> Self:
         combined_calendar = self._calendar + other._calendar
-        return Calendar(_calendar=combined_calendar)
+        return Calendar(
+            custom_holidays=[
+                *(self.custom_holidays or ()),
+                *(other.custom_holidays or ()),
+            ],
+            _calendar=combined_calendar,
+            _countries=list(dict.fromkeys([*self._countries, *other._countries])),
+        )
 
     def __add__(self, other: Self) -> Self:
         return self.combine(other)
 
     def __repr__(self) -> str:
         # The default dataclass repr would list every holiday of every loaded year.
-        parts = [self.country if self.country is not None else "weekends only"]
-        if self.subdiv:
-            parts.append(f"subdiv={self.subdiv}")
+        parts = [" + ".join(self._countries) or "weekends only"]
         if self.custom_holidays:
             parts.append(f"{len(self.custom_holidays)} custom")
         return f"Calendar({', '.join(parts)})"

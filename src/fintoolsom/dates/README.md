@@ -7,7 +7,7 @@ arithmetic: nothing here reads market data.
 
 | Module | Contents |
 |---|---|
-| `calendars.py` | `Calendar` (country holidays from `holidays`, plus custom ones), `get_calendar(country)` |
+| `calendars.py` | `Calendar` (country holidays from `holidays`, plus custom ones; `a + b` combines two), `get_calendar(country)` |
 | `holidays.py` | Holiday rules: `MonthDayRule`, `OrdinalWeekWeekdayRule`, `LastWeekWeekdayRule`, `FridayEasterRule`, `MondayEasterRule`, `ConsecutiveHolidaySandwichRule` |
 | `adjustments.py` | `FollowingConvention`, `ModifiedFollowingConvention`, `PrecedingConvention`, `ModifiedPrecedingConvention` |
 | `date_counts.py` | Day counts used by `Rate`: `ActualDayCountConvention`, `Days30A/U/E/EISDADayCountConvention` |
@@ -28,6 +28,9 @@ cl = get_calendar("CL")
 cl.is_holiday(date(2024, 9, 18))             # True: Independence Day
 cl.add_business_days(date(2024, 9, 17), 1)   # 2024-09-23 (18-20 are holidays, then a weekend)
 
+us_cl = get_calendar("US") + get_calendar("CL")  # holidays of both: Calendar(US + CL)
+us_cl.add_business_days(date(2024, 7, 3), 1)     # 2024-07-05 (US Independence Day)
+
 mf = ModifiedFollowingConvention("CL")       # a Calendar, a country code, or None (weekends only)
 Term(6, TermUnit.M, mf).advance(date(2024, 3, 29))
 
@@ -42,6 +45,13 @@ ScheduleGenerator().generate_schedule(date(2024, 1, 15), "2Y", "6M", mf)  # coup
   returns the same object afterwards, so indexes, conventions and legs share it.
   A custom holiday added to it is seen everywhere; build a `Calendar(...)` of
   your own to keep one private.
+- **Combined calendars.** `a.combine(b)` (or `a + b`) is a new calendar holding the
+  holidays of both, subdivisions included, for every year; its repr names them in
+  order (`Calendar(CL + US-NY)`). It is a snapshot: a holiday added to `a` or `b`
+  afterwards, shared calendars included, does not reach it, and one added to it
+  does not reach them.
+- **Business days.** `add_business_days(t, n)` steps one day at a time, about 1 µs
+  per business day: cheap for settlement lags, about 0.3 ms for a year (`n = 250`).
 - **Two day-count families.** `date_counts` classes are used as classes (static
   methods, passed to `RateConvention`); `time_fractions` are instances, held by
   swap legs and coupons.
