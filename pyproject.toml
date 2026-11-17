@@ -41,6 +41,7 @@ dev = [
     "commitizen>=4.16.4",
     "pytest",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "ruff",
     "sqlalchemy>=2.1.8",
 ]
@@ -61,6 +62,9 @@ exclude = ["**/README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Four workers by default (pytest-xdist): about 2x faster on the full suite. Pass
+# -n 0 for a serial run (a single file, a debugger, -x).
+addopts = "-n 4"
 # CLBonds / NelsonSiegelSvensson tests still use the legacy ZeroCouponCurve on purpose.
 filterwarnings = ["ignore:ZeroCouponCurve is legacy:DeprecationWarning"]
 
