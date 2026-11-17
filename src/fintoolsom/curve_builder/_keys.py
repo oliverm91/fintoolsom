@@ -2,7 +2,7 @@
 
 Pure functions of a quote or instrument (no solving): curve keys
 (:func:`_curves_needed`), the date an instrument pins on a curve
-(:func:`_get_maturity`), its last read date (:func:`_last_date`) and the curves it
+(:func:`_get_maturity`), its last read date (:func:`_maturities`) and the curves it
 may take its one pillar on (:func:`_primary_candidates`).
 """
 
@@ -202,45 +202,49 @@ def _get_maturity(
     TypeError
         For an unsupported instrument type.
     """
-    candidates: set[date] = set()
+    return _maturities(instrument, risk_free_index)[0].get(curve_key)
+
+
+def _maturities(instrument, risk_free_index: Index) -> tuple[dict, date]:
+    """Pillar `instrument` pins on each curve it touches, and its last read date.
+
+    The first is ``{curve key: _get_maturity(curve key, ...)}`` over the curves it
+    touches; the last date is the last one it reads any curve on (payments, accrual
+    ends, fixings). The planner computes both once per instrument and build.
+
+    Raises
+    ------
+    TypeError
+        For an unsupported instrument type.
+    """
+    pinned: dict = {}
+
+    def add(key, d: date) -> None:
+        if key not in pinned or d > pinned[key]:
+            pinned[key] = d
+
     if isinstance(instrument, Swap):
+        last: list[date] = []
         for leg in (instrument.receive_leg, instrument.pay_leg):
             pay_ccy = _settlement_currency(instrument, leg)
-            if _funding_key(risk_free_index, pay_ccy) == curve_key:
-                candidates.add(max(leg.payment_dates))
-            if (
-                pay_ccy != leg.currency
-                and _funding_key(risk_free_index, leg.currency) == curve_key
-            ):
-                candidates.add(max(leg.fx_fixing_dates))
-            if isinstance(leg, FloatingLeg) and curve_key == leg.index:
-                candidates.add(max(leg.end_dates))
-    elif isinstance(instrument, Forward):
-        pair = instrument.currency_pair
-        for currency in (pair.base_currency, pair.quote_currency):
-            if _funding_key(risk_free_index, currency) == curve_key:
-                candidates.add(
-                    instrument.fixing_date
-                    if isinstance(instrument, NDF)
-                    else instrument.payment_date
+            add(_funding_key(risk_free_index, pay_ccy), pay := max(leg.payment_dates))
+            if pay_ccy != leg.currency:
+                add(
+                    _funding_key(risk_free_index, leg.currency),
+                    max(leg.fx_fixing_dates),
                 )
-    else:
-        raise TypeError(
-            f"_get_maturity only supports Swap and Forward instruments, got {type(instrument).__name__}."
-        )
-    return max(candidates) if candidates else None
-
-
-def _last_date(instrument) -> date:
-    """Last date `instrument` reads any curve on (payments, accrual ends, fixings)."""
+            last.append(pay)
+            if isinstance(leg, FloatingLeg):
+                add(leg.index, end := max(leg.end_dates))
+                last.append(end)
+        return pinned, max(last)
     if isinstance(instrument, Forward):
-        return max(
-            instrument.payment_date,
-            getattr(instrument, "fixing_date", instrument.payment_date),
-        )
-    dates = []
-    for leg in (instrument.receive_leg, instrument.pay_leg):
-        dates += list(leg.payment_dates)
-        if isinstance(leg, FloatingLeg):
-            dates += list(leg.end_dates)
-    return max(dates)
+        pair = instrument.currency_pair
+        is_ndf = isinstance(instrument, NDF)
+        d = instrument.fixing_date if is_ndf else instrument.payment_date
+        for currency in (pair.base_currency, pair.quote_currency):
+            add(_funding_key(risk_free_index, currency), d)
+        return pinned, max(instrument.payment_date, d)
+    raise TypeError(
+        f"_get_maturity only supports Swap and Forward instruments, got {type(instrument).__name__}."
+    )

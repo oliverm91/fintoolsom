@@ -9,17 +9,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from ..forwards.forwards import NDF, Forward
 from ..options.options import Option
 from ..swaps.simplified import NonStartedSimplifiedSwap, SimplifiedSwap
 from ..swaps.swaps import Swap
 from . import _forwards, _fx, _options, _simplified_swap_pv, _swap_pv, _swap_risk
+from ._batch import ValuationBatch
 
 if TYPE_CHECKING:
     from ...market import Market
     from ...market.currencies import Currency
 
-__all__ = ["Calculator"]
+__all__ = ["Calculator", "ValuationBatch"]
 
 
 class Calculator:
@@ -119,3 +122,27 @@ class Calculator:
         raise NotImplementedError(
             f"No valuation routing implemented for instrument type {type(instrument).__name__}."
         )
+
+    @staticmethod
+    def valuate_many(instruments, market: Market, currency: Currency) -> np.ndarray:
+        """Mark-to-market of each of `instruments`, the curves read once per source.
+
+        The values of :meth:`valuate` on each instrument, to the bit. To value the same
+        instruments again as the curves move (a solver), compile them once with
+        :class:`ValuationBatch` and call its ``values``.
+
+        Parameters
+        ----------
+        instruments : list
+            Instruments :meth:`valuate` supports.
+        market : Market
+            Market at the valuation date.
+        currency : Currency
+            Reporting currency.
+
+        Returns
+        -------
+        numpy.ndarray
+            One MTM per instrument, in order.
+        """
+        return ValuationBatch(instruments, market, currency).values()

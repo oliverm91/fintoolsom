@@ -92,7 +92,9 @@ class _Seeder:
         """Act/365 year fraction from the curve date to `d`."""
         return (d - self.t).days / _DAY_BASE
 
-    def seed_free_pillars(self, instruments, fixed_pillars, free_dates, flat_guess):
+    def seed_free_pillars(
+        self, instruments, fixed_pillars, free_dates, flat_guess, maturity=None
+    ):
         """Initial discount factors of the free pillars, read off the quotes.
 
         Each free pillar gets a continuously compounded zero rate implied by an
@@ -123,6 +125,9 @@ class _Seeder:
             Curve key to free pillar dates.
         flat_guess : dict
             New curve key to its flat fallback rate (annual compounding).
+        maturity : callable, optional
+            ``maturity(curve, instrument)``, the pillar it pins on that curve
+            (:func:`_keys._get_maturity` by default).
 
         Returns
         -------
@@ -130,9 +135,13 @@ class _Seeder:
             Curve key to initial dfs of its free pillars, in `free_dates` order.
         """
         implied: dict[CurveKey, dict[date, float]] = defaultdict(dict)
+        if maturity is None:
+
+            def maturity(curve, instr):
+                return _get_maturity(curve, instr, self.risk_free_index)
 
         def pinned_free_date(curve, instr) -> date | None:
-            m = _get_maturity(curve, instr, self.risk_free_index)
+            m = maturity(curve, instr)
             return (
                 m
                 if m is not None and m in free_dates[curve] and m not in implied[curve]

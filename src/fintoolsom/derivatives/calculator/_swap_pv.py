@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..swaps.legs import FixedLeg, TermRateLeg
+from ..swaps.legs import FixedLeg, FloatingLeg, TermRateLeg
 from ..swaps.swaps import LegSide
 from ...market.currencies import CurrencyPair
 
@@ -14,6 +15,16 @@ if TYPE_CHECKING:
     from ...market import Market
     from ...market.currencies import Currency
     from ..swaps.swaps import Swap
+
+
+def _sum_products(a: np.ndarray, b: np.ndarray) -> float:
+    """``sum(a * b)``, correctly rounded (:func:`math.fsum`).
+
+    PVs sum with ``math.fsum`` rather than ``np.dot``: BLAS kernels choose their own
+    summation order (and fused multiply-adds), so ``np.dot`` cannot be reproduced
+    exactly elsewhere; the correctly rounded sum is the same in the C++ backend.
+    """
+    return math.fsum((a * b).tolist())
 
 
 def _leg_flows(leg, market: Market) -> tuple[np.ndarray, np.ndarray]:
@@ -173,13 +184,69 @@ def _leg_pv(leg, collateral, market: Market) -> float:
     float
         PV in the leg currency.
     """
+    if (
+        isinstance(leg, FloatingLeg)
+        and leg._par_eligible
+        and _nothing_realised(leg, market.t.toordinal())
+        and _discounted_on_index_curve(leg, collateral, market)
+    ):
+        return _par_leg_pv(leg, market)
+    return _flows_pv(leg, collateral, market)
+
+
+def _flows_pv(leg, collateral, market: Market) -> float:
+    """PV of a leg settled in its own currency: every unpaid flow discounted."""
     future_payment, flows = _leg_flows(leg, market)
     if not future_payment.any():
         return 0.0
     dfs = market._dfs_at_ordinals(
         leg.currency, leg._payment_ordinals[future_payment], collateral=collateral
     )
-    return float(np.dot(flows, dfs))
+    return _sum_products(flows, dfs)
+
+
+def _nothing_realised(leg, t: int) -> bool:
+    """No coupon of the floating `leg` has started accruing (overnight) or fixed
+    (term rate) by the ordinal `t`: every flow is projected."""
+    first = (
+        leg._fixing_ordinals if isinstance(leg, TermRateLeg) else leg._start_ordinals
+    )
+    return first.size > 0 and first[0] > t
+
+
+def _discounted_on_index_curve(leg, collateral, market: Market) -> bool:
+    """The curve discounting the leg is the one projecting its index.
+
+    As :meth:`Market._dfs_at_ordinals` resolves it: the collateral's curve when the
+    collateral is in the leg currency, else (uncollateralised) the risk-free index's
+    curve when the risk-free index is in the leg currency. Curves are stored by index
+    name.
+    """
+    index = collateral if collateral is not None else market.risk_free_index
+    return (
+        index is not None
+        and index.currency == leg.currency
+        and index.name == leg.index.name
+    )
+
+
+def _par_leg_pv(leg, market: Market) -> float:
+    """PV of a par-eligible floating leg discounted on its index curve, before any
+    coupon is realised.
+
+    With ``df`` the index curve, coupon ``i`` pays at its end ``e_i``
+    ``residual_i * (df(s_i) / df(e_i) - 1) + spread_i + amortization_i``. Since
+    ``s_{i+1} = e_i`` and ``residual_{i+1} = residual_i - amortization_i``, the index
+    interest and amortizations discount to ``residuals[0] * df(s_0)``; only the
+    spreads need the end-date dfs.
+    """
+    curve = market.get_index_curve(leg.index)
+    pv = leg.residuals[0] * curve._dfs_at_ordinals(leg._start_ordinals[:1])[0]
+    if leg._has_spread:
+        pv += _sum_products(
+            leg.spreads_values, curve._dfs_at_ordinals(leg._end_ordinals)
+        )
+    return float(pv)
 
 
 def _leg_pv_non_deliverable(
@@ -221,7 +288,7 @@ def _leg_pv_non_deliverable(
         leg._payment_ordinals[future_payment],
         collateral=collateral,
     )
-    return float(np.sum(flows * fx * dfs))
+    return math.fsum((flows * fx * dfs).tolist())
 
 
 def get_swap_mtm(swap: Swap, market: Market, currency: Currency) -> float:
