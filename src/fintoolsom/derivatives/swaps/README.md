@@ -158,6 +158,10 @@ Keep these in mind when building coupons by hand:
   amounts.
 - **Coupons must be in schedule order.** A leg raises `ValueError` if the start or
   payment dates go backwards along `coupons`.
+- **Each coupon's dates must be consistent.** A leg raises `ValueError`, naming the
+  first offending coupon, if a coupon's start date is not before its end date, its
+  end date is after its payment date, or its FX fixing date is after its payment
+  date.
 
 ## Simplified swaps for curve building
 

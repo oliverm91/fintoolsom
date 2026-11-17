@@ -17,12 +17,21 @@ same instrument can be valued on any market, for example a bumped copy.
 | `swaps/swaps.py` | `Swap(receive_leg=, pay_leg=, collateral_index=, payment_currency=, is_deliverable=)` |
 | `swaps/simplified.py` | `SimplifiedSwap` (every leg settles in its own currency, no payment lag) and `NonStartedSimplifiedSwap` (also valued as if no coupon has started): cheaper valuation for curve building |
 | `options/` | `Call`, `Put` on an FX pair (Garman-Kohlhagen; work in progress) |
-| `calculator.py` | `Calculator`: MTM, leg PV, FX fixings, duration and DV01, option greeks |
+| `calculator/` | `Calculator`: MTM, leg PV, FX fixings, duration and DV01, option greeks; `ValuationBatch`: many MTMs compiled once |
 
 ## Valuation
 
 `Calculator.valuate(instrument, market, currency)` sends each instrument to its
 pricer and reports the result in `currency`, converted at spot.
+
+**Many instruments.** `Calculator.valuate_many(instruments, market, currency)`
+returns the same values as `valuate`, to the bit, reading each curve once. To value
+a fixed list again and again as curves move (a solver), compile it once with
+`ValuationBatch(instruments, market, currency)` from
+`fintoolsom.derivatives.calculator` and call `.values()`; `.gradient(...)` gives
+the derivatives the curve builder's Jacobian uses. Swaps and NDFs are compiled;
+other instruments are valued one by one with `valuate`. Leg PVs are summed with
+`math.fsum`, so they don't depend on the order of the flows.
 
 **Discounting.** Flows paid in currency `c` under collateral `k` (an index, or
 `None`) are discounted with `market.get_dfs(c, dates, collateral=k)`:
