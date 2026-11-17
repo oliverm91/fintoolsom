@@ -6,10 +6,17 @@
 
 ### Feat
 
+- **curve_builder**: `build_curves` takes `report_currency`, `reprice_tol`, `sweep_tol` and `group_tol` as keyword arguments.
+  - `report_currency` (CLP by default) is the currency the quotes' MTMs are valued in: the solve residuals, the repricing checks and the MTMs of `RedundantQuoteWarning`. The curves do not depend on it beyond rounding (1.3e-14 on the forwards, CLP against USD).
+  - `reprice_tol` (`1e-2`; it was a fixed `1e-4`) is the largest |MTM| a fitted quote may keep after the build before `RepricingError`.
+  - `sweep_tol` (`1e-4`; it was a fixed `1e-6`) is the largest |MTM| a date-by-date sweep may leave before its group is solved again jointly. Sweeps converge to about 1e-11 CLP on notional 100, so the new default changes no curve.
+  - `group_tol` (`1`) is new: the largest sum of |MTM| of the fitted quotes of one solve group after the build, above which `build_curves` raises `RepricingError` naming the group's curves. Quotes that owned no pillar are not counted; they are only reported in `RedundantQuoteWarning`.
+  - All three tolerances are absolute, in `report_currency`, and must be positive and finite (`ValueError` otherwise).
 - **calculator**: `Calculator.valuate_many(instruments, market, currency)` values a list of instruments at once and returns one MTM per instrument, bit-identical to `Calculator.valuate` on each, errors included. `ValuationBatch(instruments, market, currency)` compiles the list once, so `values()` can be called again as the curves move. Swaps (`Swap` itself) and NDFs are compiled: each curve lookup (a discounting, an index curve, a projection or an FX pair) is evaluated once per call on every date the batch needs. Anything else, including swaps with a coupon already running or fixed, is valued by `Calculator.valuate`. `ValuationBatch.gradient(values)` gives the derivative of each MTM with respect to the values the batch reads off the market.
 
 ### Fix
 
+- **dates**: the repr of a combined `Calendar` names its calendars in order (`Calendar(CL + US)`) instead of `Calendar(weekends only)`, and it counts the custom holidays of its inputs, which `combine` now carries in `custom_holidays`. A calendar with a subdivision shows its ISO 3166-2 code: `Calendar(US-NY)` instead of `Calendar(US, subdiv=NY)`.
 - **curve_builder**: the unknowns of a group solve are laid out in curve-id order instead of the order of a frozenset, so a build no longer depends on `PYTHONHASHSEED`. Before, two runs could take different solver paths and give forwards that differed at rounding level.
 
 ### Perf
