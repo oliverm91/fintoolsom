@@ -3,6 +3,12 @@
 :class:`_GroupSolve` maps the free pillars of a group to an unknown vector and
 rebuilds its curves from it; :func:`_solve_unknowns` bootstraps them date by date
 (square blocks, ascending) and falls back to one joint ``root``.
+
+On the C++ ``curve_builder`` backend the solve runs in ``fintoolsom._native.GroupSolver``
+when it can (:func:`_native_solver`): the same block Newton sweeps, bit for bit, and
+the joint solve by Newton steps with the analytic Jacobian instead of hybr (the same
+root, forwards within ~1e-14), with no Python per iteration. Whatever it does not
+settle comes back to the Python code below.
 """
 
 from __future__ import annotations
@@ -18,6 +24,9 @@ from scipy.optimize import root
 
 from .. import settings
 from ..derivatives.calculator import ValuationBatch
+from ..derivatives.calculator._batch import _cpp_kind
+from ..derivatives.forwards.forwards import NDF
+from ..derivatives.swaps.swaps import Swap
 from ..market.currencies import Currency
 from ..market.index import Index
 from ..market.market import Market
@@ -505,6 +514,100 @@ class _Jacobian:
         return dg
 
 
+def _native_solver(solve: _GroupSolve, instruments, report_currency: Currency):
+    """The C++ solve of `solve` (``fintoolsom._native.GroupSolver``), or None when it
+    stays in Python.
+
+    It needs the C++ ``curve_builder`` backend (and the solver switches on), every
+    residual instrument valued in one C++ market call (``market_valuate_many``), and
+    every curve solved with a C++ core and no daily grid: the curves are built here
+    (:meth:`_GroupSolve.apply` at the seeds), then the C++ solve sets the unknowns on
+    their cores in place. The Python attributes of the curves lag behind until the next
+    :meth:`_GroupSolve.apply`, which the builder runs on the solution.
+    """
+    if not (settings.is_cpp("curve_builder") and _BLOCK_NEWTON and _ANALYTIC_JACOBIAN):
+        return None
+    market = solve.market
+    kinds = [_cpp_kind(i, market) for i in instruments]
+    if not kinds or not all(kinds):
+        return None
+    solve.apply(solve.y0)
+    curves = []
+    for key, (start, stop) in solve.curve_slice.items():
+        curve = solve._owned.get(key)
+        if (
+            curve is None
+            or _built(market, key) is not curve
+            or curve._core is None
+            or curve.precalculate
+        ):
+            return None
+        curves.append(
+            (
+                curve,
+                np.asarray(solve.fixed_pillars[key].forwards, dtype=float),
+                start,
+                stop,
+                float(curve._knot_tau[0]),
+                curve._fixed_log_df_first_knot(),
+            )
+        )
+    return settings.native().GroupSolver(
+        market, report_currency, curves, list(instruments), np.array(kinds, np.int64)
+    )
+
+
+def _native_sweeps(
+    native, solve: _GroupSolve, unknowns_at, instruments_at, pillar_dates, values, what
+):
+    """The sweeps of :func:`_solve_unknowns` in C++: ``(y, converged)``, or None when
+    Python must run them (blocks that are not square, a valuation that raised).
+
+    A block the C++ Newton gives up on is solved here by hybr on the Python residuals
+    (`values`), as the Python sweep does, and the C++ sweep resumes at the next block.
+    """
+    index_at: dict[date, list[int]] = defaultdict(list)
+    for k, d in enumerate(pillar_dates):
+        index_at[d].append(k)
+    dates = sorted(unknowns_at)
+    blocks = [
+        (np.array(unknowns_at[d], dtype=np.int64), np.array(index_at[d], np.int64))
+        for d in dates
+    ]
+    if not all(len(u) == len(i) for u, i in blocks):
+        return None
+    native.set_blocks(blocks)
+    y = np.array(solve.y0, dtype=float)
+    sweep = block = 0
+    while True:
+        status, y, sweep, block = native.sweep(y, _MAX_SWEEPS, _SWEEP_TOL, sweep, block)
+        if status != 2:
+            break
+        pos, instruments = unknowns_at[dates[block]], instruments_at[dates[block]]
+
+        def block_residual(x, pos=pos, instruments=instruments):
+            y[pos] = x
+            return values(instruments, y)
+
+        y[pos] = _solve_or_rollback(block_residual, list(y[pos]), solve.restore, what).x
+        block += 1
+    if status == 3:
+        return None
+    return y, status == 0
+
+
+def _native_joint(native, solve: _GroupSolve, instruments, y):
+    """The joint solve in C++ from `y`: Newton steps with the analytic Jacobian of
+    :class:`_Jacobian`, its batch compiled in C++. None when the C++ compile does not
+    take an instrument (it takes the types :class:`ValuationBatch` differentiates) or
+    the steps stop short; hybr then runs, in Python."""
+    if not all(type(i) is Swap or type(i) is NDF for i in instruments):
+        return None
+    linear = all(m in _LINEAR_METHODS for m in solve.methods.values())
+    bump = _LINEAR_BUMP if linear else _NONLINEAR_BUMP
+    return native.joint(np.asarray(y, dtype=float), linear, bump)
+
+
 def _solve_unknowns(
     solve: _GroupSolve,
     instruments,
@@ -576,8 +679,19 @@ def _solve_unknowns(
         instruments_at[d].append(instr)
 
     y = np.array(solve.y0, dtype=float)
+    sweeps = date_by_date and solve.local
+    native = _native_solver(solve, instruments, report_currency)
+    if native is not None and sweeps:
+        swept = _native_sweeps(
+            native, solve, unknowns_at, instruments_at, pillar_dates, values, what
+        )
+        if swept is not None:
+            y, converged = swept
+            if converged:
+                return y
+            sweeps = False  # above the tolerance: the joint solve, from the sweeps
     block_jacs: dict[date, list] = {}  # Newton's last Jacobian of each block
-    if date_by_date and solve.local:
+    if sweeps:
         # Ascending sweeps (Gauss-Seidel): exact in one pass when every quote's
         # curves have pillars at its maturity; a quote reading another curve between
         # pillars depends on a later one, fixed by the next sweep.
@@ -607,6 +721,10 @@ def _solve_unknowns(
                     ).x
             if max(abs(v) for v in values(instruments, y)) <= _SWEEP_TOL:
                 return y
+    if native is not None:
+        solved = _native_joint(native, solve, instruments, y)
+        if solved is not None:
+            return solved
     jac = jacobian(instruments)
     return _solve_or_rollback(
         lambda v: values(instruments, v), list(y), solve.restore, what, jac

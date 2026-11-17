@@ -22,7 +22,8 @@ JOINT = [
 
 
 def _build(backend, method):
-    with settings.use_backend(backend):
+    # The Python builder's Jacobian, on either valuation backend.
+    with settings.use_backend(backend), settings.use_backend("python", "curve_builder"):
         market = quote_factory.quote_market()
         build_curves(quote_factory.load_quotes(), market, interp_method=method)
     return market

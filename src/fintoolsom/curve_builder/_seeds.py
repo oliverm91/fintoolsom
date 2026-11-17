@@ -15,6 +15,8 @@ import numpy as np
 
 from fintoolsom.rates.Rates import RateConvention  # type: ignore[import-untyped]
 
+from .. import settings
+
 from ..derivatives.forwards import Forward
 from ..derivatives.swaps import FixedLeg, FloatingLeg, Swap
 from ..market.index import Index, OvernightIndex
@@ -92,7 +94,9 @@ class _Seeder:
         """Act/365 year fraction from the curve date to `d`."""
         return (d - self.t).days / _DAY_BASE
 
-    def seed_free_pillars(self, instruments, fixed_pillars, free_dates, flat_guess):
+    def seed_free_pillars(
+        self, instruments, fixed_pillars, free_dates, flat_guess, maturity=None
+    ):
         """Initial discount factors of the free pillars, read off the quotes.
 
         Each free pillar gets a continuously compounded zero rate implied by an
@@ -123,6 +127,9 @@ class _Seeder:
             Curve key to free pillar dates.
         flat_guess : dict
             New curve key to its flat fallback rate (annual compounding).
+        maturity : callable, optional
+            ``maturity(curve, instrument)``, the pillar it pins on that curve
+            (:func:`_keys._get_maturity` by default).
 
         Returns
         -------
@@ -130,9 +137,13 @@ class _Seeder:
             Curve key to initial dfs of its free pillars, in `free_dates` order.
         """
         implied: dict[CurveKey, dict[date, float]] = defaultdict(dict)
+        if maturity is None:
+
+            def maturity(curve, instr):
+                return _get_maturity(curve, instr, self.risk_free_index)
 
         def pinned_free_date(curve, instr) -> date | None:
-            m = _get_maturity(curve, instr, self.risk_free_index)
+            m = maturity(curve, instr)
             return (
                 m
                 if m is not None and m in free_dates[curve] and m not in implied[curve]
@@ -200,17 +211,29 @@ class _Seeder:
         The first coupon's rate also covers any gap between the curve date and the
         leg start. None when the leg has no coupon left or the rate is unusable.
         """
-        live = [
-            i for i, end in enumerate(leg._end_ordinals) if end > self.t.toordinal()
-        ]
+        t = self.t
+        rate = leg.rate
+        if settings.is_cpp("curve_builder") and settings.is_cpp("rates"):
+            out = settings.native().fixed_leg_wealth(
+                t.toordinal(), rate, leg._start_ordinals, leg._end_ordinals
+            )
+            if out is not None:  # the same product as below
+                wf, last = out
+                tau = (last - t.toordinal()) / _DAY_BASE
+                return (
+                    math.log(wf) / tau
+                    if wf > 0 and math.isfinite(wf) and tau > 0
+                    else None
+                )
+        live = np.flatnonzero(leg._end_ordinals > t.toordinal()).tolist()
         if not live:
             return None
-        rate, starts, ends = leg.rate, leg.start_dates, leg.end_dates
+        starts, ends = leg.start_dates, leg.end_dates
         wf = 1.0
-        if starts[live[0]] > self.t:
-            wf *= float(rate.get_wealth_factor(self.t, starts[live[0]]))
+        if starts[live[0]] > t:
+            wf *= float(rate.get_wealth_factor(t, starts[live[0]]))
         for i in live:
-            wf *= float(rate.get_wealth_factor(max(starts[i], self.t), ends[i]))
+            wf *= float(rate.get_wealth_factor(max(starts[i], t), ends[i]))
         tau = self.tau(ends[live[-1]])
         return math.log(wf) / tau if wf > 0 and math.isfinite(wf) and tau > 0 else None
 

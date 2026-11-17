@@ -24,6 +24,7 @@ nanobind_add_module(_native NB_STATIC
   cpp/src/bind_dates.cpp
   cpp/src/bind_rates.cpp
   cpp/src/bind_histories.cpp
+  cpp/src/bind_solver.cpp
   cpp/src/swaps/swap_leg.cpp)
 target_include_directories(_native PRIVATE cpp/src)
 

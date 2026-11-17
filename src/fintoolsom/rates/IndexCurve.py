@@ -60,8 +60,12 @@ class IndexCurve(PillarCurve):
     interpolation_method: InterpolationMethod = InterpolationMethod.PiecewiseConstant
 
     def _log_df_first_knot(self) -> float:
+        fixed = self._fixed_log_df_first_knot()
+        return super()._log_df_first_knot() if fixed is None else fixed
+
+    def _fixed_log_df_first_knot(self) -> float | None:
         if self.spot_rate is None or self.knot_dates[0] == self.curve_date:
-            return super()._log_df_first_knot()
+            return None
         return math.log(
             float(
                 self.spot_rate.get_discount_factor(self.curve_date, self.knot_dates[0])

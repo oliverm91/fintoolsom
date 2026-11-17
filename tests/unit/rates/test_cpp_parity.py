@@ -166,7 +166,11 @@ def test_a_curve_keeps_its_backend_when_the_setting_changes():
 def test_curve_building_matches(method):
     built = {}
     for backend in ("python", "cpp"):
-        with settings.use_backend(backend):
+        # The Python builder on either backend (the C++ builder: test_builder_backends).
+        with (
+            settings.use_backend(backend),
+            settings.use_backend("python", "curve_builder"),
+        ):
             market = quote_factory.quote_market()
             build_curves(quote_factory.load_quotes(), market, interp_method=method)
         built[backend] = market.curves

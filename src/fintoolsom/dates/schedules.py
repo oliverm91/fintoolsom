@@ -232,9 +232,27 @@ def _native_schedule(
     long_stub,
 ) -> list[date] | None:
     """:meth:`ScheduleGenerator.generate_schedule` in C++, the same dates; None when the
-    inputs are not plain (dates that are not ``date``, a tenor that is not
-    ``<n><unit>``, a zero frequency, a convention subclass) or rolling never reaches
+    inputs are not plain (see :func:`_native_schedule_args`) or rolling never reaches
     the end, for the Python code to handle them and raise its errors."""
+    args = _native_schedule_args(
+        start_date,
+        maturity_tenor,
+        frequency_tenor,
+        adj_conv,
+        maturity_adj_conv,
+        end_date,
+    )
+    if args is None:
+        return None
+    return settings.native().generate_schedule(*args, bool(stub_first), bool(long_stub))
+
+
+def _native_schedule_args(
+    start_date, maturity_tenor, frequency_tenor, adj_conv, maturity_adj_conv, end_date
+) -> tuple | None:
+    """The first arguments of ``_native.generate_schedule`` (and ``bullet_leg``), up to
+    the end date; None when the inputs are not plain (dates that are not ``date``, a
+    tenor that is not ``<n><unit>``, a zero frequency, a convention subclass)."""
     if maturity_adj_conv is None:
         maturity_adj_conv = adj_conv
     kind = _ADJUSTMENT_KINDS.get(type(adj_conv))
@@ -256,7 +274,7 @@ def _native_schedule(
         maturity = _plain_tenor(maturity_tenor)
         if maturity is None:
             return None
-    return settings.native().generate_schedule(
+    return (
         start_date,
         None if maturity is None else maturity[0],
         0 if maturity is None else maturity[1],
@@ -267,6 +285,4 @@ def _native_schedule(
         maturity_kind,
         maturity_adj_conv.calendar._native_core(),
         end_date,
-        bool(stub_first),
-        bool(long_stub),
     )

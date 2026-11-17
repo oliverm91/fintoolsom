@@ -13,14 +13,17 @@ What each backend covers:
 - ``"rates"``: the curves (``IndexCurve``, ``DiscountCurve``), ``Rate`` factors,
   curve year fractions and knot checks.
 - ``"derivatives"``: swap, forward, NDF and option valuation arithmetic, swap leg
-  construction (date ordinals and checks, amortizations, the par check), leg
-  duration.
+  construction (date ordinals and checks, amortizations, the par check; a bullet
+  leg's schedule and arrays in one call with ``"dates"``), leg duration.
 - ``"market"``: the market lookups (curves, FX rates, realised fixings) of a
   valuation: an instrument with a C++ core valued on a C++ market runs in one C++
   call; ``Market.get_dfs``, its FX projection and accrual loops; the index
   histories' day walks (with ``"dates"``) and the UF extension.
 - ``"curve_builder"``: ``build_curves``. Being ported (branch ``cpp-curve-builder``):
-  its C++ path may differ from the Python builder within 1e-8 on the forward rates.
+  the group solves run in C++ (block Newton sweeps, the joint solve by Newton with the
+  analytic Jacobian) when the curves and instruments are C++ (``"rates"``,
+  ``"market"``, ``"derivatives"``), and so do the instruments' pillar dates and the
+  fixed-leg seeds; the forward rates may differ from the Python builder's within 1e-8.
 
 The backend is read when an object is created (a curve, leg, forward, option or
 market built under ``"cpp"`` keeps its C++ path after the setting changes), or, for

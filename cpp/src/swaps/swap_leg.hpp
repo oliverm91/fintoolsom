@@ -69,6 +69,10 @@ public:
     [[nodiscard]] std::span<const std::int64_t> end() const noexcept { return end_; }
     [[nodiscard]] std::span<const std::int64_t> pay() const noexcept { return pay_; }
     [[nodiscard]] std::span<const std::int64_t> fixing() const noexcept { return fixing_; }
+    [[nodiscard]] std::span<const std::int64_t> fx_fixing() const noexcept { return fx_fixing_; }
+    // Floating legs: spreads_values (the spread interest of each coupon).
+    [[nodiscard]] std::span<const double> spreads() const noexcept { return spreads_; }
+    [[nodiscard]] bool has_spread() const noexcept { return has_spread_; }
     [[nodiscard]] std::span<const double> residual() const noexcept { return residual_; }
     // Fixed legs: their flows; floating legs: fixed_flows (spread + amortization).
     [[nodiscard]] std::span<const double> flows() const noexcept { return flows_; }

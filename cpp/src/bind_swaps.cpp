@@ -3,8 +3,15 @@
 #include <optional>
 #include <utility>
 
-#include <nanobind/stl/pair.h>
+#include <cmath>
+#include <string>
+#include <vector>
 
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+
+#include "dates/schedule.hpp"
 #include "py_curve.hpp"
 #include "py_dates.hpp"
 
@@ -65,6 +72,140 @@ nb::object leg_arrays(nb::handle start, nb::handle end, nb::handle pay, nb::hand
     if (size > 0) a[size - 1] = r[size - 1];
     return nb::make_tuple(std::move(start_arr), std::move(end_arr), pay_obj, fx_obj,
                           std::move(amort_arr), par);
+}
+
+// A list of the dates of `ordinals[first, last)`.
+nb::list date_list(const std::vector<std::int64_t>& ordinals, std::size_t first, std::size_t last) {
+    nb::list out;
+    for (std::size_t i = first; i < last; ++i) out.append(dt::date_of(ordinals[i]));
+    return out;
+}
+
+// A copy of `values` as a new numpy array.
+nb::object array_of(const std::vector<std::int64_t>& values) {
+    auto [array, out] = new_array<std::int64_t>(values.size());
+    std::copy(values.begin(), values.end(), out);
+    return nb::cast(std::move(array));
+}
+
+// A bullet leg's from_term in one call: the schedule (ScheduleGenerator.generate_schedule),
+// the payment and FX fixing dates (SwapLeg._schedule_dates), then SwapLeg.__post_init__'s
+// arrays (leg_arrays) and, given its rate, the fixed interest and flows. Returns
+// (start dates, end dates, payment dates or None, FX fixing dates or None, residuals,
+// (start, end, pay or None, fx or None, amortizations, par, interest or None, flows or
+// None)); None when the Python code must run (rolling never reaches the end, a date
+// check fails), interest None when `rate` is None, not one C++ reproduces, or gives a
+// value that is not finite.
+nb::object bullet_leg(nb::handle start, std::optional<std::string> maturity_unit,
+                      std::int64_t maturity_value, const std::string& frequency_unit,
+                      std::int64_t frequency_value, int adj_kind,
+                      const dates::CalendarCore* adj_calendar, int maturity_adj_kind,
+                      const dates::CalendarCore* maturity_calendar, nb::handle end_date,
+                      bool stub_first, bool long_stub, std::int64_t payment_lag,
+                      std::int64_t fx_fixing_lag, double notional, nb::handle rate) {
+    auto unit_ok = [](const std::string& u) {
+        return u.size() == 1 && std::string("dwmy").find(u[0]) != std::string::npos;
+    };
+    if (!unit_ok(frequency_unit) || (maturity_unit && !unit_ok(*maturity_unit)) ||
+        adj_kind < 0 || adj_kind > 3 || maturity_adj_kind < 0 || maturity_adj_kind > 3 ||
+        payment_lag < 0 || fx_fixing_lag < 0 || adj_calendar == nullptr ||
+        maturity_calendar == nullptr) {
+        return nb::none();
+    }
+    std::optional<dates::Tenor> maturity;
+    if (maturity_unit) maturity = dates::Tenor{(*maturity_unit)[0], maturity_value, maturity_calendar};
+    std::optional<std::int64_t> end;
+    if (!end_date.is_none()) end = dt::ordinal_of(end_date);
+    if (!maturity && !end) return nb::none();
+    const dates::Convention adj{static_cast<dates::Adjustment>(adj_kind), adj_calendar};
+    const auto schedule = dates::generate_schedule(
+        dt::ordinal_of(start), maturity, dates::Tenor{frequency_unit[0], frequency_value, adj_calendar},
+        adj, dates::Convention{static_cast<dates::Adjustment>(maturity_adj_kind), maturity_calendar},
+        end, stub_first, long_stub);
+    if (!schedule || schedule->empty()) return nb::none();
+    const std::size_t n = schedule->size() - 1;
+    const std::vector<std::int64_t> s(schedule->begin(), schedule->end() - 1),
+        e(schedule->begin() + 1, schedule->end());
+    std::vector<std::int64_t> p, f;
+    if (payment_lag != 0) {
+        p.reserve(n);
+        for (const auto d : e) p.push_back(adj_calendar->add_business_days(d, payment_lag));
+    }
+    const std::vector<std::int64_t>& pay = payment_lag != 0 ? p : e;
+    if (fx_fixing_lag != 0) {
+        f.reserve(n);
+        for (const auto d : pay) f.push_back(adj_calendar->add_business_days(d, -fx_fixing_lag));
+    }
+    const std::vector<std::int64_t>& fx = fx_fixing_lag != 0 ? f : pay;
+    bool par = n > 0;
+    for (std::size_t i = 0; i < n; ++i) {  // leg_arrays' checks
+        if (s[i] >= e[i] || e[i] > pay[i] || fx[i] > pay[i]) return nb::none();
+        if (i > 0 && (s[i] < s[i - 1] || pay[i] < pay[i - 1])) return nb::none();
+        par = par && pay[i] == e[i] && (i == 0 || s[i] == e[i - 1]);
+    }
+    auto [residual_arr, r] = new_array<double>(n);
+    auto [amort_arr, a] = new_array<double>(n);
+    for (std::size_t i = 0; i < n; ++i) r[i] = notional;
+    for (std::size_t i = 0; i + 1 < n; ++i) a[i] = r[i] - r[i + 1];
+    if (n > 0) a[n - 1] = r[n - 1];
+    nb::object interest_obj = nb::none(), flows_obj = nb::none();
+    const auto terms = rate.is_none() ? std::nullopt : dt::rate_terms(rate);
+    if (terms && n > 0) {  // Rate.get_accrued_interest(residuals, starts, ends)
+        auto [interest_arr, in] = new_array<double>(n);
+        auto [flows_arr, fl] = new_array<double>(n);
+        bool finite = true;
+        for (std::size_t i = 0; i < n && finite; ++i) {
+            const double wf = terms->wealth_factor(s[i], e[i]);
+            finite = std::isfinite(wf);
+            in[i] = r[i] * (wf - 1.0);
+            fl[i] = in[i] + a[i];
+        }
+        if (finite) {
+            interest_obj = nb::cast(std::move(interest_arr));
+            flows_obj = nb::cast(std::move(flows_arr));
+        }
+    }
+    nb::object start_arr = array_of(s), end_arr = array_of(e);
+    return nb::make_tuple(
+        date_list(*schedule, 0, n), date_list(*schedule, 1, n + 1),
+        payment_lag != 0 ? nb::object(date_list(p, 0, n)) : nb::none(),
+        fx_fixing_lag != 0 ? nb::object(date_list(f, 0, n)) : nb::none(),
+        std::move(residual_arr),
+        nb::make_tuple(start_arr, end_arr,
+                       payment_lag != 0 ? array_of(p) : nb::none(),
+                       fx_fixing_lag != 0 ? array_of(f) : nb::none(), std::move(amort_arr), par,
+                       interest_obj, flows_obj));
+}
+
+// curve_builder._seeds._Seeder.fixed_leg_zero's compounding: the product, left to
+// right, of the wealth factors of the coupons ending after `t` (from max(start, t)),
+// after the one from `t` to the first such start when it is later; with the ordinal of
+// the last end. None when no coupon is left, the rate is not one C++ reproduces or a
+// factor is not finite (Python does it then).
+nb::object fixed_leg_wealth(std::int64_t t, nb::handle rate, DaysIn starts, DaysIn ends) {
+    const auto terms = dt::rate_terms(rate);
+    if (!terms || starts.shape(0) != ends.shape(0)) return nb::none();
+    const std::int64_t* s = starts.data();
+    const std::int64_t* e = ends.data();
+    const std::size_t n = ends.shape(0);
+    double wf = 1.0;
+    bool any = false;
+    std::int64_t last = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (e[i] <= t) continue;
+        if (!any && s[i] > t) {
+            const double gap = terms->wealth_factor(t, s[i]);
+            if (!std::isfinite(gap)) return nb::none();
+            wf *= gap;
+        }
+        any = true;
+        const double f = terms->wealth_factor(std::max(s[i], t), e[i]);
+        if (!std::isfinite(f)) return nb::none();
+        wf *= f;
+        last = e[i];
+    }
+    if (!any) return nb::none();
+    return nb::make_tuple(wf, last);
 }
 
 using swaps::FxProjection;
@@ -210,6 +351,20 @@ void bind_swaps(nb::module_& m) {
         nb::arg("amortizations"),
         "FloatingLeg._repays_at_par on the leg's ordinals and notionals; None when the "
         "lengths differ.");
+
+    m.def("fixed_leg_wealth", &fixed_leg_wealth, nb::arg("t"), nb::arg("rate"),
+          nb::arg("start_ordinals"), nb::arg("end_ordinals"),
+          "The compounded wealth factor of _Seeder.fixed_leg_zero and the last end "
+          "ordinal, or None for Python to compute it.");
+
+    m.def("bullet_leg", &bullet_leg, nb::arg("start"), nb::arg("maturity_unit").none(),
+          nb::arg("maturity_value"), nb::arg("frequency_unit"), nb::arg("frequency_value"),
+          nb::arg("adj_kind"), nb::arg("adj_calendar"), nb::arg("maturity_adj_kind"),
+          nb::arg("maturity_calendar"), nb::arg("end_date").none(), nb::arg("stub_first"),
+          nb::arg("long_stub"), nb::arg("payment_lag"), nb::arg("fx_fixing_lag"),
+          nb::arg("notional"), nb::arg("rate").none(),
+          "A bullet leg's schedule, dates and SwapLeg arrays in one call (see "
+          "SwapLeg._bullet_parts), or None for the Python code to build it.");
 
     m.def("leg_arrays", &leg_arrays, nb::arg("start"), nb::arg("end"),
           nb::arg("pay").none(), nb::arg("fx").none(), nb::arg("residuals"),

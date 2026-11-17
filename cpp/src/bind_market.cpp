@@ -13,10 +13,12 @@
 // A view lives for one call. It remembers the curves, the known-until dates and the spot
 // rates it has looked up (by the identity of the index, currency or pair asked for): the
 // market cannot change during the call, so a batch looks each one up once.
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -26,6 +28,7 @@
 #include "dates/schedule.hpp"
 #include "fx/fx_derivatives.hpp"
 #include "py_dates.hpp"  // datetime.h, after Python.h
+#include "py_market.hpp"
 
 namespace fts::py {
 
@@ -775,6 +778,18 @@ double on_new_view(nb::handle instrument, nb::handle market, nb::handle currency
     return F(instrument, MarketView(market), currency);
 }
 
+double valuate_kind(nb::handle instrument, std::int64_t kind, const MarketView& m,
+                    nb::handle currency) {
+    switch (static_cast<Kind>(kind)) {
+        case Kind::Swap: return swap_mtm(instrument, m, currency);
+        case Kind::Simplified: return simplified_swap_mtm(instrument, m, currency);
+        case Kind::NonStarted: return non_started_swap_mtm(instrument, m, currency);
+        case Kind::Forward: return forward_mtm(instrument, m, currency);
+        case Kind::Ndf: return ndf_mtm(instrument, m, currency);
+    }
+    throw_py(PyExc_ValueError, fmt_str("Unknown valuation kind {}.", kind));
+}
+
 // The MTMs of `instruments` (a list), each valued as its `kinds` entry says, in order, on
 // one view of `market`: the values, and errors, of one call per instrument.
 DoublesOut valuate_many(nb::handle instruments, DaysIn kinds, nb::handle market,
@@ -789,16 +804,415 @@ DoublesOut valuate_many(nb::handle instruments, DaysIn kinds, nb::handle market,
     for (std::size_t i = 0; i < n; ++i) {
         const nb::handle instrument =
             PyList_GET_ITEM(instruments.ptr(), static_cast<Py_ssize_t>(i));
-        switch (static_cast<Kind>(kinds.data()[i])) {
-            case Kind::Swap: mtm[i] = swap_mtm(instrument, m, currency); break;
-            case Kind::Simplified: mtm[i] = simplified_swap_mtm(instrument, m, currency); break;
-            case Kind::NonStarted: mtm[i] = non_started_swap_mtm(instrument, m, currency); break;
-            case Kind::Forward: mtm[i] = forward_mtm(instrument, m, currency); break;
-            case Kind::Ndf: mtm[i] = ndf_mtm(instrument, m, currency); break;
-            default:
-                throw_py(PyExc_ValueError,
-                         fmt_str("Unknown valuation kind {}.", kinds.data()[i]));
+        mtm[i] = valuate_kind(instrument, kinds.data()[i], m, currency);
+    }
+    return out;
+}
+
+}  // namespace
+
+// ── For the curve builder's solver (py_market.hpp) ─────────────────────────
+
+void valuate_subset(nb::handle instruments, std::span<const std::int64_t> kinds,
+                    std::span<const std::int64_t> subset, nb::handle market,
+                    nb::handle currency, double* out) {
+    const MarketView m(market);
+    for (std::size_t i = 0; i < subset.size(); ++i) {
+        const auto k = static_cast<std::size_t>(subset[i]);
+        const nb::handle instrument =
+            PyList_GET_ITEM(instruments.ptr(), static_cast<Py_ssize_t>(k));
+        out[i] = valuate_kind(instrument, kinds[k], m, currency);
+    }
+}
+
+namespace {
+
+// ValuationBatch._compile / _compile_leg / _compile_ndf / _freeze, and
+// _Jacobian._source_terms. A value is referred to by (source, index in the source) until
+// every source is laid out.
+class BatchCompiler {
+public:
+    BatchCompiler(const MarketView& m, nb::handle currency, CompiledBatch& out)
+        : m_(m), currency_(currency), out_(out) {}
+
+    bool instrument(nb::handle instrument, std::int64_t kind, std::int64_t row) {
+        if (static_cast<Kind>(kind) == Kind::Ndf) return ndf(instrument, row);
+        if (static_cast<Kind>(kind) != Kind::Swap) return false;
+        const nb::object collateral = instrument.attr("collateral_index");
+        // Swap.leg_settlement_currency(leg), as swap_leg_pv reads it.
+        nb::object payment = nb::none();
+        if (!nb::cast<bool>(instrument.attr("is_deliverable"))) {
+            payment = instrument.attr("payment_currency");
         }
+        // Compiled whole or not at all: a failed leg leaves its swap's entries behind,
+        // and the caller drops the batch.
+        return leg(instrument.attr("receive_leg"), collateral, payment, row, 1.0) &&
+               leg(instrument.attr("pay_leg"), collateral, payment, row, -1.0);
+    }
+
+    // Lay the sources end to end, resolve the positions, add the curve terms.
+    void finish() {
+        std::vector<std::size_t> offset(out_.sources.size());
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < out_.sources.size(); ++i) {
+            offset[i] = n;
+            n += out_.sources[i].o0.size();
+        }
+        out_.n_values = n;
+        auto at = [&](const Pos& p) {
+            return static_cast<std::int64_t>(p.source == kOne ? n : offset[p.source] + p.index);
+        };
+        for (const Pos& p : fx_pos_) out_.fx_at.push_back(at(p));
+        for (const Pos& p : df_pos_) out_.df_at.push_back(at(p));
+        for (const Pos& p : accrual_pos_) out_.accrual_at.push_back(at(p));
+        for (const Pos& p : head_pos_) out_.head_at.push_back(at(p));
+        for (std::size_t i = 0; i < out_.ndfs.size(); ++i) {
+            out_.ndfs[i].df = at(ndf_pos_[i].first);
+            out_.ndfs[i].fx = ndf_pos_[i].second ? at(*ndf_pos_[i].second) : -1;
+        }
+        out_.log_shift.assign(n + 1, 0.0);
+        for (std::size_t i = 0; i < out_.sources.size(); ++i) {
+            const BatchSource& s = out_.sources[i];
+            if (s.kind == BatchSource::Accrual) {
+                std::fill_n(out_.log_shift.begin() + static_cast<std::ptrdiff_t>(offset[i]),
+                            s.o0.size(), 1.0);
+            }
+            curve_terms(s, static_cast<std::int64_t>(offset[i]));
+        }
+    }
+
+private:
+    static constexpr std::size_t kOne = static_cast<std::size_t>(-1);  // the trailing 1
+    struct Pos {
+        std::size_t source, index;
+    };
+
+    std::size_t source(int kind, nb::handle a, nb::handle b) {
+        for (std::size_t i = 0; i < out_.sources.size(); ++i) {
+            const BatchSource& s = out_.sources[i];
+            if (s.kind == kind && s.a.is(a) && s.b.is(b)) return i;
+        }
+        BatchSource s;
+        s.kind = kind;
+        s.a = nb::borrow(a);
+        s.b = nb::borrow(b);
+        out_.sources.push_back(std::move(s));
+        return out_.sources.size() - 1;
+    }
+
+    // The values of `src` at o0 (and o1): the position of the first.
+    Pos ref(std::size_t src, std::span<const std::int64_t> o0,
+            std::span<const std::int64_t> o1 = {}) {
+        BatchSource& s = out_.sources[src];
+        const Pos p{src, s.o0.size()};
+        s.o0.insert(s.o0.end(), o0.begin(), o0.end());
+        s.o1.insert(s.o1.end(), o1.begin(), o1.end());
+        return p;
+    }
+
+    static Pos shifted(Pos p, std::size_t i) { return p.source == kOne ? p : Pos{p.source, p.index + i}; }
+
+    void add_terms(std::span<const double> flows, Pos fx, Pos df, std::int64_t row, double scale) {
+        for (std::size_t i = 0; i < flows.size(); ++i) {
+            out_.flows.push_back(flows[i]);
+            fx_pos_.push_back(shifted(fx, i));
+            df_pos_.push_back(shifted(df, i));
+            out_.term_row.push_back(row);
+            out_.term_scale.push_back(scale);
+        }
+    }
+
+    // _compile_leg: false when a coupon is already running or fixed.
+    bool leg(nb::handle leg_obj, nb::handle collateral, nb::handle payment, std::int64_t row,
+             double sign) {
+        const Leg l = leg_of(leg_obj);
+        const PySwapLeg& core = *l.core;
+        const nb::object settlement =
+            payment.is_none() ? settlement_of(core.currency) : nb::borrow(payment);
+        const std::int64_t t = m_.t();
+        const double scale = sign * m_.fx_rate(m_.t_date(), currency_pair(settlement, currency_));
+        const bool deliverable = same_currency(core.currency, settlement);
+        if (deliverable && !l.fixed() && core.par_eligible() && core.nothing_realised(t) &&
+            m_.discounted_on_index_curve(core.currency, core.index, collateral)) {
+            // _par_leg_pv: residual_0 * df(start_0), plus the spreads on the end dfs.
+            const std::size_t index = source(BatchSource::Index, core.index, nb::none());
+            head_pos_.push_back(ref(index, core.start().first(1)));
+            out_.head_residuals.push_back(core.residual()[0]);
+            out_.head_scale.push_back(scale);
+            out_.head_row.push_back(row);
+            if (core.has_spread()) {
+                add_terms(core.spreads(), Pos{kOne, 0}, ref(index, core.end()), row, scale);
+            }
+            return true;
+        }
+        const std::size_t k = core.first_unpaid(t);
+        if (k == core.size()) return true;
+        if (core.has_realised(t)) return false;  // _Uncompiled
+        const std::size_t first = out_.flows.size();
+        const std::size_t m = core.size() - k;
+        const auto flows = core.flows().subspan(k);
+        std::vector<double> zeros;
+        std::span<const double> static_flows = flows;
+        if (!l.fixed()) {  // projected: residual * accrual + fixed flows
+            zeros.assign(m, 0.0);
+            static_flows = zeros;
+            const Pos accrual = ref(source(BatchSource::Accrual, core.index, nb::none()),
+                                    core.start().subspan(k), core.end().subspan(k));
+            for (std::size_t i = 0; i < m; ++i) {
+                out_.projected_pos.push_back(static_cast<std::int64_t>(first + i));
+                out_.residuals.push_back(core.residual()[k + i]);
+                out_.fixed.push_back(flows[i]);
+                accrual_pos_.push_back(shifted(accrual, i));
+            }
+        }
+        const auto pay = core.pay().subspan(k);
+        if (deliverable) {
+            const Pos df = ref(source(BatchSource::Discount, core.currency, collateral), pay);
+            add_terms(static_flows, Pos{kOne, 0}, df, row, scale);
+        } else {
+            const nb::handle pair = currency_pair(core.currency, settlement);
+            const Pos fx = ref(source(BatchSource::Fx, pair, nb::none()),
+                               core.fx_fixing().subspan(k));
+            const Pos df = ref(source(BatchSource::Discount, settlement, collateral), pay);
+            add_terms(static_flows, fx, df, row, scale);
+        }
+        return true;
+    }
+
+    // _compile_ndf.
+    bool ndf(nb::handle ndf_obj, std::int64_t row) {
+        const nb::object cp = ndf_obj.attr("currency_pair");
+        const std::int64_t pay = ordinal_of(ndf_obj.attr("payment_date"));
+        const std::int64_t t = m_.t();
+        if (pay <= t) return true;  // paid: nothing
+        const nb::object fixing = ndf_obj.attr("fixing_date");
+        const std::int64_t fixing_ordinal = ordinal_of(fixing);
+        const nb::object quote = cp.attr("quote_currency");
+        CompiledBatch::Ndf entry{row,
+                                 nb::cast<double>(ndf_obj.attr("sign")) *
+                                     nb::cast<double>(ndf_obj.attr("notional")),
+                                 nb::cast<double>(ndf_obj.attr("strike")),
+                                 std::numeric_limits<double>::quiet_NaN(),
+                                 -1,
+                                 -1,
+                                 m_.fx_rate(m_.t_date(), currency_pair(quote, currency_))};
+        std::optional<Pos> fx;
+        if (fixing_ordinal <= t || fixing_ordinal <= ordinal_of(m_.fx_known_until(cp))) {
+            entry.s_t = m_.fx_rate(fixing, cp);
+        } else {
+            const nb::handle pair = currency_pair(cp.attr("base_currency"), quote);
+            const std::int64_t at[] = {fixing_ordinal};
+            fx = ref(source(BatchSource::Fx, pair, nb::none()), at);
+        }
+        const std::int64_t at[] = {pay};
+        const Pos df = ref(
+            source(BatchSource::Discount, quote, ndf_obj.attr("collateral_index")), at);
+        out_.ndfs.push_back(entry);
+        ndf_pos_.emplace_back(df, fx);
+        return true;
+    }
+
+    void term(nb::handle curve, std::int64_t row, std::int64_t ordinal, double sign) {
+        if (std::none_of(out_.curves.begin(), out_.curves.end(),
+                         [&](const nb::object& c) { return c.is(curve); })) {
+            out_.curves.push_back(nb::borrow(curve));
+        }
+        out_.curve_terms.push_back({curve.ptr(), row, ordinal, sign});
+    }
+
+    // _Jacobian._source_terms of one source: its values as products of curve dfs.
+    void curve_terms(const BatchSource& s, std::int64_t offset) {
+        const std::size_t n = s.o0.size();
+        std::vector<std::pair<nb::object, double>> curves;
+        switch (s.kind) {
+            case BatchSource::Discount:  // Market._dfs_at_ordinals
+                if (s.b.is_none()) {
+                    curves.emplace_back(m_.discount_curve(s.a), 1.0);
+                } else if (same_currency(s.b.attr("currency"), s.a)) {
+                    curves.emplace_back(m_.index_curve(s.b), 1.0);
+                } else {
+                    curves.emplace_back(m_.discount_curve(s.a), 1.0);
+                    curves.emplace_back(m_.index_curve(s.b), 1.0);
+                    curves.emplace_back(m_.discount_curve(s.b.attr("currency")), -1.0);
+                }
+                for (const auto& [curve, sign] : curves) {
+                    for (std::size_t i = 0; i < n; ++i) term(curve, offset + static_cast<std::int64_t>(i), s.o0[i], sign);
+                }
+                return;
+            case BatchSource::Index: {
+                const nb::object curve = m_.index_curve(s.a);
+                for (std::size_t i = 0; i < n; ++i) term(curve, offset + static_cast<std::int64_t>(i), s.o0[i], 1.0);
+                return;
+            }
+            case BatchSource::Accrual: {  // 1 + accrual = df(start) / df(end)
+                const nb::object curve = m_.index_curve(s.a);
+                for (std::size_t i = 0; i < n; ++i) {
+                    term(curve, offset + static_cast<std::int64_t>(i), s.o0[i], 1.0);
+                    term(curve, offset + static_cast<std::int64_t>(i), s.o1[i], -1.0);
+                }
+                return;
+            }
+            case BatchSource::Fx: {  // anchor * df ratios after the last known fixing
+                const nb::object base = s.a.attr("base_currency");
+                const nb::object quote = s.a.attr("quote_currency");
+                if (same_currency(base, quote)) return;
+                const std::int64_t last = ordinal_of(m_.fx_known_until(s.a));
+                const nb::object base_curve = m_.discount_curve(base);
+                const nb::object quote_curve = m_.discount_curve(quote);
+                for (std::size_t i = 0; i < n; ++i) {
+                    if (s.o0[i] <= last) continue;
+                    const std::int64_t row = offset + static_cast<std::int64_t>(i);
+                    term(base_curve, row, s.o0[i], 1.0);
+                    term(base_curve, row, last, -1.0);
+                    term(quote_curve, row, s.o0[i], -1.0);
+                    term(quote_curve, row, last, 1.0);
+                }
+                return;
+            }
+        }
+    }
+
+    const MarketView& m_;
+    nb::handle currency_;
+    CompiledBatch& out_;
+    std::vector<Pos> fx_pos_, df_pos_, accrual_pos_, head_pos_;
+    std::vector<std::pair<Pos, std::optional<Pos>>> ndf_pos_;
+};
+
+}  // namespace
+
+bool compile_batch(nb::handle instruments, std::span<const std::int64_t> kinds,
+                   nb::handle market, nb::handle currency, CompiledBatch& out) {
+    out = CompiledBatch{};
+    const MarketView m(market);
+    BatchCompiler compiler(m, currency, out);
+    for (std::size_t k = 0; k < kinds.size(); ++k) {
+        const nb::handle instrument =
+            PyList_GET_ITEM(instruments.ptr(), static_cast<Py_ssize_t>(k));
+        if (!compiler.instrument(instrument, kinds[k], static_cast<std::int64_t>(k))) {
+            return false;
+        }
+    }
+    compiler.finish();
+    return true;
+}
+
+void evaluate_sources(nb::handle market, std::span<const BatchSource> sources, double* out) {
+    const MarketView m(market);
+    std::vector<double> starts;
+    for (const BatchSource& s : sources) {
+        const std::size_t n = s.o0.size();
+        const std::span<double> into(out, n);
+        switch (s.kind) {
+            case BatchSource::Discount:  // Market._dfs_at_ordinals
+                m.discount(s.a, s.b).get()(s.o0, into);
+                break;
+            case BatchSource::Index:  // the index curve's _dfs_at_ordinals
+                df_source(m.index_curve(s.a))(s.o0, into);
+                break;
+            case BatchSource::Accrual: {  // IndexCurve._accrual_at_ordinals
+                const swaps::DfSource curve = df_source(m.index_curve(s.a));
+                starts.resize(n);
+                curve(s.o0, starts);
+                curve(s.o1, into);
+                for (std::size_t i = 0; i < n; ++i) out[i] = 1.0 / (out[i] / starts[i]) - 1;
+                break;
+            }
+            case BatchSource::Fx: {  // Market._future_fx_rates_at_ordinals
+                const DoublesOut fx = m.future_fx(s.a, s.o0);
+                std::copy(fx.data(), fx.data() + n, out);
+                break;
+            }
+        }
+        out += n;
+    }
+}
+
+namespace {
+
+// ── Pillar dates (curve_builder._keys._maturities) ─────────────────────────
+
+// Kinds of maturity_tables: what _keys._maturities tells apart by isinstance.
+constexpr std::int64_t kTableForward = 1, kTableNdf = 2, kTableSwap = 4,
+                       kTableReceiveFloats = 8, kTablePayFloats = 16;
+
+// Largest value of a leg's ordinal array (the max() of its dates); false when empty.
+bool last_ordinal(nb::handle leg, const char* name, std::int64_t& out) {
+    const auto ordinals = nb::cast<DaysIn>(leg.attr(name));
+    if (ordinals.shape(0) == 0) return false;
+    out = *std::max_element(ordinals.data(), ordinals.data() + ordinals.shape(0));
+    return true;
+}
+
+// _keys._funding_key.
+nb::handle funding_key(nb::handle rfi, nb::handle rfi_currency, nb::handle currency) {
+    return same_currency(currency, rfi_currency) ? rfi : currency;
+}
+
+// One instrument's ({curve key: pillar date}, last date), or None for Python to do it.
+nb::object maturity_table(nb::handle instrument, std::int64_t kind, nb::handle rfi,
+                          nb::handle rfi_currency) {
+    nb::dict ordinals;  // curve key -> latest pillar ordinal (keys compare by name)
+    auto add = [&](nb::handle key, std::int64_t ordinal) {
+        if (ordinals.contains(key)) {
+            ordinal = std::max(ordinal, nb::cast<std::int64_t>(ordinals[key]));
+        }
+        ordinals[key] = ordinal;
+    };
+    auto finish = [&](std::int64_t last) {
+        nb::dict out;
+        for (auto [key, ordinal] : ordinals) out[key] = date_of(nb::cast<std::int64_t>(ordinal));
+        return nb::make_tuple(out, date_of(last));
+    };
+    if (kind == kTableForward || kind == kTableNdf) {
+        const nb::object pay_date = instrument.attr("payment_date");
+        if (pay_date.is_none()) return nb::none();
+        const nb::object pair = instrument.attr("currency_pair");
+        const std::int64_t pay = ordinal_of(pay_date);
+        std::int64_t pinned = pay, last = pay;
+        if (kind == kTableNdf) {
+            const nb::object fixing = instrument.attr("fixing_date");
+            if (fixing.is_none()) return nb::none();
+            pinned = ordinal_of(fixing);
+            last = std::max(pay, pinned);
+        }
+        add(funding_key(rfi, rfi_currency, pair.attr("base_currency")), pinned);
+        add(funding_key(rfi, rfi_currency, pair.attr("quote_currency")), pinned);
+        return finish(last);
+    }
+    if ((kind & kTableSwap) == 0) return nb::none();
+    std::int64_t last = std::numeric_limits<std::int64_t>::min();
+    const nb::object settlement_of_leg = instrument.attr("leg_settlement_currency");
+    for (int side = 0; side < 2; ++side) {
+        const nb::object leg = instrument.attr(side == 0 ? "receive_leg" : "pay_leg");
+        const bool floats = (kind & (side == 0 ? kTableReceiveFloats : kTablePayFloats)) != 0;
+        const nb::object pay_ccy = settlement_of_leg(leg);
+        const nb::object leg_ccy = leg.attr("currency");
+        std::int64_t pay = 0, end = 0, fx = 0;
+        if (!last_ordinal(leg, "_payment_ordinals", pay)) return nb::none();  // max() raises
+        add(funding_key(rfi, rfi_currency, pay_ccy), pay);
+        if (!same_currency(pay_ccy, leg_ccy)) {
+            if (!last_ordinal(leg, "_fx_fixing_ordinals", fx)) return nb::none();
+            add(funding_key(rfi, rfi_currency, leg_ccy), fx);
+        }
+        last = std::max(last, pay);
+        if (floats) {
+            if (!last_ordinal(leg, "_end_ordinals", end)) return nb::none();
+            add(leg.attr("index"), end);
+            last = std::max(last, end);
+        }
+    }
+    return finish(last);
+}
+
+nb::list maturity_tables(nb::list instruments, DaysIn kinds, nb::handle rfi) {
+    if (kinds.shape(0) != nb::len(instruments)) {
+        throw_py(PyExc_ValueError, nb::str("One kind per instrument."));
+    }
+    const nb::object rfi_currency = rfi.attr("currency");
+    nb::list out;
+    for (std::size_t i = 0; i < kinds.shape(0); ++i) {
+        out.append(maturity_table(instruments[i], kinds.data()[i], rfi, rfi_currency));
     }
     return out;
 }
@@ -808,6 +1222,12 @@ DoublesOut valuate_many(nb::handle instruments, DaysIn kinds, nb::handle market,
 void bind_market(nb::module_& m) {
     PyDateTime_IMPORT;
     if (PyDateTimeAPI == nullptr) throw nb::python_error();
+
+    m.def("maturity_tables", &maturity_tables, nb::arg("instruments"), nb::arg("kinds"),
+          nb::arg("risk_free_index"),
+          "curve_builder._keys._maturities of each instrument: ({curve key: pillar "
+          "date}, last date), or None where Python must do it. Kinds: 0 other, 1 "
+          "forward, 2 NDF, 4 swap, plus 8 / 16 when its receive / pay leg floats.");
 
     m.def("market_swap_mtm", &on_new_view<swap_mtm>, nb::arg("swap"), nb::arg("market"), nb::arg("currency"),
           "_swap_pv.get_swap_mtm with the market lookups in C++.");

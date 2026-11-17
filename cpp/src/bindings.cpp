@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "py_curve.hpp"
+#include "py_market.hpp"
 
 namespace nb = nanobind;
 using fts::Method;
@@ -98,4 +99,5 @@ NB_MODULE(_native, m) {
     bind_dates(m);
     bind_rates(m);
     bind_histories(m);
+    bind_solver(m);
 }

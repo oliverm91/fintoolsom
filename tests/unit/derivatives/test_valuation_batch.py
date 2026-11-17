@@ -225,7 +225,8 @@ def test_the_solver_values_through_batches(monkeypatch, backend, method):
         return out
 
     monkeypatch.setattr(ValuationBatch, "values", checked)
-    with settings.use_backend(backend):
+    # The Python builder (the C++ one values in C++, without batches).
+    with settings.use_backend(backend), settings.use_backend("python", "curve_builder"):
         build_curves(
             quote_factory.load_quotes(),
             quote_factory.quote_market(),

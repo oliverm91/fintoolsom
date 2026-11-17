@@ -25,9 +25,9 @@ from ._keys import (
     _built,
     _curve_id,
     _curves_needed,
-    _get_maturity,
     _instrument_of,
-    _last_date,
+    _maturities,
+    _maturity_tables,
     _primary_candidates,
 )
 from ._seeds import _FLAT_GUESS, _FixedSegments, _Seeder
@@ -54,6 +54,16 @@ class _Planner:
         self.risk_free_index: Index = market.risk_free_index  # type: ignore[assignment]
         self.seeder = seeder
         self.instrument = {q: _instrument_of(q, market) for q in quotes}
+        instruments = list(self.instrument.values())
+        # Each instrument's pillar on every curve it touches, and its last date: read
+        # once, as the instruments do not change during the build. Keyed by id, with
+        # the instrument kept alive so no id is reused.
+        self._tables = {
+            id(i): (i, t)
+            for i, t in zip(
+                instruments, _maturity_tables(instruments, self.risk_free_index)
+            )
+        }
         self.pinned = {
             q: _curves_needed(q, self.risk_free_index, self.instrument[q])
             for q in quotes
@@ -91,6 +101,23 @@ class _Planner:
             )
             for q in quotes
         }
+
+    def _table(self, instrument) -> tuple[dict, date]:
+        entry = self._tables.get(id(instrument))
+        if entry is None:
+            entry = self._tables[id(instrument)] = (
+                instrument,
+                _maturities(instrument, self.risk_free_index),
+            )
+        return entry[1]
+
+    def maturity(self, curve: CurveKey, instrument) -> date | None:
+        """Pillar `instrument` pins on `curve` (:func:`_keys._get_maturity`)."""
+        return self._table(instrument)[0].get(curve)
+
+    def last_date(self, instrument) -> date:
+        """Last date `instrument` reads any curve on."""
+        return self._table(instrument)[1]
 
     # -- groups ---------------------------------------------------------------
 
@@ -131,8 +158,7 @@ class _Planner:
             open_ = [
                 (c, m)
                 for c in cands
-                if (m := _get_maturity(c, instr, self.risk_free_index)) is not None
-                and self.is_open(c, m)
+                if (m := self.maturity(c, instr)) is not None and self.is_open(c, m)
             ]
             free = [p for p in open_ if p not in taken]
             pick = free[0] if free else (open_[0] if open_ else None)
@@ -146,7 +172,7 @@ class _Planner:
         instruments = self.instruments_of(group)
         owners = self.assign_pillars(instruments, self.candidates_of(group))
         return {
-            (c, _get_maturity(c, i, self.risk_free_index))
+            (c, self.maturity(c, i))
             for i, c in zip(instruments, owners)
             if c is not None
         }
@@ -161,7 +187,7 @@ class _Planner:
         for instr, curve in zip(instruments, owners):
             if curve is None:
                 continue
-            m = _get_maturity(curve, instr, self.risk_free_index)
+            m = self.maturity(curve, instr)
             if m is not None and m in free_dates.get(curve, ()):
                 out.append(instr)
                 dates.append(m)
@@ -184,7 +210,7 @@ class _Planner:
         first_own: dict = {}
         for c, d in mine:
             first_own[c] = min(d, first_own.get(c, d))
-        last = max(_last_date(i) for i in self.instruments_of(group))
+        last = max(map(self.last_date, self.instruments_of(group)))
         owners: dict = defaultdict(list)  # curve it reads -> (other group, pillar date)
         for h in pending:
             if h != group:
@@ -219,7 +245,7 @@ class _Planner:
         Unlike :meth:`waits` this is a preference: `group` goes after these groups
         when they are ready, and before them only to break a deadlock.
         """
-        last = max(_last_date(i) for i in self.instruments_of(group))
+        last = max(map(self.last_date, self.instruments_of(group)))
         out = set()
         for c in group:
             built = _built(self.market, c)
@@ -307,7 +333,7 @@ class _Planner:
         rfi = self.market.risk_free_index
         for curve in sorted(group, key=lambda c: _curve_id(c, rfi)):
             maturities = {
-                _get_maturity(curve, instr, self.risk_free_index)
+                self.maturity(curve, instr)
                 for instr, owner in zip(instruments, owners)
                 if owner == curve
             }
@@ -330,7 +356,7 @@ class _Planner:
                 free_dates[curve] = new_dates
         points = {c: f.knot_dfs(self.t) for c, f in fixed_pillars.items()}
         seed_dfs = self.seeder.seed_free_pillars(
-            instruments, points, free_dates, flat_guess
+            instruments, points, free_dates, flat_guess, self.maturity
         )
         free_seeds = {
             c: fixed_pillars[c].forwards_to(self.t, dates, seed_dfs[c])

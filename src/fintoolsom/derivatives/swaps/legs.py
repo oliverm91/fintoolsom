@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import date
 from typing import Any, ClassVar, cast
 
@@ -20,6 +20,7 @@ from .coupons import (
     XCCYCoupon,
 )
 from ...dates import AdjustmentDateConventionBase, ScheduleGenerator
+from ...dates.schedules import _native_schedule_args
 from ...dates.date_counts import date_ordinals
 from ...dates.term import Term
 from ...market.currencies import Currency
@@ -114,12 +115,40 @@ class SwapLeg:
     # leg's fintoolsom._native.SwapLegCore is built on its first valuation.
     _native: bool = field(init=False, repr=False)
     _core: Any = field(init=False, default=None, repr=False)
+    # The arrays __post_init__ would build, from ``_native.bullet_leg`` (see
+    # _bullet_parts); not a field, so dataclasses.replace rebuilds them.
+    _arrays: InitVar[tuple | None] = None
 
     _label: ClassVar[str] = "Leg"
 
-    def __post_init__(self):
+    def __post_init__(self, _arrays: tuple | None = None):
         self._native = settings.is_cpp("derivatives")
         self._core = None
+        if _arrays is None:
+            a = self._checked_arrays()
+            interest = flows = None
+        else:
+            a, interest, flows = self._take_arrays(_arrays)
+        self.amortizations = _read_only(a)
+        if interest is None:
+            n = len(self.start_dates)
+            rate = self.fixed_rate
+            interest = (
+                np.zeros(n)
+                if rate is None or n == 0
+                else np.array(
+                    rate.get_accrued_interest(
+                        self.residuals, self.start_dates, self.end_dates
+                    ),
+                    dtype=float,
+                ).reshape(n)
+            )
+            flows = interest + a
+        self.fixed_interest = _read_only(interest)
+        self.fixed_flows = _read_only(flows)
+
+    def _checked_arrays(self) -> np.ndarray:
+        """Copy and check the dates and residuals, set the ordinals; the amortizations."""
         self.start_dates = list(self.start_dates)
         self.end_dates = list(self.end_dates)
         n = len(self.start_dates)
@@ -160,27 +189,33 @@ class SwapLeg:
             else None
         )
         if arrays is None:
-            a = self._python_arrays(own_pay, own_fx)
-        else:
-            start, end, pay, fx, a, self._par_schedule = arrays
-            self._start_ordinals = _read_only(start)
-            self._end_ordinals = _read_only(end)
-            self._payment_ordinals = end if pay is None else _read_only(pay)
-            self._fx_fixing_ordinals = (
-                self._payment_ordinals if fx is None else _read_only(fx)
-            )
-        self.amortizations = _read_only(a)
-        rate = self.fixed_rate
-        interest = (
-            np.zeros(n)
-            if rate is None or n == 0
-            else np.array(
-                rate.get_accrued_interest(r, self.start_dates, self.end_dates),
-                dtype=float,
-            ).reshape(n)
+            return self._python_arrays(own_pay, own_fx)
+        start, end, pay, fx, a, self._par_schedule = arrays
+        self._start_ordinals = _read_only(start)
+        self._end_ordinals = _read_only(end)
+        self._payment_ordinals = end if pay is None else _read_only(pay)
+        self._fx_fixing_ordinals = (
+            self._payment_ordinals if fx is None else _read_only(fx)
         )
-        self.fixed_interest = _read_only(interest)
-        self.fixed_flows = _read_only(interest + a)
+        return a
+
+    def _take_arrays(self, arrays: tuple) -> tuple:
+        """Set the ordinals from ``_native.bullet_leg``'s arrays (its dates are fresh
+        lists, already checked, its residuals an array); the amortizations, fixed
+        interest and fixed flows (None, None when it left the interest to Python)."""
+        start, end, pay, fx, a, self._par_schedule, interest, flows = arrays
+        if self.payment_dates is None:
+            self.payment_dates = self.end_dates
+        if self.fx_fixing_dates is None:
+            self.fx_fixing_dates = self.payment_dates
+        self.residuals = _read_only(self.residuals)
+        self._start_ordinals = _read_only(start)
+        self._end_ordinals = _read_only(end)
+        self._payment_ordinals = end if pay is None else _read_only(pay)
+        self._fx_fixing_ordinals = (
+            self._payment_ordinals if fx is None else _read_only(fx)
+        )
+        return a, interest, flows
 
     def _python_arrays(self, own_pay: bool, own_fx: bool) -> np.ndarray:
         """The ordinals (checked) and the amortizations, without the C++ backend; the
@@ -365,6 +400,82 @@ class SwapLeg:
             long_stub=long_stub,
         )
 
+    @classmethod
+    def _bullet_parts(
+        cls,
+        notional,
+        start_date: date,
+        term: Term,
+        payment_frequency: str,
+        adj_convention: AdjustmentDateConventionBase,
+        stub_first: bool,
+        long_stub: bool,
+        maturity_date: date | None,
+        fx_fixing_lag: int,
+        payment_lag: int,
+        rate: Rate | None,
+    ) -> dict:
+        """Constructor keywords of a bullet leg: its dates and constant residuals.
+
+        With the C++ ``"dates"`` and ``"derivatives"`` backends, one
+        ``_native.bullet_leg`` call gives them and the arrays ``__post_init__``
+        would build, the same values (with `rate`, the leg's :attr:`fixed_rate`, its
+        fixed interest too when ``"rates"`` is C++); otherwise, or for inputs it
+        leaves to Python, :meth:`_build_schedule` and :meth:`_schedule_dates`.
+        """
+        if (
+            settings.is_cpp("derivatives")
+            and settings.is_cpp("dates")
+            and type(payment_lag) is int
+            and type(fx_fixing_lag) is int
+            and payment_lag >= 0
+            and fx_fixing_lag >= 0
+            and (freq := _FREQ_TO_TENOR.get(payment_frequency)) is not None
+            and (
+                args := _native_schedule_args(
+                    start_date,
+                    str(term),
+                    freq,
+                    adj_convention,
+                    term.adj_convention,
+                    maturity_date,
+                )
+            )
+            is not None
+        ):
+            out = settings.native().bullet_leg(
+                *args,
+                bool(stub_first),
+                bool(long_stub),
+                payment_lag,
+                fx_fixing_lag,
+                float(notional),
+                rate if settings.is_cpp("rates") else None,
+            )
+            if out is not None:
+                start, end, pay, fx, residuals, arrays = out
+                return {
+                    "start_dates": start,
+                    "end_dates": end,
+                    "payment_dates": pay,
+                    "fx_fixing_dates": fx,
+                    "residuals": residuals,
+                    "_arrays": arrays,
+                }
+        schedule = cls._build_schedule(
+            start_date,
+            term,
+            payment_frequency,
+            adj_convention,
+            stub_first,
+            long_stub,
+            maturity_date,
+        )
+        return {
+            **cls._schedule_dates(schedule, adj_convention, payment_lag, fx_fixing_lag),
+            "residuals": np.full(len(schedule) - 1, float(notional)),
+        }
+
     @staticmethod
     def _schedule_dates(
         schedule: list[date],
@@ -505,18 +616,20 @@ class FixedLeg(SwapLeg):
         -------
         FixedLeg
         """
-        schedule = cls._build_schedule(
-            start_date,
-            term,
-            payment_frequency,
-            adj_convention,
-            stub_first,
-            long_stub,
-            maturity_date,
-        )
         return cls(
-            **cls._schedule_dates(schedule, adj_convention, payment_lag, fx_fixing_lag),
-            residuals=np.full(len(schedule) - 1, float(notional)),
+            **cls._bullet_parts(
+                notional,
+                start_date,
+                term,
+                payment_frequency,
+                adj_convention,
+                stub_first,
+                long_stub,
+                maturity_date,
+                fx_fixing_lag,
+                payment_lag,
+                rate,
+            ),
             rate=rate,
             currency=currency,
         )
@@ -555,10 +668,10 @@ class FloatingLeg(SwapLeg):
     _par_eligible: bool = field(init=False, repr=False)
     _has_spread: bool = field(init=False, repr=False)
 
-    def __post_init__(self):
+    def __post_init__(self, _arrays: tuple | None = None):
         if self.spread is None:
             self.spread = _zero_spread()
-        super().__post_init__()
+        super().__post_init__(_arrays)
         self._par_eligible = self._repays_at_par()
         self._has_spread = bool(self.fixed_interest.any())
 
@@ -608,18 +721,22 @@ class FloatingLeg(SwapLeg):
         **fields,
     ):
         """Bullet leg from a schedule (shared by the subclasses' ``from_term``)."""
-        schedule = cls._build_schedule(
-            start_date,
-            term,
-            payment_frequency,
-            adj_convention,
-            stub_first,
-            long_stub,
-            maturity_date,
-        )
+        if fields.get("spread") is None:  # as __post_init__ would, so C++ accrues it
+            fields["spread"] = _zero_spread()
         return cls(
-            **cls._schedule_dates(schedule, adj_convention, payment_lag, fx_fixing_lag),
-            residuals=np.full(len(schedule) - 1, float(notional)),
+            **cls._bullet_parts(
+                notional,
+                start_date,
+                term,
+                payment_frequency,
+                adj_convention,
+                stub_first,
+                long_stub,
+                maturity_date,
+                fx_fixing_lag,
+                payment_lag,
+                fields["spread"],
+            ),
             **fields,
         )
 
@@ -652,8 +769,8 @@ class TermRateLeg(FloatingLeg):
 
     _fixing_ordinals: np.ndarray = field(init=False, repr=False)
 
-    def __post_init__(self):
-        super().__post_init__()
+    def __post_init__(self, _arrays: tuple | None = None):
+        super().__post_init__(_arrays)
         if self.fixing_dates is None:
             self.fixing_dates = self.start_dates
             self._fixing_ordinals = self._start_ordinals
@@ -733,7 +850,10 @@ class TermRateLeg(FloatingLeg):
         -------
         TermRateLeg
         """
-        schedule = cls._build_schedule(
+        if spread is None:  # as __post_init__ would, so C++ accrues it
+            spread = _zero_spread()
+        parts = cls._bullet_parts(
+            notional,
             start_date,
             term,
             payment_frequency,
@@ -741,13 +861,17 @@ class TermRateLeg(FloatingLeg):
             stub_first,
             long_stub,
             maturity_date,
+            fx_fixing_lag,
+            payment_lag,
+            spread,
         )
         lag: int = getattr(index, "spot_lag", 0) if fixing_lag is None else fixing_lag
         calendar = adj_convention.calendar
-        fixing_dates = [calendar.add_business_days(d, -lag) for d in schedule[:-1]]
+        fixing_dates = [
+            calendar.add_business_days(d, -lag) for d in parts["start_dates"]
+        ]
         return cls(
-            **cls._schedule_dates(schedule, adj_convention, payment_lag, fx_fixing_lag),
-            residuals=np.full(len(schedule) - 1, float(notional)),
+            **parts,
             index=index,
             spread=spread,
             fixing_dates=fixing_dates,

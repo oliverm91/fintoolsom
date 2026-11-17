@@ -128,7 +128,11 @@ def test_the_solver_builds_each_curve_once_per_solve(monkeypatch, backend, metho
         "private_curve",
         lambda self, *a: private.append(1) or private_curve(self, *a),
     )
-    with settings.use_backend(backend, "rates"):
+    # The Python builder (the C++ one sets the forwards on the cores).
+    with (
+        settings.use_backend(backend, "rates"),
+        settings.use_backend("python", "curve_builder"),
+    ):
         build_curves(
             quote_factory.load_quotes(),
             quote_factory.quote_market(),

@@ -268,6 +268,11 @@ class PillarCurve(DailyGridCurve):
         """``log(df)`` at the first knot: the first forward, extended back."""
         return -float(self.forward_rates[0]) * float(self._knot_tau[0])
 
+    def _fixed_log_df_first_knot(self) -> float | None:
+        """``log(df)`` at the first knot when the forwards do not set it (a spot rate
+        does), else None."""
+        return None
+
     def _build_forward_integral(self) -> Callable[[np.ndarray], np.ndarray]:
         """Integral of the forward from the first knot, as a function of any `tau`.
 

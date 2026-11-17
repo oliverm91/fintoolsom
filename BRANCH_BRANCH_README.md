@@ -5,9 +5,10 @@ Branched from `cpp-backend` at `36dc02f` (2026-11-16). Goal: port the whole
 from the quotes to the final curves in C++, with the Python builder kept as the
 reference and as the default.
 
-Status: **phases 0 and 1 done** (harness, determinism, backend switch; legs as
-arrays, built in one C++ call); phase 2 (the solver) next. This file is the plan and
-the acceptance criteria; it is updated as the port lands.
+Status: **phases 0-3 done** (harness, determinism, backend switch; legs as arrays,
+built in one C++ call; the group solves in C++; the hot parts of building the
+instruments, planning and seeding in C++). This file is the plan and the acceptance criteria; it is updated as
+the port lands.
 
 ## Verifying
 
@@ -152,6 +153,95 @@ Where an all-C++ PiecewiseConstant build spends its time now (cProfile shares): 
 solves ~50% (block Newton and its Python glue: residual values, curve updates), the
 instruments ~20%, planning and seeding ~23%. Phase 2 targets the first.
 
+## Phase 2 (done): the group solves in C++
+
+`fintoolsom._native.GroupSolver` (`cpp/src/bind_solver.cpp`) takes a group solve
+when the C++ curve builder is selected, every residual instrument is valued in one C++
+market call and every curve solved has a C++ core (`_solver._native_solver`). The
+unknowns are set on the curves' cores in place; the Python curves catch up on the
+builder's `apply` of the solution. No Python runs per iteration.
+
+- **Sweeps**: the block Newton of `_solver._newton` / `_solve_small` line for line
+  (`math.fsum` included), residuals from `market_valuate_many`: the same steps, so
+  **bit-identical** forwards. A block Newton gives up on (one on the factory quotes,
+  as in Python) goes back to Python for hybr, then the C++ sweep resumes at the next
+  block.
+- **Joint solve**: Newton steps with backtracking on the analytic Jacobian of
+  `_Jacobian` (batch gradient times d log df / d forwards, bumped on private copies of
+  the cores), instead of scipy's hybr: the same root by another path, **forwards
+  within 1.1e-14** of the Python builder's, fitted repricing errors of the same order
+  (better on CubicSpline). The batch layout (`ValuationBatch(compile_all=True)` and
+  `_Jacobian._source_terms`) is compiled in C++ (`compile_batch` in
+  `bind_market.cpp`): in Python it cost 3 ms per spline build.
+- Fallbacks: hybr in Python when the joint Newton stops short or the batch does not
+  compile (a coupon already running, another instrument type); the whole Python solve
+  when a valuation raises (so its error is the calculator's).
+
+Results (notebook quotes, C++ valuation, 3 warm-ups + 10 builds, 2 slowest dropped;
+this machine ran ~10% slower than during phase 1: the Python builder column is the
+same code as phase 1's 10.4-18.2 ms):
+
+| Interpolation | Python builder | C++ builder | Gain | Max \|dfwd\| | Fitted max / RMS / sum \|MTM\| (C++) |
+|---|---:|---:|---:|---:|---|
+| PiecewiseConstant | 11.5 ± 0.7 ms | 9.1 ± 0.6 ms | 1.27x | 0 | 2.9e-11 / 6.8e-12 / 1.9e-10 |
+| PiecewiseLinear | 12.6 ± 0.6 ms | 9.9 ± 0.6 ms | 1.27x | 0 | 1.5e-11 / 6.1e-12 / 1.7e-10 |
+| CubicSpline | 17.6 ± 0.5 ms | 11.1 ± 0.5 ms | 1.58x | 8.9e-15 | 2.9e-11 / 7.8e-12 / 2.6e-10 |
+| HermiteCubicSpline | 19.6 ± 0.5 ms | 11.4 ± 0.5 ms | 1.73x | 1.1e-14 | 2.9e-11 / 1.2e-11 / 4.8e-10 |
+| ConvexMonotone | 19.4 ± 0.1 ms | 12.1 ± 0.5 ms | 1.60x | 3.5e-15 | 5.8e-11 / 1.3e-11 / 3.3e-10 |
+
+Time in the solves per build (C++ valuation): PiecewiseConstant 4.0 → 1.6 ms,
+PiecewiseLinear 4.6 → 2.3 ms, CubicSpline 8.8 → 3.7 ms, HermiteCubicSpline
+10.8 → 4.0 ms, ConvexMonotone 11.5 → 4.9 ms. The factory quotes give the same
+picture (bit-identical local methods, splines within 1.1e-14). What a C++ build still
+runs in Python: the instruments from the quotes (~2.2 ms), planning and seeding
+(~2.5 ms), the grouping, the repricing check and the final curves' grids; each C++
+residual evaluation still reads the instruments' Python attributes through the market
+view (~3 µs per instrument).
+
+## Phase 3 (done): instruments, planning and seeding
+
+Profiled first (PiecewiseConstant, C++ builder, ~9.9 ms a build): the instruments
+~2.9 ms (~39 µs an IRS, ~45 µs an XCCY), `_get_maturity` 1.2 ms (650 calls a build,
+each walking the legs' date lists), the seeds 0.9 ms (most of it ~10 scalar wealth
+factors per fixed leg), the rest of the planning ~1.5 ms spread thinly over dict
+and set work. What moved to C++:
+
+- **Bullet legs in one call** (`_native.bullet_leg`, `SwapLeg._bullet_parts`): the
+  schedule, the payment and FX fixing lags, the ordinals, checks, amortizations and
+  the fixed interest and flows of `FixedLeg` / `OvernightLeg` / `XCCYFloatingLeg` /
+  `TermRateLeg.from_term`, handed to `__post_init__` through an `InitVar` (not a
+  field: `dataclasses.replace` rebuilds the arrays). On the `dates` and `derivatives`
+  C++ backends, the interest too on `rates`; anything it does not take (a convention
+  subclass, a negative lag, a non-finite factor) runs the Python path, which raises
+  its errors. Bit for bit the Python path's legs (same dates, arrays, flags and
+  shared lists), tested over leg types, lags, started legs and both rates backends.
+- **Every pillar date of an instrument, read once** (`_keys._maturities`, one
+  `_native.maturity_tables` call per build on the C++ builder): the planner and the
+  seeder look up `{curve: pillar}` and the last date instead of recomputing them; the
+  Python builder caches the Python tables the same way.
+- **The fixed-leg seed** (`_native.fixed_leg_wealth`): the compounded wealth factor of
+  `_Seeder.fixed_leg_zero`, the same left-to-right product (the log stays in Python).
+
+Left in Python: grouping, ownership, readiness and cycle merging (~1 ms of small
+dict / set / hash work; a C++ planner would save part of that for a large port),
+the quote objects and the leg and swap dataclasses themselves (~26 µs an IRS now),
+the redundant-quote warning (it reprices bumped quotes), the repricing check.
+
+Results (notebook quotes, C++ valuation, 3 warm-ups + 10 builds, 2 slowest dropped;
+the Python builder gains too, from the C++ legs and the cached tables):
+
+| Interpolation | Python builder | C++ builder | Gain | Max \|dfwd\| | C++ builder in phase 2 |
+|---|---:|---:|---:|---:|---:|
+| PiecewiseConstant | 9.5 ± 0.6 ms | 6.5 ± 0.4 ms | 1.46x | 0 | 9.1 ms |
+| PiecewiseLinear | 10.3 ± 0.9 ms | 7.0 ± 0.1 ms | 1.47x | 0 | 9.9 ms |
+| CubicSpline | 15.1 ± 0.6 ms | 8.2 ± 0.1 ms | 1.84x | 8.9e-15 | 11.1 ms |
+| HermiteCubicSpline | 17.5 ± 0.6 ms | 9.0 ± 0.4 ms | 1.96x | 1.1e-14 | 11.4 ms |
+| ConvexMonotone | 17.6 ± 0.6 ms | 10.2 ± 1.0 ms | 1.73x | 3.5e-15 | 12.1 ms |
+
+Phase 3 changes no number a build computes: the forwards and fitted MTMs are phase 2's.
+Against the branch's baseline (`cpp-backend` at 36dc02f, C++ valuation: 12.1, 14.1,
+18.3, 20.0, 20.0 ms) a C++ build is now 1.9-2.2x faster.
+
 ## Decisions (2026-11-16)
 
 - **Not bit-identical.** The C++ builder may differ from the Python one; what matters
@@ -169,5 +259,8 @@ instruments ~20%, planning and seeding ~23%. Phase 2 targets the first.
    tests comparing the two builders on the three criteria.
 1. **Instruments from quotes in C++** (`_instrument_of`): done, see Phase 1.
 2. **The solver in C++**: curve cores and a compiled residual plan held in C++, block
-   Newton and the joint solve with the analytic Jacobian, no Python per iteration.
-3. Later: planning and seeding.
+   Newton and the joint solve with the analytic Jacobian, no Python per iteration:
+   done, see Phase 2.
+3. **Planning and seeding**: the instruments' legs, pillar tables and fixed-leg
+   seeds in C++: done, see Phase 3. A C++ planner (grouping, ownership, cycles) is
+   left: ~1 ms a build.

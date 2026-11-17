@@ -11,6 +11,7 @@ from datetime import timedelta
 import numpy as np
 import pytest
 
+from fintoolsom import settings
 from fintoolsom.curve_builder import _solver, build_curves
 from fintoolsom.curve_builder import InsufficientQuotesError
 from fintoolsom.curve_builder.builder import _CurveBuilder
@@ -116,6 +117,8 @@ def _spy_block_sizes(monkeypatch) -> list[int]:
 
     monkeypatch.setattr(_solver, "_solve_or_rollback", spy)
     monkeypatch.setattr(_solver, "_newton", newton_spy)
+    # The Python builder's solves (the C++ builder's run in C++).
+    monkeypatch.setitem(settings._backends, "curve_builder", "python")
     return sizes
 
 
