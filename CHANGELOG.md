@@ -3,6 +3,7 @@
 ### Fix
 
 - **market**: `UFForward.settlement_date` is the 9th of the month `next_n_cpi_settlements` months after `last_known_uf_date(quote_date)`, moved to the preceding business day (`CL` calendar) when it is not one. It was the CPI release date (one business day before the 9th) of `quote_date + n` months, which for a quote on a release day (2026-11-06, n=1) gave 2026-12-07 instead of 2027-01-08. `next_cpi_publication_date` is unchanged; `UFForward` no longer uses it.
+- **dates**: `Calendar.add_custom_holiday` and `add_custom_holidays` record the date in `Calendar.custom_holidays` (once), so `combine` / `+` carries holidays added after construction and the repr counts them. Before, they only reached the underlying holiday calendar and were lost on combine.
 
 ## v1.0.0b15 (2026-11-16)
 

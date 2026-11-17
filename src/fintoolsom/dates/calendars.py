@@ -83,6 +83,10 @@ class Calendar:
     def add_custom_holiday(self, custom_holiday: date):
         """Make `custom_holiday` a holiday of this calendar."""
         self._calendar.append(custom_holiday)
+        if self.custom_holidays is None:
+            self.custom_holidays = []
+        if custom_holiday not in self.custom_holidays:
+            self.custom_holidays.append(custom_holiday)
 
     def add_custom_holidays(self, custom_holidays: list[date]):
         """Make each date of `custom_holidays` a holiday of this calendar."""

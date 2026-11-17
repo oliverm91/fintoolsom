@@ -38,6 +38,15 @@ def test_calendar_adds_custom_holidays_after_construction():
     assert cal.is_holiday(date(2024, 1, 3)) and cal.is_holiday(date(2024, 1, 4))
 
 
+def test_added_custom_holidays_are_recorded_once_and_survive_combine():
+    cal = Calendar()
+    cal.add_custom_holiday(date(2024, 1, 3))
+    cal.add_custom_holiday(date(2024, 1, 3))
+    assert cal.custom_holidays == [date(2024, 1, 3)]
+    assert repr(cal) == "Calendar(weekends only, 1 custom)"
+    assert (cal + Calendar()).custom_holidays == [date(2024, 1, 3)]
+
+
 def test_calendars_add_with_plus():
     combined = Calendar(custom_holidays=[date(2024, 1, 3)]) + Calendar(
         custom_holidays=[date(2024, 1, 4)]
