@@ -1,3 +1,31 @@
+## v1.0.0b15 (2026-11-16)
+
+### BREAKING CHANGE
+
+- **swaps**: a `SwapLeg` raises `ValueError` at construction when a coupon's start date is not before its end date, its end date is after its payment date, or its FX fixing date is after its payment date. The message names the first such coupon. Legs from the builders always met these conditions.
+
+### Feat
+
+- **calculator**: `Calculator.valuate_many(instruments, market, currency)` values a list of instruments at once and returns one MTM per instrument, bit-identical to `Calculator.valuate` on each, errors included. `ValuationBatch(instruments, market, currency)` compiles the list once, so `values()` can be called again as the curves move. Swaps (`Swap` itself) and NDFs are compiled: each curve lookup (a discounting, an index curve, a projection or an FX pair) is evaluated once per call on every date the batch needs. Anything else, including swaps with a coupon already running or fixed, is valued by `Calculator.valuate`. `ValuationBatch.gradient(values)` gives the derivative of each MTM with respect to the values the batch reads off the market.
+
+### Fix
+
+- **curve_builder**: the unknowns of a group solve are laid out in curve-id order instead of the order of a frozenset, so a build no longer depends on `PYTHONHASHSEED`. Before, two runs could take different solver paths and give forwards that differed at rounding level.
+
+### Perf
+
+- **curve_builder**: the solver values its residuals through one `ValuationBatch` per instrument list, and updates the curves it built in place on each iteration (`PillarCurve._set_forward_rates`) instead of constructing and checking new ones.
+- **curve_builder**: joint solves hand scipy's `hybr` the analytic Jacobian of the residuals instead of letting it difference them. It is the batch's gradient chained with the derivative of each curve's `log df` with respect to its forwards: constant over a solve on piecewise-constant, piecewise-linear and cubic-spline curves, and a forward difference per call on the monotone methods.
+- **curve_builder**: the date blocks of a piecewise-constant or piecewise-linear sweep (1 to 3 unknowns) are solved by Newton steps with Broyden updates, starting from a differenced Jacobian or the block's own from the previous sweep. The solver falls back to `hybr` when the steps stop lowering the residuals, a residual is not finite or the valuation raises.
+- **curve_builder**: the planner reads each instrument's pillar dates and last date once per build instead of on every query.
+- **calculator**: a floating leg discounted on its own index curve (CSA on the leg index, or uncollateralised on the risk-free index), with no coupon started or fixed, is valued at par: `residuals[0] * df(first start)` plus the spreads discounted from the end dates, instead of projecting and discounting every coupon. It applies to legs with no payment lag, a contiguous schedule and the notional repaid through the amortizations, checked once at construction (`FloatingLeg._par_eligible`); `SimplifiedSwap` and `NonStartedSimplifiedSwap` assume it. The PV is the same up to rounding (about 1e-16 relative).
+- **curve_builder**: building the notebook curves (`notebooks/quotes.json`; mean of 8 builds after 3 warm-ups, the 2 slowest of 10 dropped): piecewise-constant 60.5 -> 38.5 ms (1.6x), piecewise-linear 118.4 -> 65.8 ms (1.8x), Hermite cubic spline 361.8 -> 87.1 ms (4.2x), cubic spline 348.3 -> 63.9 ms (5.5x), convex monotone 376.2 -> 111.1 ms (3.4x). The discount factors move by at most 6.4e-11 relative on piecewise curves and 6e-15 on the others.
+
+### Refactor
+
+- **calculator**: leg PVs sum with `math.fsum` (correctly rounded) instead of `np.dot` / `np.sum`, whose BLAS summation order depends on the array's memory layout. A batch can then reproduce `Calculator.valuate` exactly. PVs move by at most an ulp.
+- **tests**: the suite runs on 4 workers by default (`pytest-xdist`, `addopts = "-n 4"`); pass `-n 0` for a serial run. CI and the publish workflow run it on 2 workers, and publishing now runs the tests before building. The full suite takes 10.3 s instead of 19.0 s serially.
+
 ## v1.0.0b14 (2026-11-15)
 
 ### BREAKING CHANGE
