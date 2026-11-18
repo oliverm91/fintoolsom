@@ -5,8 +5,7 @@ from fintoolsom.derivatives.forwards.forwards import Forward, NDF
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from tests.factories.curve_factory import (
-    index_curve_from_zero_coupon_curve,
-    discount_curve_from_zero_coupon_curve,
+    curve_from_zero_coupon_curve,
 )
 
 
@@ -22,14 +21,12 @@ def _market_with_fx_forward_setup(curve_date, zero_coupon_curve, spot: float) ->
     market = Market(
         t=curve_date,
         risk_free_index=RISKLESS,
-        curves=[
-            index_curve_from_zero_coupon_curve(
-                zero_coupon_curve, RISKLESS
-            ),  # CLP: the riskless index's own curve
-            discount_curve_from_zero_coupon_curve(
-                zero_coupon_curve, Currency.USD, RISKLESS
-            ),  # USD: uncollateralised
-        ],
+        curves={
+            # CLP: the riskless index's own curve
+            RISKLESS: curve_from_zero_coupon_curve(zero_coupon_curve),
+            # USD: uncollateralised
+            Currency.USD: curve_from_zero_coupon_curve(zero_coupon_curve),
+        },
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))
     return market

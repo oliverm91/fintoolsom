@@ -1,12 +1,10 @@
 from dataclasses import KW_ONLY, dataclass
 from enum import Enum
 
-
 from ..dates import AdjustmentDateConventionBase
-from ..dates.time_fractions import TimeFractionBase
+from ..rates import Rate
 from .currencies import Currency
 from .index import InterestIndex
-from ..rates import Rate
 
 
 class PaymentFrequency(Enum):
@@ -31,17 +29,19 @@ class LegSpec:
         Coupon frequency.
     adj_convention : AdjustmentDateConventionBase
         Business-day adjustment of the schedule dates.
-    time_fraction : TimeFractionBase
-        Day-count basis of the accrual.
     payment_lag : int, default 0
         Business days between each period end date and its payment date
         (keyword-only).
+
+    Notes
+    -----
+    The accrual basis is the day count of the leg's rates (the fixed rate, the
+    spread, the index), not a field of the spec.
     """
 
     currency: Currency
     payment_frequency: PaymentFrequency
     adj_convention: AdjustmentDateConventionBase
-    time_fraction: TimeFractionBase
     _: KW_ONLY
     payment_lag: int = 0
 

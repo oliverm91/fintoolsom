@@ -31,24 +31,29 @@ equal when their names are. Fixings live in a history, stored in
 
 ## Curves in the market
 
-`Market.curves` maps `curve.get_id()` to the curve (see `fintoolsom.rates`).
-`Market(curves=[...])` also accepts a list.
+`Market.curves` maps a key to a curve (see `fintoolsom.rates`); the key gives the
+curve its role. An `Index` key projects that index, and the risk-free index's curve
+also discounts its currency. A `Currency` key discounts that currency under the
+market's `risk_free_index`.
 
 ```python
-market.set_curve(curve)                     # stored under curve.get_id()
-market.get_index_curve(sofr)                # "SOFR": projects SOFR
-market.get_discount_curve(Currency.USD)     # "USD_ICP": USD under the market's risk_free_index
-market.get_discount_curve(Currency.CLP)     # "ICP": a currency with its own risk-free index
+market = Market(t, risk_free_index=icp, curves={icp: icp_curve, sofr: sofr_curve})
+market.set_curve(Currency.USD, usd_curve)    # USD discounting under ICP
+market.get_index_curve(sofr)                 # curves[sofr]
+market.get_discount_curve(Currency.USD)      # curves[Currency.USD]
+market.get_discount_curve(Currency.CLP)      # curves[icp]: the risk-free index's own currency
+market.get_accrual(sofr, start, end)         # SOFR projected over [start, end]: wf - 1
 market.get_dfs(Currency.CLP, dates, collateral=sofr)  # CLP_ICP * SOFR / USD_ICP
 ```
 
 - Without collateral, `get_dfs` reads one discount curve. With collateral in the
   flows' currency, it reads the collateral index curve. With collateral in another
   currency, it reads three curves.
-- `risk_free_index=` selects another numeraire. If no curve was built under it,
-  the call raises a `KeyError`, for example for `"CLP_SOFR"` when the curves were
-  built under ICP.
-- `set_curve` rejects legacy `ZeroCouponCurve`s.
+- A market has one numeraire, its `risk_free_index`. The risk-free index's currency
+  is not a key: it discounts on the index's curve, so `set_curve(Currency.CLP, ...)`
+  under ICP raises a `ValueError`.
+- `set_curve` rejects legacy `ZeroCouponCurve`s and keys that are neither an `Index`
+  nor a `Currency`.
 
 ## UF
 

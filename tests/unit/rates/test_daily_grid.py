@@ -1,22 +1,17 @@
-"""Daily discount-factor grid of IndexCurve and DiscountCurve."""
+"""Daily discount-factor grid of PillarCurve."""
 
 from datetime import date, timedelta
 
 import numpy as np
 import pytest
 
-from fintoolsom.curve_builder import _solver, build_curves
-from fintoolsom.curve_builder._keys import _built
-from fintoolsom.market import Currency
 from fintoolsom.rates import (
-    IndexCurve,
+    PillarCurve,
     InterpolationMethod,
     Rate,
     RateConvention,
 )
-from tests.factories import quote_factory
-from tests.factories.quote_factory import ICP
-from tests.factories.curve_factory import discount_curve_from_dfs
+from tests.factories.curve_factory import curve_from_dfs
 
 T = date(2026, 6, 29)
 PILLARS = [T + timedelta(days=d) for d in (30, 91, 365, 730, 1825)]
@@ -27,11 +22,11 @@ METHOD = InterpolationMethod
 
 def _index(method, spot=None, **kwargs):
     knots = [T + timedelta(days=1) if spot else T, *PILLARS[:-1]]
-    return IndexCurve(T, ICP, knots, FORWARDS, spot, method, **kwargs)
+    return PillarCurve(T, knots, FORWARDS, method, spot, **kwargs)
 
 
 def _discount(method, **kwargs):
-    return discount_curve_from_dfs(T, Currency.USD, ICP, PILLARS, DFS, method, **kwargs)
+    return curve_from_dfs(T, PILLARS, DFS, method, **kwargs)
 
 
 SPOT = Rate(RateConvention(), 0.05)
@@ -98,33 +93,3 @@ def test_writing_to_the_returned_dfs_leaves_the_curve_alone(make):
     before = curve.get_df(d)
     curve.get_dfs([d])[0] = 0.0
     assert curve.get_df(d) == before
-
-
-def _build(monkeypatch, **kwargs):
-    """Build on the quote market; returns it and the solver curves' flags."""
-    flags = []
-    apply = _solver._GroupSolve.apply
-
-    def recording_apply(self, y):
-        apply(self, y)
-        flags.extend(_built(self.market, c).precalculate for c in self.curve_slice)
-
-    monkeypatch.setattr(_solver._GroupSolve, "apply", recording_apply)
-    market = quote_factory.quote_market()
-    build_curves(quote_factory.load_quotes(), market, **kwargs)
-    return market, flags
-
-
-def test_build_skips_the_grid_while_solving_local_curves(monkeypatch):
-    market, flags = _build(monkeypatch)
-    assert flags and not any(flags)
-    assert all(c._grid is not None for c in market.curves.values())
-
-
-def test_build_keeps_the_grid_while_solving_cubic_curves(monkeypatch):
-    market, flags = _build(
-        monkeypatch,
-        interp_method=METHOD.CubicSpline,
-    )
-    assert flags and all(flags)
-    assert all(c._grid is not None for c in market.curves.values())

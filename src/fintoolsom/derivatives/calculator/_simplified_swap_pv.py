@@ -86,8 +86,8 @@ def _non_started_leg_pv(leg, collateral, market: Market) -> float:
     elif _discounted_on_index_curve(leg, collateral, market):
         return _par_leg_pv(leg, market)
     else:
-        accruals = market.get_index_curve(leg.index)._accrual_at_ordinals(
-            leg._start_ordinals, leg._end_ordinals
+        accruals = market._accrual_at_ordinals(
+            leg.index, leg._start_ordinals, leg._end_ordinals
         )
         flows = leg.residuals * accruals + leg.fixed_flows
     dfs = market._dfs_at_ordinals(

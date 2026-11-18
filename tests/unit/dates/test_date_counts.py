@@ -61,7 +61,12 @@ def test_get_time_fraction_scalar_and_list_have_consistent_types_and_values():
 # Expected day counts copied (once, by hand) from OpenGamma Strata's
 # DayCountTest.java; no network access is needed here.
 from fintoolsom.dates import Days30EISDADayCountConvention  # noqa: E402
-from tests.factories.day_counts import D, calc360  # noqa: E402
+from tests.factories.day_counts import (  # noqa: E402
+    THIRTY_E_360,
+    THIRTY_E_360_ISDA,
+    D,
+    calc360,
+)
 
 # Strata data_30U360, EOM column (30U/360 with the end-of-month rule).
 THIRTY_U_360_EOM = [
@@ -96,25 +101,7 @@ THIRTY_A_360 = [
     (D(2012, 5, 31), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
 ]
 
-# Strata THIRTY_E_360 rows (2006 ISDA 4.16(g)).
-THIRTY_E_360 = [
-    (D(2011, 2, 28), D(2012, 2, 29), calc360(2011, 2, 28, 2012, 2, 29)),
-    (D(2012, 5, 29), D(2013, 8, 31), calc360(2012, 5, 29, 2013, 8, 30)),
-    (D(2012, 5, 31), D(2013, 8, 30), calc360(2012, 5, 30, 2013, 8, 30)),
-    (D(2012, 5, 31), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
-]
-
-# Strata data_30E360ISDA, "maturity" column: an end date on the last of February
-# is the termination date and is kept (D1 on the last of February still moves to 30).
-THIRTY_E_360_ISDA_MATURITY = [
-    (D(2011, 12, 28), D(2012, 2, 29), calc360(2011, 12, 28, 2012, 2, 29)),
-    (D(2012, 2, 29), D(2012, 3, 28), calc360(2012, 2, 30, 2012, 3, 28)),
-    (D(2011, 2, 28), D(2012, 2, 28), calc360(2011, 2, 30, 2012, 2, 28)),
-    (D(2011, 2, 28), D(2012, 2, 29), calc360(2011, 2, 30, 2012, 2, 29)),
-    (D(2012, 2, 29), D(2016, 2, 29), calc360(2012, 2, 30, 2016, 2, 29)),
-    (D(2012, 5, 29), D(2013, 8, 31), calc360(2012, 5, 29, 2013, 8, 30)),
-    (D(2012, 5, 31), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
-]
+# THIRTY_E_360 and THIRTY_E_360_ISDA are shared with test_time_fractions.py.
 
 
 @pytest.mark.parametrize("start, end, days", THIRTY_U_360_EOM)
@@ -132,9 +119,32 @@ def test_30e_matches_reference(start, end, days):
     assert Days30EDayCountConvention.get_day_count(start, end) == days
 
 
-@pytest.mark.parametrize("start, end, days", THIRTY_E_360_ISDA_MATURITY)
-def test_30e_isda_matches_reference_maturity_column(start, end, days):
-    assert Days30EISDADayCountConvention.get_day_count(start, end) == days
+@pytest.mark.parametrize("start, end, is_termination, days", THIRTY_E_360_ISDA)
+def test_30e_isda_matches_reference(start, end, is_termination, days):
+    termination = end if is_termination else None
+    dcc = Days30EISDADayCountConvention
+    assert dcc.get_day_count(start, end, termination_date=termination) == days
+    assert dcc.get_time_fraction(start, end, 360, termination_date=termination) == (
+        days / 360
+    )
+    if not is_termination:  # without a termination date every end is intermediate
+        assert dcc.get_day_count(start, end) == days
+
+
+def test_30e_isda_keeps_only_the_termination_date_on_the_last_of_february():
+    start = D(2023, 8, 31)
+    ends = [D(2024, 2, 29), D(2024, 8, 31), D(2025, 2, 28)]
+    days = Days30EISDADayCountConvention.get_day_count(
+        start, ends, termination_date=ends[-1]
+    )
+    # 29 Feb 2024 is intermediate (moves to 30), 28 Feb 2025 the termination (kept).
+    assert list(days) == [180, 360, calc360(2023, 8, 30, 2025, 2, 28)]
+    starts = [start, ends[0], ends[1]]
+    assert list(
+        Days30EISDADayCountConvention.get_day_count(
+            starts, ends, termination_date=ends[-1]
+        )
+    ) == [180, 180, calc360(2024, 8, 30, 2025, 2, 28)]
 
 
 # ── Input shapes ────────────────────────────────────────────────────────────

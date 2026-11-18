@@ -145,8 +145,8 @@ def test_future_uf_on_its_last_known_date_is_the_published_level(market):
 
 def test_future_fx_rate_without_the_funding_curve_raises():
     market = build_market()
-    del market.curves["CLF_ICP"]
-    with pytest.raises(KeyError, match="CLF_ICP"):
+    del market.curves[Currency.CLF]
+    with pytest.raises(KeyError, match="CLF under 'ICP'"):
         market.get_future_fx_rate(FUTURE, CLFCLP)
 
 

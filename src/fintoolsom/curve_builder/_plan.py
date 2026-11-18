@@ -341,7 +341,7 @@ class _Planner:
                 fixed = _FixedSegments(
                     list(built.knot_dates),
                     [float(f) for f in built.forward_rates],
-                    built.spot_rate if isinstance(curve, Index) else None,
+                    built.spot_rate,
                 )
             elif isinstance(curve, Index):
                 fixed, flat_guess[curve] = self.seeder.index_anchor(curve)

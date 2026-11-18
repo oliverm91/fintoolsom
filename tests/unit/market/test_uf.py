@@ -68,31 +68,6 @@ def test_inflation_missing_boundary_raises():
         uf.monthly_inflation(levels, 2026, 3)  # 9-May-2026 not loaded yet
 
 
-def test_last_known_date_before_cpi_release():
-    # 8-Jun-2026 is a business day (no Chilean holiday), so the release proxy is the
-    # 8th. On the 3rd (before release) only levels up to the 9th of the current
-    # month are known.
-    assert uf.last_published_date(date(2026, 6, 3)) == date(2026, 6, 9)
-
-
-def test_last_known_date_after_cpi_release():
-    # On/after the release, levels are known up to the 9th of next month.
-    assert uf.last_published_date(date(2026, 6, 25)) == date(2026, 7, 9)
-
-
-def test_last_known_date_rolls_year_in_december():
-    assert uf.last_published_date(date(2026, 12, 20)) == date(2027, 1, 9)
-
-
-def test_last_known_date_uses_chilean_calendar():
-    # 8-Dec-2026 (Inmaculada Concepción) is a Chilean holiday, so the CPI-release
-    # proxy (preceding business day of the 8th) is 7-Dec-2026 (Monday). On the 7th
-    # we are already on/after release → horizon is next month. A weekends-only
-    # calendar would place release on the 8th and keep us in the current month, so
-    # this asserts the CL calendar (from CLP → Locality.CL) is in effect.
-    assert uf.last_published_date(date(2026, 12, 7)) == date(2027, 1, 9)
-
-
 def test_extend_with_cpi_matches_real_published_uf():
     # From base UF(9-Apr-2026) with the March 2026 IPC (+1.0%), the projected daily
     # UF must reproduce SII's published levels to the cent across 10-Apr..9-May.

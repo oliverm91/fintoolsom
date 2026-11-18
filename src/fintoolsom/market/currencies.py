@@ -243,6 +243,24 @@ class FX_Rate:
 class FX_RateData:
     currency_pair: CurrencyPair
     historic_data: dict[date, FX_Rate]
+    # (number of dates, last date inserted, latest date) when `latest_date` last ran.
+    _latest: tuple | None = field(default=None, init=False, repr=False, compare=False)
+
+    def latest_date(self) -> date | None:
+        """The latest date of `historic_data`, None when it is empty.
+
+        Cached: it is recomputed when the number of dates or the date inserted last
+        changes, which any addition or removal through `add_date` or directly on
+        `historic_data` does (a dict keeps insertion order).
+        """
+        data = self.historic_data
+        if not data:
+            return None
+        fingerprint = (len(data), next(reversed(data)))
+        cached = self._latest
+        if cached is None or cached[:2] != fingerprint:
+            cached = self._latest = (*fingerprint, max(data))
+        return cached[2]
 
     def __post_init__(self):
         for fxr in self.historic_data.values():

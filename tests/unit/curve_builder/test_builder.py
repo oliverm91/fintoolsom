@@ -19,8 +19,8 @@ from fintoolsom.rates import InterpolationMethod
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.market.quotes import ForwardPriceQuote
-from fintoolsom.rates import IndexCurve
-from tests.factories.curve_factory import discount_curve_from_dfs
+from fintoolsom.rates import PillarCurve
+from tests.factories.curve_factory import curve_from_dfs
 
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
@@ -31,19 +31,22 @@ RISKLESS = OvernightRateIndex(
 )  # funds CLP; USD has its own curve
 
 
-def _index_curve(t: date, d: date, df: float) -> IndexCurve:
+def _index_curve(t: date, d: date, df: float) -> PillarCurve:
     """RISKLESS curve with one segment reaching `df` at `d`."""
     forward = -math.log(df) / ((d - t).days / 365)
-    return IndexCurve(t, RISKLESS, [t, t + (d - t) / 2, d], [forward, forward])
+    return PillarCurve(
+        t,
+        [t, t + (d - t) / 2, d],
+        [forward, forward],
+        InterpolationMethod.PiecewiseConstant,
+    )
 
 
 def _market(t: date, spot: float, usd_df: float, payment_date: date) -> Market:
     market = Market(
         t=t,
         risk_free_index=RISKLESS,
-        curves=[
-            discount_curve_from_dfs(t, Currency.USD, RISKLESS, [payment_date], [usd_df])
-        ],
+        curves={Currency.USD: curve_from_dfs(t, [payment_date], [usd_df])},
     )
     market.add_fx_rate(t, FX_Rate(USDCLP, spot))
     return market
@@ -59,9 +62,7 @@ def _two_forward_case():
     market = Market(
         t=t,
         risk_free_index=RISKLESS,
-        curves=[
-            discount_curve_from_dfs(t, Currency.USD, RISKLESS, _FORWARD_DATES, _USD_DFS)
-        ],
+        curves={Currency.USD: curve_from_dfs(t, _FORWARD_DATES, _USD_DFS)},
     )
     market.add_fx_rate(t, FX_Rate(USDCLP, spot))
     quotes = [
@@ -173,7 +174,7 @@ def test_a_curve_pinned_by_one_quote_raises():
         InsufficientQuotesError, match="OIS would have a single segment"
     ):
         build_curves([quote], market)
-    assert "OIS" not in market.curves
+    assert RISKLESS not in market.curves
 
 
 def test_every_pinning_quote_is_checked_after_the_build():
@@ -188,7 +189,7 @@ def test_a_quote_moved_off_par_after_its_solve_raises():
     builder = _builder(market, quotes)
     builder.build()
     # A later solve moving the curve the forward was fitted on: simulate it.
-    market.set_curve(_index_curve(market.t, date(2024, 7, 2), 0.90))
+    market.set_curve(RISKLESS, _index_curve(market.t, date(2024, 7, 2), 0.90))
     with pytest.raises(RepricingError, match="no longer reprice"):
         builder._check_repricing()
 
@@ -202,7 +203,7 @@ def test_a_build_without_ditched_quotes_does_not_warn():
 
 def test_a_forward_inside_built_curves_is_ditched_with_its_mtm_over_the_base_notional():
     market, quote = _forward_case()
-    market.set_curve(_index_curve(market.t, date(2024, 12, 31), 0.93))
+    market.set_curve(RISKLESS, _index_curve(market.t, date(2024, 12, 31), 0.93))
     builder = _builder(market, [quote])
     with pytest.warns(
         RedundantQuoteWarning, match="ForwardPriceQuote 2024-07-02 USD-CLP: MTM"
@@ -226,16 +227,21 @@ def test_a_forward_inside_built_curves_is_ditched_with_its_mtm_over_the_base_not
 def test_curves_default_to_the_builders_interpolation():
     t = date(2024, 1, 2)
     params = inspect.signature(build_curves).parameters
-    discount = discount_curve_from_dfs(
-        t, Currency.USD, RISKLESS, [date(2025, 1, 2)], [0.95]
+    discount = curve_from_dfs(
+        t,
+        [date(2025, 1, 2)],
+        [0.95],
     )
     assert (
         discount.interpolation_method
         is params["interp_method"].default
         is InterpolationMethod.PiecewiseConstant
     )
-    index = IndexCurve(
-        t, RISKLESS, [t, date(2024, 7, 2), date(2025, 1, 2)], [0.05, 0.05]
+    index = PillarCurve(
+        t,
+        [t, date(2024, 7, 2), date(2025, 1, 2)],
+        [0.05, 0.05],
+        InterpolationMethod.PiecewiseConstant,
     )
     assert (
         index.interpolation_method

@@ -15,7 +15,7 @@ bootstrapping, CSA-aware derivatives valuation, Chilean bonds. Meant for persona
 | Package | Contents |
 |---|---|
 | [`dates`](src/fintoolsom/dates/README.md) | Calendars, holiday rules, business-day adjustments, day counts, tenors, schedules |
-| [`rates`](src/fintoolsom/rates/README.md) | `Rate` and conventions; `IndexCurve` (forwards) and `DiscountCurve` (discount factors) |
+| [`rates`](src/fintoolsom/rates/README.md) | `Rate` and conventions; `PillarCurve` (forwards between dates), whose `Market` key gives its role |
 | [`market`](src/fintoolsom/market/README.md) | Currencies, FX, indexes and fixings, the UF, quotes, volatility surfaces, `Market` |
 | [`curve_builder`](src/fintoolsom/curve_builder/README.md) | `build_curves`: bootstraps every index and discount curve from quotes |
 | [`derivatives`](src/fintoolsom/derivatives/README.md) | FX forwards and NDFs, swaps (IRS, OIS, basis, cross-currency, UF), FX options; `Calculator` |
@@ -55,28 +55,29 @@ bond.get_irr_from_amount(t, 360_000_000)   # Rate of 6.1498%
 ### Derivatives
 
 A market with given curves (curve building is also included, detailed [below](#curve-building)).
-ICP is the risk-free index: CLP discounts on `"ICP"`, USD on `"USD_ICP"`
+ICP is the risk-free index: CLP discounts on the `icp` curve, USD on the `Currency.USD` one
 ([`market`](src/fintoolsom/market/README.md), [`rates`](src/fintoolsom/rates/README.md)).
 
 ```python
 from datetime import date
 from fintoolsom.market import Currency, CurrencyPair, Market, OvernightInterestPriceIndex, OvernightRateIndex
 from fintoolsom.market.currencies import FX_Rate, FX_RateData
-from fintoolsom.rates import DiscountCurve, IndexCurve, Rate, RateConvention
+from fintoolsom.rates import InterpolationMethod, PillarCurve, Rate, RateConvention
 
 t, y1, y5, y30 = date(2024, 7, 8), date(2025, 7, 8), date(2029, 7, 9), date(2054, 7, 8)
 icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
 sofr = OvernightRateIndex("SOFR", currency=Currency.USD)
 usdclp = CurrencyPair(Currency.USD, Currency.CLP)
+knots, pc = [t, y1, y5, y30], InterpolationMethod.PiecewiseConstant
 market = Market(
     t,
     risk_free_index=icp,
     fx_history={usdclp: FX_RateData(usdclp, {t: FX_Rate(usdclp, 930.0)})},
-    curves=[  # index curves: one forward per segment; discount curve: one df per pillar
-        IndexCurve(t, icp, [t, y1, y5, y30], [0.055, 0.050, 0.052]),   # "ICP": projects ICP, discounts CLP
-        IndexCurve(t, sofr, [t, y1, y5, y30], [0.050, 0.042, 0.044]),  # "SOFR"
-        DiscountCurve(t, Currency.USD, icp, [y1, y5, y30], [0.9522, 0.8065, 0.2592]),  # "USD_ICP"
-    ],
+    curves={  # the key gives each curve its role
+        icp: PillarCurve(t, knots, [0.055, 0.050, 0.052], pc),           # projects ICP, discounts CLP
+        sofr: PillarCurve(t, knots, [0.050, 0.042, 0.044], pc),          # projects SOFR
+        Currency.USD: PillarCurve(t, knots, [0.049, 0.0415, 0.0454], pc),  # USD under ICP
+    },
 )
 ```
 
@@ -128,21 +129,19 @@ basis, cross-currency swaps and FX forwards ([`curve_builder`](src/fintoolsom/cu
 
 ```python
 from fintoolsom.curve_builder import build_curves
-from fintoolsom.dates import TF_Actual360
 from fintoolsom.market import FixedLegSpec, FloatingLegSpec, IRSQuote, PaymentFrequency, QuotedSide
 
 def clp_ois(years: int, rate: float) -> IRSQuote:
-    leg = dict(currency=Currency.CLP, payment_frequency=PaymentFrequency.SEMIANNUAL, adj_convention=cl,
-               time_fraction=TF_Actual360())
+    leg = dict(currency=Currency.CLP, payment_frequency=PaymentFrequency.SEMIANNUAL, adj_convention=cl)
     return IRSQuote(
         quoted_side=QuotedSide.RECEIVE, term=Term(years, TermUnit.Y, cl), quote_date=t, collateral_index=icp,
         fixed_leg=FixedLegSpec(**leg, rate=Rate(RateConvention(), rate)),
-        floating_leg=FloatingLegSpec(**leg, index=icp, spread=Rate(RateConvention(), 0.0)),
+        floating_leg=FloatingLegSpec(**leg, index=icp, spread=Rate(icp.rate_convention, 0.0)),
     )
 
 quotes = [clp_ois(y, r) for y, r in [(1, 0.055), (2, 0.054), (5, 0.053), (10, 0.054)]]
 built = Market(t, risk_free_index=icp)
-build_curves(quotes, built)        # built.curves == {"ICP": IndexCurve with 4 forward segments}
+build_curves(quotes, built)        # built.curves == {icp: PillarCurve with 4 forward segments}
 max(abs(Calculator.valuate(q.get_instrument(), built, Currency.CLP)) for q in quotes)  # ~1e-13
 built.get_index_curve(icp).get_forward_rate(date(2029, 7, 10), date(2034, 7, 10))    # 5y5y forward
 ```

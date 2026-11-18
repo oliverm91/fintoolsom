@@ -3,13 +3,11 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 
-from fintoolsom.rates import DiscountCurve, IndexCurve, InterpolationMethod
-from fintoolsom.market import Currency
+from fintoolsom.rates import PillarCurve, InterpolationMethod
 from fintoolsom.rates._convex_monotone import (
     _segment_polynomials,
     convex_monotone_forward,
 )
-from tests.factories.quote_factory import ICP, SOFR
 
 T = date(2026, 6, 29)
 METHOD = InterpolationMethod.ConvexMonotone
@@ -61,7 +59,7 @@ AVERAGES = np.array([0.05, 0.02, 0.09, 0.01, 0.07, 0.03, 0.08, 0.04, 0.06])
 
 def _index_curve(days, averages):
     knots = [T, *(T + timedelta(days=d) for d in days)]
-    return IndexCurve(T, SOFR, knots, averages, None, METHOD)
+    return PillarCurve(T, knots, averages, METHOD)
 
 
 @pytest.mark.parametrize("case", QUANTLIB)
@@ -77,7 +75,7 @@ def test_discount_factors_match_quantlib(case):
 def test_the_method_works_on_a_discount_curve():
     days, averages, expected = QUANTLIB["hump"]
     knots = [T, *(T + timedelta(days=d) for d in days)]
-    curve = DiscountCurve(T, Currency.USD, ICP, knots, averages, METHOD)
+    curve = PillarCurve(T, knots, averages, METHOD)
     dates = [T + timedelta(days=d) for d in expected]
     np.testing.assert_allclose(
         curve.get_dfs(dates), list(expected.values()), atol=1e-11

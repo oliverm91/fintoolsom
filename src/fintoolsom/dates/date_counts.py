@@ -54,8 +54,16 @@ class DayCountConventionBase(ABC):
 
     @classmethod
     def get_day_count(
-        cls, start_date: date | list[date], end_date: date | list[date]
+        cls,
+        start_date: date | list[date],
+        end_date: date | list[date],
+        termination_date: date | None = None,
     ) -> int | np.ndarray:
+        """Days from `start_date` to `end_date` (either may be a list).
+
+        `termination_date`, the last date of the schedule, is read only by
+        conventions with a rule for it (30E/360 ISDA); the others ignore it.
+        """
         try:
             return cls._method_mapper[(type(start_date), type(end_date))](
                 cls, start_date, end_date
@@ -71,8 +79,14 @@ class DayCountConventionBase(ABC):
         start_date: date | list[date],
         end_date: date | list[date],
         time_fraction_base: int,
+        termination_date: date | None = None,
     ) -> float | np.ndarray:
-        days = cls.get_day_count(start_date, end_date)
+        if termination_date is None:
+            days = cls.get_day_count(start_date, end_date)
+        else:
+            days = cls.get_day_count(
+                start_date, end_date, termination_date=termination_date
+            )
         return days / time_fraction_base
 
     @abstractmethod
@@ -167,20 +181,77 @@ class Days30EDayCountConvention(DayCountConventionBase):
         return "30e"
 
 
+def _is_last_of_february(d: date) -> bool:
+    return d.month == 2 and d.day == calendar.monthrange(d.year, 2)[1]
+
+
+def _d1_d2_30e_360_isda(
+    start_date: date, end_date: date, is_termination: bool = False
+) -> tuple[int, int]:
+    """D1 and D2 of 30E/360 ISDA (2006 ISDA Definitions 4.16(h)).
+
+    D1 is 30 when the start is the 31st or the last day of February. D2 is 30 when
+    the end is the 31st, or the last day of February unless it is the termination
+    date (`is_termination`).
+    """
+    d1, d2 = start_date.day, end_date.day
+    if d1 == 31 or _is_last_of_february(start_date):
+        d1 = 30
+    if d2 == 31 or (not is_termination and _is_last_of_february(end_date)):
+        d2 = 30
+    return d1, d2
+
+
+def _days_30e_360_isda(
+    start_date: date, end_date: date, is_termination: bool = False
+) -> int:
+    """30E/360 ISDA day count; the one rule behind both 30E/360 ISDA classes."""
+    d1, d2 = _d1_d2_30e_360_isda(start_date, end_date, is_termination)
+    return (
+        360 * (end_date.year - start_date.year)
+        + 30 * (end_date.month - start_date.month)
+        + (d2 - d1)
+    )
+
+
+class _ISDAToTermination:
+    """Stands in for the class in the shape dispatchers, with the termination bound."""
+
+    __slots__ = ("termination_date",)
+
+    def __init__(self, termination_date: date):
+        self.termination_date = termination_date
+
+    def _get_day_count(self, start_date: date, end_date: date) -> int:
+        return _days_30e_360_isda(
+            start_date, end_date, end_date == self.termination_date
+        )
+
+
 class Days30EISDADayCountConvention(DayCountConventionBase):
+    """30E/360 ISDA (2006 ISDA Definitions 4.16(h)).
+
+    A start or an end on the 31st or on the last day of February counts as the 30th,
+    except an end on the last day of February that is the termination date. Pass
+    `termination_date` to `get_day_count` / `get_time_fraction` (legs pass their last
+    end date): without it every end date is taken as an intermediate one.
+    """
+
     @staticmethod
     def _get_day_count(start_date: date, end_date: date) -> int:
-        d1, d2 = start_date.day, end_date.day
-        m1, m2 = start_date.month, end_date.month
-        y1, y2 = start_date.year, end_date.year
-        start_date_month_end_day = calendar.monthrange(y1, m1)[1]
-        end_date_month_end_day = calendar.monthrange(y2, m2)[1]
-        if d1 == start_date_month_end_day:
-            d1 = 30
-        if d2 == end_date_month_end_day and m2 != 2:
-            d2 = 30
-        count = 360 * (y2 - y1) + 30 * (m2 - m1) + (d2 - d1)
-        return count
+        return _days_30e_360_isda(start_date, end_date)
+
+    @classmethod
+    def get_day_count(
+        cls,
+        start_date: date | list[date],
+        end_date: date | list[date],
+        termination_date: date | None = None,
+    ) -> int | np.ndarray:
+        method = cls._method_mapper.get((type(start_date), type(end_date)))
+        if termination_date is None or method is None:
+            return super().get_day_count(start_date, end_date)
+        return method(_ISDAToTermination(termination_date), start_date, end_date)
 
     @staticmethod
     def _strfy():

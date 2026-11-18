@@ -149,7 +149,7 @@ def test_missing_market_data_raises_the_calculator_error(what):
     if what == "curves":
         market.curves.clear()
     elif what == "usd curve":
-        market.curves.pop(next(k for k in market.curves if k.startswith("USD_")))
+        market.curves.pop(Currency.USD)
     else:
         for data in market.fx_history.values():
             data.historic_data.pop(VAL_DATE, None)

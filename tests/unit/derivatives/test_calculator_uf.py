@@ -11,14 +11,14 @@ from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.market import Currency, Market, OvernightRateIndex, uf
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.rates import (
-    DiscountCurve,
-    IndexCurve,
+    InterpolationMethod,
+    PillarCurve,
     Rate,
     RateConvention,
     LinearInterestConvention,
 )
 from fintoolsom.dates import ActualDayCountConvention
-from tests.factories.curve_factory import discount_curve_from_dfs
+from tests.factories.curve_factory import curve_from_dfs
 
 
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
@@ -47,22 +47,18 @@ def uf_level(d: date) -> float:
     return UF_T * 1.0001 ** (d - T).days
 
 
-def _flat_curve(
-    rate: float, currency: Currency | None = None
-) -> IndexCurve | DiscountCurve:
+def _flat_curve(rate: float, currency: Currency | None = None) -> PillarCurve:
     """Flat continuous zero rate: the risk-free index curve, or `currency`'s discount curve."""
     if currency is None:
-        return IndexCurve(
+        return PillarCurve(
             T,
-            RISKLESS,
             [T, T + timedelta(days=30), T + timedelta(days=1825)],
             [rate, rate],
+            InterpolationMethod.PiecewiseConstant,
         )
     pillars = [T + timedelta(days=d) for d in (1, 7, 30, 91, 365, 730, 1825)]
-    return discount_curve_from_dfs(
+    return curve_from_dfs(
         T,
-        currency,
-        RISKLESS,
         pillars,
         [math.exp(-rate * (d - T).days / 365) for d in pillars],
     )
@@ -77,7 +73,7 @@ def _market() -> Market:
     return Market(
         t=T,
         risk_free_index=RISKLESS,
-        curves=[_flat_curve(R_CLP), _flat_curve(R_CLF, CLF)],
+        curves={RISKLESS: _flat_curve(R_CLP), CLF: _flat_curve(R_CLF, CLF)},
         fx_history={CLFCLP: uf.uf_rate_data(levels)},
     )
 
@@ -109,7 +105,7 @@ def test_uf_fixings_inside_the_known_window_are_read_and_later_ones_projected():
 
 def test_traded_pair_projection_still_starts_from_spot():
     market = _market()
-    market.set_curve(_flat_curve(0.05, USD))
+    market.set_curve(USD, _flat_curve(0.05, USD))
     market.add_fx_rate(T, FX_Rate(CurrencyPair(USD, CLP), 950.0))
     d = T + timedelta(days=30)
     fx = Calculator.get_fx_fixings(USD, CLP, [d], market)[0]

@@ -393,29 +393,41 @@ class OvernightInterestPriceHistory(OvernightHistory, InterestPriceHistory):
         uniformly across the gap.
         """
         sorted_known = sorted(self.values)
-        for i in range(len(sorted_known) - 1):
-            t_start = sorted_known[i]
-            t_end = sorted_known[i + 1]
-            days_total = (t_end - t_start).days
-            ratio = self.values[t_end] / self.values[t_start]
-            t = self.index.get_maturity(
-                t_start
-            )  # next business day (overnight accrual step)
-            while t < t_end:
-                if t not in self.values:
-                    days_elapsed = (t - t_start).days
-                    self.values[t] = self.values[t_start] * ratio ** (
-                        days_elapsed / days_total
+        for t_start, t_end in zip(sorted_known, sorted_known[1:]):
+            self._fill_between(t_start, t_end, verbose)
+
+    def _fill_between(self, t_start: date, t_end: date, verbose: bool = False):
+        """Fill the missing business days strictly between two known levels."""
+        values = self.values
+        days_total = (t_end - t_start).days
+        ratio = values[t_end] / values[t_start]
+        t = self.index.get_maturity(
+            t_start
+        )  # next business day (overnight accrual step)
+        while t < t_end:
+            if t not in values:
+                days_elapsed = (t - t_start).days
+                values[t] = values[t_start] * ratio ** (days_elapsed / days_total)
+                if verbose:
+                    warnings.warn(
+                        f"{self.name}: no value for {t}, filled by interpolation."
                     )
-                    if verbose:
-                        warnings.warn(
-                            f"{self.name}: no value for {t}, filled by interpolation."
-                        )
-                t = self.index.get_maturity(t)
+            t = self.index.get_maturity(t)
 
     def add_value(self, t: date, value: float):
-        self.values[t] = value
-        self._check_for_gaps()
+        """Set the level at `t`, filling only the business days it newly bounds.
+
+        After the last level (or before the first) the business days in between are
+        filled by geometric interpolation, as on construction. Inside the history no
+        business day is missing, so nothing else changes.
+        """
+        values = self.values
+        first, last = min(values), max(values)
+        values[t] = value
+        if t > last:
+            self._fill_between(last, t)
+        elif t < first:
+            self._fill_between(t, first)
 
     def get_accrued_interest(
         self, notional: float, start_date: date, end_date: date

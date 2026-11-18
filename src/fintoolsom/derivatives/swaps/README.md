@@ -34,8 +34,10 @@ All of them take these parameters:
 | `maturity_date` | Keyword-only. Explicit maturity that overrides `term` |
 | `fx_fixing_lag` | Keyword-only, default `0`. Business days between each FX fixing and its payment, for a non-deliverable leg in another currency |
 
-Floating builders also take `index` and an optional `spread`, which is zero when
-omitted.
+Floating builders also take `index` and an optional `spread`. When omitted, it is zero
+and linear in the index's day count and base (`index.rate_convention`, linear Act/360
+unless the index sets another). A spread you pass accrues in its own `Rate`'s convention:
+build market spreads, which are simple, as linear in the index's basis.
 
 A 2Y CLP swap, receiving fixed against ICP:
 
@@ -109,7 +111,7 @@ amortizations = [2.5e8, 2.5e8, 5e8]
 periods = list(zip(dates[:-1], dates[1:], residuals, amortizations))
 
 fixed_rate = Rate(RateConvention(), 0.052)
-zero = Rate(RateConvention(), 0.0)
+zero = Rate(icp.rate_convention, 0.0)  # simple, in the index's basis
 
 custom_fixed = FixedLeg(
     coupons=[FixedCoupon(res, amort, s, e, e, rate=fixed_rate) for s, e, res, amort in periods],

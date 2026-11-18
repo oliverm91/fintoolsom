@@ -28,6 +28,8 @@ from tests.factories.quote_factory import (
     load_quotes,
     par_quotes,
     quote_mtm,
+    term_basis_quotes,
+    term_irs_quotes,
     term_market,
 )
 
@@ -226,12 +228,31 @@ def test_curves_partly_built_early_are_not_read_before_complete(cycle, merges):
     assert merges == [2]
 
 
-def test_quote_order_does_not_change_the_cycle_build(cycle):
-    shuffled = list(cycle)
+def _term_quotes_first():
+    # Term quotes first: their groups must wait for the SOFR curve they are
+    # collateralised in, although they give it no pillar.
+    real = load_quotes()
+    irs = term_irs_quotes(real)
+    basis = term_basis_quotes(irs)
+    return real + irs + basis, basis + irs + real
+
+
+def _shuffled_cycle():
+    quotes = _stress(ois_collateral=None)
+    shuffled = list(quotes)
     random.Random(11).shuffle(shuffled)
-    a, b = _build(cycle), _build(shuffled)
+    return quotes, shuffled
+
+
+@pytest.mark.parametrize(
+    "orders", [_term_quotes_first, _shuffled_cycle], ids=["term-first", "cycle"]
+)
+def test_quote_order_does_not_change_the_curves(orders):
+    quotes, reordered = orders()
+    a, b = _build(quotes), _build(reordered)
     assert set(a.curves) == set(b.curves)
     for key, curve in a.curves.items():
+        assert b.curves[key].knot_dates == curve.knot_dates
         dates = list(curve.knot_dates)
         assert curve.get_dfs(dates) == pytest.approx(
             b.curves[key].get_dfs(dates), rel=1e-9

@@ -101,30 +101,25 @@ def test_sweeps_above_sweep_tol_go_to_the_joint_solve(monkeypatch):
     assert max(roots) > 3  # a joint solve, not a sweep block
 
 
-class _FlatCalculator:
-    """Every MTM the builder checks is `mtm` (the solve itself values elsewhere)."""
+def _flat_pinned_mtms(monkeypatch, mtm):
+    """Every MTM the repricing check reads is `mtm` (the solve itself is untouched)."""
+    from fintoolsom.curve_builder import builder
 
-    def __init__(self, mtm):
-        self.mtm = mtm
-
-    def valuate(self, instrument, market, currency):
-        return self.mtm
+    monkeypatch.setattr(
+        builder._CurveBuilder, "_pinned_mtms", lambda self: [mtm] * len(self._pinning)
+    )
 
 
 def test_a_group_whose_quotes_add_up_past_group_tol_raises(monkeypatch):
     """Each quote within reprice_tol, a group of three or more past group_tol = 1."""
-    from fintoolsom.curve_builder import builder
-
-    monkeypatch.setattr(builder, "Calculator", _FlatCalculator(0.4))
+    _flat_pinned_mtms(monkeypatch, 0.4)
     with pytest.raises(RepricingError, match=r"group\(s\).*above group_tol = 1\."):
         _build(reprice_tol=0.5)
     _build(reprice_tol=0.5, group_tol=1e6)  # loose enough: builds
 
 
 def test_reprice_tol_is_checked_before_group_tol(monkeypatch):
-    from fintoolsom.curve_builder import builder
-
-    monkeypatch.setattr(builder, "Calculator", _FlatCalculator(0.4))
+    _flat_pinned_mtms(monkeypatch, 0.4)
     with pytest.raises(RepricingError, match="no longer reprice"):
         _build(reprice_tol=0.3, group_tol=1e-300)
 
@@ -140,6 +135,8 @@ def test_the_fitted_quotes_reprice_well_within_the_defaults():
     mtms = [abs(Calculator.valuate(i, market, c)) for i, c in cb._pinning]
     assert len(mtms) == len(cb._pinned_groups) > 0
     assert max(mtms) < 1e-8  # the defaults leave a wide margin
+    # The check reads the solver's batches: the same MTMs, to the bit.
+    assert [abs(v) for v in cb._pinned_mtms()] == mtms
 
 
 @pytest.mark.parametrize("name", ["reprice_tol", "sweep_tol", "group_tol"])

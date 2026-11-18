@@ -1,6 +1,5 @@
 import pytest
 from fintoolsom.curve_builder._keys import _curves_needed, _get_maturity
-from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import Currency
@@ -36,7 +35,6 @@ def _fixed_spec(ccy: Currency) -> FixedLegSpec:
         currency=ccy,
         payment_frequency=PaymentFrequency.QUARTERLY,
         adj_convention=ADJ_CLP,
-        time_fraction=TF_Actual360,
         rate=_rate(0.055),
     )
 
@@ -46,7 +44,6 @@ def _float_spec(index) -> FloatingLegSpec:
         currency=index.currency,
         payment_frequency=PaymentFrequency.QUARTERLY,
         adj_convention=ADJ_CLP,
-        time_fraction=TF_Actual360,
         index=index,
         spread=SPREAD,
     )

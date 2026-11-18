@@ -58,6 +58,9 @@ class FixedCoupon(SwapCoupon):
     ----------
     rate : Rate
         Fixed rate accrued over ``[start_date, end_date]``.
+    termination_date : date, optional
+        The leg's last end date, for day counts with a rule for it (30E/360 ISDA
+        keeps an end on the last of February that is the termination date).
 
     Attributes
     ----------
@@ -67,11 +70,12 @@ class FixedCoupon(SwapCoupon):
 
     rate: Rate
     flow: float = field(init=False)
+    termination_date: date | None = field(default=None, kw_only=True)
 
     def __post_init__(self):
         super().__post_init__()
         interest = self.rate.get_accrued_interest(
-            self.residual, self.start_date, self.end_date
+            self.residual, self.start_date, self.end_date, self.termination_date
         )
         self.flow = float(interest) + self.amortization
 

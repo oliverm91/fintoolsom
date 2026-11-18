@@ -2,13 +2,12 @@
 
 :class:`Curve` is the discounting interface every curve implements. Its families are
 :class:`ModelCurve` (parametric, not implemented yet) and
-:class:`~fintoolsom.rates.PillarCurve` (interpolated between dates), with two roles:
+:class:`~fintoolsom.rates.PillarCurve` (forward rates between dates).
 
-* :class:`~fintoolsom.rates.IndexCurve` — the curve of an interest index, stored as
-  forward rates; it discounts and projects that index.
-* :class:`~fintoolsom.rates.DiscountCurve` — the discount curve of a currency that
-  has no index of its own under the market's risk-free index (e.g. USD in Chile
-  under ICP), also stored as forward rates.
+A curve has no role of its own: the :class:`~fintoolsom.market.Market` key it is
+stored under gives it one. Under an ``Index`` it projects that index (and discounts
+the index's currency when the index is the market's risk-free one); under a
+``Currency`` it discounts that currency under the market's risk-free index.
 
 Time is measured in Act/365 year fractions from the curve date; forward and zero
 rates are continuously compounded on that basis unless a ``RateConvention`` is given.
@@ -67,9 +66,9 @@ def year_fractions(curve_date: date, dates: Sequence[date]) -> np.ndarray:
 class Curve(ABC):
     """A discount curve: maps a date to a discount factor from ``curve_date``.
 
-    Subclasses implement the dfs, their id in the market, their last pillar and a
-    bumped copy; everything else (forward dfs, wealth factors, zero and forward
-    rates) derives from the dfs here.
+    Subclasses implement the dfs, their last pillar and a bumped copy; everything
+    else (forward dfs, wealth factors, accruals, zero and forward rates) derives from
+    the dfs here.
 
     Attributes
     ----------
@@ -80,10 +79,6 @@ class Curve(ABC):
     curve_date: date
 
     # ── Required ─────────────────────────────────────────────────────────────
-
-    @abstractmethod
-    def get_id(self) -> str:
-        """Key of the curve in :attr:`Market.curves`."""
 
     @abstractmethod
     def get_dfs(self, dates: Sequence[date]) -> np.ndarray:
@@ -154,6 +149,14 @@ class Curve(ABC):
         if isinstance(start, date) and isinstance(end, date):
             return 1.0 / self.get_df_fwd(start, end)
         return 1.0 / self.get_dfs_fwds(list(start), list(end))  # type: ignore[arg-type]
+
+    def get_accrual(self, start: DateArg, end: DateArg) -> float | np.ndarray:
+        """Interest per unit notional over ``[start, end]``: wealth factor - 1."""
+        return self.get_wealth_factor(start, end) - 1
+
+    def _accrual_at_ordinals(self, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
+        """:meth:`get_accrual` for aligned dates already held as integer ordinals."""
+        return 1.0 / (self._dfs_at_ordinals(ends) / self._dfs_at_ordinals(starts)) - 1
 
     def get_zero_rate(
         self, d: date, rate_convention: RateConvention | None = None

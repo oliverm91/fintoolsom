@@ -3,8 +3,8 @@ from datetime import date, timedelta
 import pytest
 from fintoolsom.market import Currency, Market, OvernightRateIndex, uf
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
-from fintoolsom.rates import DiscountCurve, IndexCurve
-from tests.factories.curve_factory import discount_curve_from_dfs
+from fintoolsom.rates import PillarCurve, InterpolationMethod
+from tests.factories.curve_factory import curve_from_dfs
 
 
 CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
@@ -33,22 +33,18 @@ def uf_level(d: date) -> float:
     return UF_T * 1.0001 ** (d - T).days
 
 
-def _flat_curve(
-    rate: float, currency: Currency | None = None
-) -> IndexCurve | DiscountCurve:
+def _flat_curve(rate: float, currency: Currency | None = None) -> PillarCurve:
     """Flat continuous zero rate: the risk-free index curve, or `currency`'s discount curve."""
     if currency is None:
-        return IndexCurve(
+        return PillarCurve(
             T,
-            RISKLESS,
             [T, T + timedelta(days=30), T + timedelta(days=1825)],
             [rate, rate],
+            InterpolationMethod.PiecewiseConstant,
         )
     pillars = [T + timedelta(days=d) for d in (1, 7, 30, 91, 365, 730, 1825)]
-    return discount_curve_from_dfs(
+    return curve_from_dfs(
         T,
-        currency,
-        RISKLESS,
         pillars,
         [math.exp(-rate * (d - T).days / 365) for d in pillars],
     )
@@ -63,7 +59,7 @@ def _market() -> Market:
     return Market(
         t=T,
         risk_free_index=RISKLESS,
-        curves=[_flat_curve(R_CLP), _flat_curve(R_CLF, CLF)],
+        curves={RISKLESS: _flat_curve(R_CLP), CLF: _flat_curve(R_CLF, CLF)},
         fx_history={CLFCLP: uf.uf_rate_data(levels)},
     )
 
@@ -82,6 +78,19 @@ def test_clf_rates_can_be_added_like_any_fx_rate():
     market.add_fx_rate(KNOWN_UNTIL + timedelta(days=1), FX_Rate(CLFCLP, 40_000.0))
     assert market.get_fx_rate(KNOWN_UNTIL + timedelta(days=1), CLFCLP).value == 40_000.0
     assert market.get_fx_known_until(CLFCLP) == KNOWN_UNTIL + timedelta(days=1)
+
+
+def test_fx_known_until_follows_dates_set_or_deleted_on_the_history_directly():
+    market = _market()
+    history = market.fx_history[CLFCLP].historic_data
+    assert market.get_fx_known_until(CLFCLP) == KNOWN_UNTIL
+    later = KNOWN_UNTIL + timedelta(days=5)
+    history[later] = FX_Rate(CLFCLP, 40_000.0)
+    assert market.get_fx_known_until(CLFCLP) == later
+    del history[later]
+    assert market.get_fx_known_until(CLFCLP) == KNOWN_UNTIL
+    del history[KNOWN_UNTIL]  # the newest date itself
+    assert market.get_fx_known_until(CLFCLP) == KNOWN_UNTIL - timedelta(days=1)
 
 
 def test_fx_known_until_is_the_latest_loaded_date_not_before_today():

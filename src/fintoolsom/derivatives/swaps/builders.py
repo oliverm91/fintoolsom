@@ -112,7 +112,8 @@ def term_rate_leg(
     index : InterestIndex
         Term-rate index; its currency is the leg currency.
     spread : Rate, optional
-        Spread over the index; zero when omitted.
+        Spread over the index. When omitted, zero and linear in the index's day
+        count and base (``index.rate_convention``).
     fixing_lag : int, optional
         Business days between each rate fixing and its accrual start; defaults to
         the index ``spot_lag``.
@@ -164,7 +165,8 @@ def overnight_leg(
     index : InterestIndex
         Overnight rate or interest price index; its currency is the leg currency.
     spread : Rate, optional
-        Spread over the index; zero when omitted.
+        Spread over the index. When omitted, zero and linear in the index's day
+        count and base (``index.rate_convention``).
     stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
@@ -212,7 +214,8 @@ def xccy_floating_leg(
     index : InterestIndex
         Overnight index; its currency is the leg currency.
     spread : Rate, optional
-        Spread over the index; zero when omitted.
+        Spread over the index. When omitted, zero and linear in the index's day
+        count and base (``index.rate_convention``).
     stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
         See the module docstring.
 
@@ -265,7 +268,8 @@ def floating_leg(
     index : InterestIndex
         Floating index; its currency is the leg currency.
     spread : Rate, optional
-        Spread over the index; zero when omitted.
+        Spread over the index. When omitted, zero and linear in the index's day
+        count and base (``index.rate_convention``).
     cross_currency : bool, default False
         Build an :class:`XCCYFloatingLeg` for an overnight index.
     stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag

@@ -1,9 +1,48 @@
-## v1.0.0b16 (Unreleased)
+## v1.0.0b17 (Unreleased)
+
+### BREAKING CHANGE
+
+- **rates**: `IndexCurve` and `DiscountCurve` are replaced by one class, `PillarCurve(curve_date, knot_dates, forward_rates, interpolation_method, spot_rate=None)`. A curve no longer carries an identity (`index`, `currency`, `risk_free_index`) and `get_id()` is removed: the `Market` key gives it its role. `interpolation_method` has no default. The optional `spot_rate` (from `IndexCurve`) discounts from the curve date to a later first knot, so the builder's index curves keep their effective-date start; without it the first forward is extended back, and the first knot no longer has to be the curve date. `PillarCurve.from_dfs` and `from_zero_rates` build a curve from pillars. `get_accrual` moves to `Curve`.
+- **market**: `Market.curves` is keyed by `Index` (projects that index; the risk-free index's curve also discounts its currency) or `Currency` (discounts it under `risk_free_index`) instead of id strings (`"ICP"`, `"USD_ICP"`). `Market(curves=...)` takes that dict, no longer a list; `set_curve(key, curve)` takes the key and rejects other key types and the risk-free index's currency. `get_discount_curve`, `get_dfs` and `get_df` drop `risk_free_index=`: a market has one numeraire.
+
+### Feat
+
+- **market**: `Market.get_accrual(index, start, end)` projects an index over one period or aligned periods (its curve's wealth factor - 1); the calculator projects floating legs through it instead of fetching the index curve.
+
+## v1.0.0b16
+
+### BREAKING CHANGE
+
+- **market**: `LegSpec.time_fraction` is removed. It was never read: fixed coupons and spreads accrue in the day count of their `Rate`, so a `time_fraction` other than the rate's was silently ignored. `FixedLegSpec` and `FloatingLegSpec` take `(currency, payment_frequency, adj_convention, rate | index, spread)`; a call that still passes a time fraction positionally raises `TypeError`.
+- **market**: `Locality.EU` is `"XECB"` (the TARGET2 calendar of `holidays.financial_holidays`) instead of `"DE"` (German public holidays). EUR dates (ESTR, EURIBOR, EUR legs) now roll on TARGET2: 2025-05-29 (Ascension), 2025-06-09 (Whit Monday) and 2025-10-03 are business days.
+- **dates**: `Days30EISDADayCountConvention` follows 2006 ISDA 4.16(h): an end date on the last day of February counts as day 30 unless it is the termination date. Before, it never adjusted it, while `TF_30E_360ISDA` always did; both now share one implementation. Pass `termination_date` to `get_day_count` / `get_time_fraction` (or `TF_30E_360ISDA(termination_date=...)`) to keep the actual day on a final February end. 31 Jan -> 29 Feb 2024 is 29 days on the termination date and 30 otherwise.
+- **models**: `NelsonSiegelSvensson.lambda_` and `mu_` are the years to the first and second hump: each curvature loading is h(x) = (1 - e^-x)/x - e^-x at x = `HUMP_PEAK` * t / hump, which peaks at t = hump (`HUMP_PEAK` = 1.7933 solves x^2 + x + 1 = e^x). Before, the first hump used x = t / `lambda_` (peak at 1.79 * `lambda_` years) and the second x = `mu_` * t, a decay rate: with the bounds (2, 20) the second hump could only sit at 0.09-0.9 years, never at the long end. The bounds (0.5-3 and 2-20 years) and the starting humps (2 and 5 years) now mean what their comments say; a fresh model starts at `lambda_` = 2, `mu_` = 5 instead of 0.5 and 0.2. Fitted or stored `lambda_` / `mu_` values change meaning: refit them. A curve with humps at 1.5 and 12 years is now recovered (`lambda_` 1.499, `mu_` 11.998, rates within 2e-7) instead of ending on the bounds 8bp off.
+
+### Feat
+
+- **market**: `RateIndex` (`OvernightRateIndex`, `TermRateIndex`) takes a keyword-only `rate_convention`, the convention its rates are quoted in (linear Act/360 by default, as `InterestPriceIndex` already had), so every interest index carries one. It is not part of the index identity: indexes stay equal by name.
+- **dates**: `Calendar` accepts the market codes of `holidays.financial_holidays` (`"XECB"`, `"XNYS"`, ...) besides country codes, and combines them with country calendars. `get_joint_calendar(*codes)` returns one cached combined calendar per tuple of codes.
+- **rates**: day counts, `Rate.get_wealth_factor`, `get_discount_factor` and `get_accrued_interest` take an optional `termination_date`, which only 30E/360 ISDA reads. `FixedCoupon.termination_date` (keyword-only) passes it; `FixedLeg.from_term` and the floating legs' spreads set it to the last end date of the leg.
 
 ### Fix
 
+- **market**: IRS, basis and cross-currency quotes (`_SwapQuote`) default `adj_convention` to modified following on the calendar of `locality` when given, else of the legs' currencies (joint for cross-currency), instead of a weekends-only calendar. `locality` was stored but never used. A forward quote's payment lag without a term moves on the pair's joint calendar. T+2 from 2026-09-17 for a CLP IRS is now 2026-09-22 (Fiestas Patrias), not 09-21; an explicit `adj_convention` is kept as given.
+- **swaps**: a floating leg built without a spread (the builders and `from_term` with `spread=None`) gets a zero spread that is linear in the index's day count and base (`index.rate_convention`), instead of compounded Act/365. Values do not change, since the spread is zero, but the convention is what anything moving the spread uses: a 1bp bump of a CLP Cámara leg's default spread now accrues `1e-4 * days / 360`, not `1.0001 ** (days / 365) - 1`. An index without a `rate_convention` gets linear Act/360.
+- **fixedIncome**: `Coupons.adjust_to_notional` also scales `interest` and recomputes each `flow` and `Coupons.flows`, and `CLBond` rescales a copy of the coupons instead of the caller's. A bond on coupons in a base other than 100 was valued with unscaled interests: TERA 87934.7 instead of 0.05063 on a 1,000,000 base. `Coupons.copy` keeps `check_residuals`.
+- **fixedIncome**: `CLBond.get_dv01` is the value change for one basis point of the IRR: `-sum(tau * PV) / (1 + y)` for compounded IRRs (the modified duration), `-sum(tau * PV)` for exponential and `-sum(tau * PV / (1 + y * tau))` for linear, scaled to the notional. It used the Macaulay duration for every convention, which overstates a compounded DV01 by a factor 1 + y (5% at y = 5%). A matured bond has a DV01 of 0; other conventions raise `NotImplementedError`.
+- **rates**: `ZeroCouponCurve.get_dfs` writes the results back through the masks of the dates before, inside and after the pillars, so unsorted dates get their own discount factors (`get_dfs([long, short])` gave `[0.888, 0.996]` instead of `[0.823, 0.997]`). It returns a copy of its cached array, so writing into a result no longer changes the curve.
 - **market**: `UFForward.settlement_date` is the 9th of the month `next_n_cpi_settlements` months after `last_known_uf_date(quote_date)`, moved to the preceding business day (`CL` calendar) when it is not one. It was the CPI release date (one business day before the 9th) of `quote_date + n` months, which for a quote on a release day (2026-11-06, n=1) gave 2026-12-07 instead of 2027-01-08. `next_cpi_publication_date` is unchanged; `UFForward` no longer uses it.
 - **dates**: `Calendar.add_custom_holiday` and `add_custom_holidays` record the date in `Calendar.custom_holidays` (once), so `combine` / `+` carries holidays added after construction and the repr counts them. Before, they only reached the underlying holiday calendar and were lost on combine.
+
+### Perf
+
+- **dates**: `Calendar` keeps per-year business-day tables (a business-day flag and a cumulative count per day), so `is_business_day` and `add_business_days` are lookups instead of `holidays` queries stepping one day at a time: `add_business_days(250)` 222 -> 0.50 us, `(2)` 1.69 -> 0.37 us. The tables are rebuilt after `add_custom_holiday`. Loading 743 ICP levels 1.08 -> 0.47 ms, 750 SOFR fixings 2.38 -> 1.18 ms.
+- **market**: `OvernightInterestPriceHistory.add_value` fills only the gap between the new date's neighbours instead of rescanning the history: 298 adds 62.3 -> 1.33 ms, appending one day to 742 1.04 -> 0.02 ms.
+- **market**: `get_rate(use_closest_past_rate=True)` finds the closest past date by bisection on cached sorted keys instead of scanning every date. With the calendar tables, one year of accrual on the closest past rate takes 1.39 -> 0.47 ms on daily fixings and 1.84 -> 0.73 ms on monthly ones.
+- **market**: `FX_RateData` tracks its last date, so `get_fx_known_until` no longer runs `max` over the history on every non-deliverable flow: 73 instruments on 1,101 days of FX history 1.84 -> 1.63 ms.
+- **rates**: a Hermite `ZeroCouponCurve` builds its `PchipInterpolator` once per set of pillars instead of on every `get_dfs`: pricing 39 bonds 4.86 -> 0.63 ms.
+- **curve_builder**: the repricing check after a build reuses the `ValuationBatch` each group compiled for its solve instead of valuing the pinning quotes one by one.
+- **curve_builder**: building the notebook curves (mean of 8 warm builds, the working tree against `HEAD` on the same machine): piecewise-constant 41.3 -> 38.1 ms, cubic spline 69.7 -> 67.6 ms, convex monotone 121.9 -> 119.6 ms; the test quote set 42.6 -> 39.6, 71.0 -> 67.2 and 124.7 -> 121.2 ms. The curves and the quotes' MTMs are bit-identical. A cold first build in a new process is about 5 ms slower (104.9 -> 109.7 ms).
 
 ## v1.0.0b15 (2026-11-16)
 

@@ -262,6 +262,30 @@ def test_overnight_price_history_fills_multi_step_gap():
     assert math.isclose(h.values[D2], expected_d2, rel_tol=1e-9)
 
 
+def test_overnight_price_history_add_value_matches_building_at_once():
+    known = {D0 + timedelta(days=k): 35000.0 * 1.0002**k for k in (0, 7, 15, 16, 30)}
+    at_once = OvernightInterestPriceHistory(index=ICP, values=dict(known))
+    dates = sorted(known)
+    for order in (dates, dates[::-1], dates[2:] + dates[:2]):
+        one_by_one = OvernightInterestPriceHistory(index=ICP, values={order[0]: known[order[0]]})
+        for d in order[1:]:
+            one_by_one.add_value(d, known[d])
+        if order is dates:  # appending reproduces the constructor exactly
+            assert one_by_one.values == at_once.values
+        # every business day between the first and the last level is filled
+        assert set(one_by_one.values) == set(at_once.values)
+
+
+def test_overnight_price_history_add_value_inside_overwrites_only_that_day():
+    h = OvernightInterestPriceHistory(index=ICP, values={D0: 35000.0, D3: 35021.0})
+    before = dict(h.values)
+    h.add_value(D1, 35009.0)
+    assert h.values[D1] == 35009.0
+    assert {d: v for d, v in h.values.items() if d != D1} == {
+        d: v for d, v in before.items() if d != D1
+    }
+
+
 def test_overnight_price_history_accrued_interest():
     h = OvernightInterestPriceHistory(index=ICP, values={D0: 35000.0, D2: 35014.0})
     notional = 1_000_000.0

@@ -5,10 +5,9 @@ from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
-from fintoolsom.dates import ModifiedFollowingConvention, TF_Actual360
+from fintoolsom.dates import ModifiedFollowingConvention
 from fintoolsom.dates.date_counts import ActualDayCountConvention
 from fintoolsom.dates.term import Term, TermUnit
-from fintoolsom.dates.time_fractions import TimeFractionBase
 from fintoolsom.market import (
     Currency,
     CurrencyPair,
@@ -45,10 +44,6 @@ _INDEX: dict[str, RateIndex | InterestPriceIndex] = {
     "ICP": OvernightRateIndex("ICP", currency=Currency.CLP),
 }
 
-_DAY_COUNT: dict[str, TimeFractionBase] = {
-    "TF_Actual360": TF_Actual360(),
-}
-
 _RATE_DC_BASE: dict[str, tuple] = {
     "TF_Actual360": (ActualDayCountConvention, 360),
 }
@@ -78,7 +73,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def _fixed_spec(leg: dict, adj_conv, tf: TimeFractionBase, dc_key: str) -> FixedLegSpec:
+def _fixed_spec(leg: dict, adj_conv, dc_key: str) -> FixedLegSpec:
     dcc, base = _RATE_DC_BASE[dc_key]
     interest_conv = _INTEREST_CONVENTION[leg.get("interest_convention", "Linear")]
     rate_conv = RateConvention(interest_conv, dcc, base)
@@ -86,12 +81,11 @@ def _fixed_spec(leg: dict, adj_conv, tf: TimeFractionBase, dc_key: str) -> Fixed
         currency=_CURRENCY[leg["currency"]],
         payment_frequency=PaymentFrequency[leg["payment_frequency"]],
         adj_convention=adj_conv,
-        time_fraction=tf,
         rate=Rate(rate_conv, leg["rate"]),
     )
 
 
-def _float_spec(leg: dict, adj_conv, tf: TimeFractionBase) -> FloatingLegSpec:
+def _float_spec(leg: dict, adj_conv) -> FloatingLegSpec:
     index = _INDEX[leg["index"]]
     currency_str = leg.get("currency")
     currency = _CURRENCY[currency_str] if currency_str else index.currency
@@ -108,7 +102,6 @@ def _float_spec(leg: dict, adj_conv, tf: TimeFractionBase) -> FloatingLegSpec:
         currency=currency,
         payment_frequency=PaymentFrequency[leg["payment_frequency"]],
         adj_convention=adj_conv,
-        time_fraction=tf,
         index=index,
         spread=spread,
     )
@@ -132,7 +125,6 @@ def build_quotes(
         adj_conv = _build_adj_conv(group["term_adj_convention"], group["term_calendar"])
 
         dc_key: str | None = group.get("day_count_convention")
-        tf: TimeFractionBase | None = _DAY_COUNT[dc_key] if dc_key else None
 
         spot_lag: int = group.get("spot_lag", 2)
         stub_first: bool = group.get("stub_first", True)
@@ -165,8 +157,8 @@ def build_quotes(
                         stub_first=stub_first,
                         long_stub=long_stub,
                         collateral_index=collateral,
-                        fixed_leg=_fixed_spec(fixed_data, adj_conv, tf, dc_key),
-                        floating_leg=_float_spec(float_data, adj_conv, tf),
+                        fixed_leg=_fixed_spec(fixed_data, adj_conv, dc_key),
+                        floating_leg=_float_spec(float_data, adj_conv),
                     )
                 )
 
@@ -185,8 +177,8 @@ def build_quotes(
                         stub_first=stub_first,
                         long_stub=long_stub,
                         collateral_index=collateral,
-                        receive_leg=_float_spec(recv_data, adj_conv, tf),
-                        pay_leg=_float_spec(pay_data, adj_conv, tf),
+                        receive_leg=_float_spec(recv_data, adj_conv),
+                        pay_leg=_float_spec(pay_data, adj_conv),
                     )
                 )
 

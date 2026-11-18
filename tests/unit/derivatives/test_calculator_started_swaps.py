@@ -8,28 +8,34 @@ input data (curves, fixings, ICP levels), never the calculator's own helpers:
   projection [t, end] (term rate: the whole coupon was fixed before t);
 * the running fixed coupon pays its full-period flow, not the part accrued to t.
 
-Legs carry an explicit spread: the builders' default spread is a known bug.
+Legs carry an explicit spread, so the expected flows include its interest.
 """
 
 from dataclasses import replace
 from datetime import date
 from typing import Any
 import pytest
+from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.calculator import Calculator
+from fintoolsom.derivatives.swaps import builders
 from fintoolsom.derivatives.swaps.legs import SwapLeg, TermRateLeg
 from fintoolsom.market import Currency
 from tests.factories.swap_factory import (
+    CAMARA,
     FIXED_RATES,
     FLOAT_INDEXES,
     ICP,
     NOTIONALS,
     SPREAD,
+    TAB_3M,
     VAL_DATE,
     Ccy,
     LegCase,
     LegKind,
     SwapStatus,
+    adj_convention,
     build_leg,
+    build_market,
 )
 
 
@@ -149,3 +155,73 @@ def test_running_floating_coupon_combines_realised_and_projected(case, market):
     assert _pv(_sub_leg(leg, RUNNING, RUNNING + 1), market) == pytest.approx(
         expected, rel=1e-12
     )
+
+
+# ── Regressions: unpaid coupons of started legs ─────────────────────────────
+
+ADJ_CLP = adj_convention(Ccy.CLP)
+
+
+def _clp_leg(builder, index, start=date(2024, 7, 15), years=2, **kw):
+    return builder(
+        notional=1_000.0,
+        start_date=start,
+        term=Term(years, TermUnit.Y, ADJ_CLP),
+        frequency="QUARTERLY",
+        adj_convention=ADJ_CLP,
+        index=index,
+        **kw,
+    )
+
+
+def test_fixed_term_coupon_keeps_its_notional_repayment():
+    market = build_market()
+    # 1Y leg: the last coupon (2024-04-12 → 2024-07-12) fixed before VAL_DATE, unpaid.
+    leg = _clp_leg(
+        builders.term_rate_leg, TAB_3M, start=date(2023, 7, 12), years=1, spread=SPREAD
+    )
+    last = leg.coupons[-1]
+    assert (
+        leg.fixing_dates[-1] < VAL_DATE < last.payment_date
+        and last.amortization == 1_000.0
+    )
+
+    _, flows = Calculator._leg_flows(leg, market)
+    rate = market.get_index(TAB_3M.name).get_rate(leg.fixing_dates[-1]).rate
+    days = (last.end_date - last.start_date).days
+    expected = 1_000.0 * (rate + SPREAD.rate) * days / 360 + 1_000.0
+    assert flows[-1] == pytest.approx(expected, rel=1e-12)
+
+
+@pytest.mark.parametrize("index", [CAMARA, ICP])
+def test_payment_lag_values_both_running_overnight_coupons(index):
+    market = build_market()
+    # Coupon 2024-04-05 → 2024-07-05 pays 2024-07-09 (lag 2): ended, still unpaid at
+    # VAL_DATE, while the next one (2024-07-05 → 2024-10-07) is already accruing.
+    leg = _clp_leg(
+        builders.overnight_leg,
+        index,
+        start=date(2023, 7, 5),
+        spread=SPREAD,
+        payment_lag=2,
+    )
+    ended, accruing = leg.coupons[3], leg.coupons[4]
+    assert ended.end_date < VAL_DATE < ended.payment_date
+    assert accruing.start_date < VAL_DATE < accruing.end_date
+
+    mask, flows = Calculator._leg_flows(leg, market)
+    assert mask[3] and mask[4] and not mask[2]
+    history, curve = market.get_index(index.name), market.get_index_curve(index)
+    spread = SPREAD.get_accrued_interest
+
+    expected_ended = history.get_accrued_interest(
+        1_000.0, ended.start_date, ended.end_date
+    ) + spread(1_000.0, ended.start_date, ended.end_date)
+    realised = history.get_accrued_interest(1_000.0, accruing.start_date, VAL_DATE)
+    expected_accruing = (
+        realised
+        + (1_000.0 + realised) * curve.get_accrual(VAL_DATE, accruing.end_date)
+        + spread(1_000.0, accruing.start_date, accruing.end_date)
+    )
+    assert flows[0] == pytest.approx(expected_ended, rel=1e-12)
+    assert flows[1] == pytest.approx(expected_accruing, rel=1e-12)

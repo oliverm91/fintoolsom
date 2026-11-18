@@ -7,7 +7,7 @@ from typing import cast
 
 import numpy as np
 
-from fintoolsom.rates.Rates import Rate, RateConvention
+from fintoolsom.rates.Rates import LinearInterestConvention, Rate, RateConvention
 
 from .coupons import FixedCoupon, OvernightCoupon, TermRateCoupon, XCCYCoupon
 from ...dates import AdjustmentDateConventionBase, ScheduleGenerator
@@ -26,9 +26,28 @@ _FREQ_TO_TENOR: dict[str, str] = {
 }
 
 
-def _zero_spread() -> Rate:
-    """A fresh zero spread (never share one mutable Rate between legs)."""
-    return Rate(RateConvention(), 0.0)
+def _zero_spread(index: InterestIndex) -> Rate:
+    """The spread of a floating leg built without one: zero, linear in the index's
+    day count and base.
+
+    A spread is added to the index flow, not compounded with it, so it is linear;
+    its basis is the index's own (``index.rate_convention``: linear Act/360 for SOFR
+    or ICP, Act/365 for SONIA if defined so), linear Act/360 for an index without
+    one. The value is zero either way: the convention matters to whatever moves the
+    spread later, such as a 1bp bump. Each call returns a new :class:`Rate`, so legs
+    never share one mutable spread.
+    """
+    convention = getattr(index, "rate_convention", None)
+    if convention is None:
+        return Rate(
+            RateConvention(LinearInterestConvention, time_fraction_base=360), 0.0
+        )
+    basis = RateConvention(
+        LinearInterestConvention,
+        convention.day_count_convention,
+        convention.time_fraction_base,
+    )
+    return Rate(basis, 0.0)
 
 
 @dataclass
@@ -301,6 +320,7 @@ class FixedLeg(SwapLeg):
                 payment_date=pay_dates[i],
                 fx_fixing_date=fx_dates[i],
                 rate=rate,
+                termination_date=schedule[-1],
             )
             for i in range(len(schedule) - 1)
         ]
@@ -351,8 +371,10 @@ class FloatingLeg(SwapLeg):
 
     def __post_init__(self):
         super().__post_init__()
+        termination = self.end_dates[-1] if self.end_dates else None
         self.spreads_values = self.residuals * (
-            self.spread.get_wealth_factor(self.start_dates, self.end_dates) - 1
+            self.spread.get_wealth_factor(self.start_dates, self.end_dates, termination)
+            - 1
         )
         self.fixed_flows = self.spreads_values + self.amortizations
         self._par_eligible = self._repays_at_par()
@@ -443,7 +465,8 @@ class TermRateLeg(FloatingLeg):
         index : InterestIndex
             Term-rate index.
         spread : Rate, optional
-            Spread over the index; zero when omitted.
+            Spread over the index. When omitted, zero and linear in the index's
+            day count and base (see ``InterestIndex``).
         fixing_lag : int, optional
             Business days between each rate fixing and its accrual start;
             defaults to the index ``spot_lag``.
@@ -463,7 +486,7 @@ class TermRateLeg(FloatingLeg):
             long_stub,
             maturity_date,
         )
-        spread = _zero_spread() if spread is None else spread
+        spread = _zero_spread(index) if spread is None else spread
         if fixing_lag is None:
             fixing_lag = getattr(index, "spot_lag", 0)
         calendar = adj_convention.calendar
@@ -523,7 +546,8 @@ class OvernightLeg(FloatingLeg):
         index : InterestIndex
             Overnight rate or interest price index.
         spread : Rate, optional
-            Spread over the index; zero when omitted.
+            Spread over the index. When omitted, zero and linear in the index's
+            day count and base (see ``InterestIndex``).
         stub_first, long_stub, maturity_date, fx_fixing_lag, payment_lag
             As in :meth:`FixedLeg.from_term`.
 
@@ -574,7 +598,7 @@ class OvernightLeg(FloatingLeg):
             long_stub,
             maturity_date,
         )
-        spread = _zero_spread() if spread is None else spread
+        spread = _zero_spread(index) if spread is None else spread
         maturity = max(schedule)
         pay_dates = cls._payment_dates(schedule[1:], adj_convention, payment_lag)
         fx_dates = cls._fx_fixing_dates(pay_dates, adj_convention, fx_fixing_lag)

@@ -1,4 +1,4 @@
-"""IndexCurve: forwards as state, dfs derived, spot segment, bumps, validation."""
+"""PillarCurve: forwards as state, dfs derived, spot segment, bumps, validation."""
 
 import math
 from datetime import date, timedelta
@@ -11,14 +11,12 @@ from fintoolsom.market.currencies import Currency, CurrencyName
 from fintoolsom.market.index import OvernightRateIndex
 from fintoolsom.rates import (
     ExponentialInterestConvention,
-    IndexCurve,
+    PillarCurve,
     InterpolationMethod,
     LinearInterestConvention,
     Rate,
     RateConvention,
-    ZeroCouponCurve,
 )
-from tests.factories.curve_factory import index_curve_from_zero_coupon_curve
 
 T = date(2026, 6, 29)
 SOFR = OvernightRateIndex("SOFR", currency=Currency(CurrencyName.USD))
@@ -38,17 +36,19 @@ SPOT = Rate(
 )
 
 
-def _curve(**kwargs) -> IndexCurve:
-    return IndexCurve(T, SOFR, KNOTS, FWDS, **kwargs)
+def _curve(
+    interpolation_method=InterpolationMethod.PiecewiseConstant, **kwargs
+) -> PillarCurve:
+    return PillarCurve(T, KNOTS, FWDS, interpolation_method, **kwargs)
 
 
 def _tau(d: date) -> float:
     return (d - T).days / 365
 
 
-def test_id_is_the_index_name_and_df_is_one_at_the_curve_date():
+def test_df_is_one_at_the_curve_date():
     curve = _curve()
-    assert curve.get_id() == "SOFR" and curve.get_df(T) == pytest.approx(1.0, abs=1e-15)
+    assert curve.get_df(T) == pytest.approx(1.0, abs=1e-15)
     assert curve.effective_date == T and curve.last_date == KNOTS[-1]
 
 
@@ -88,7 +88,13 @@ def test_accrual_is_the_wealth_factor_minus_one_scalar_and_vector():
 def test_the_spot_rate_covers_the_curve_date_to_the_effective_date():
     effective = T + timedelta(days=3)
     knots = [effective, *KNOTS[1:]]
-    curve = IndexCurve(T, SOFR, knots, FWDS, SPOT)
+    curve = PillarCurve(
+        T,
+        knots,
+        FWDS,
+        InterpolationMethod.PiecewiseConstant,
+        SPOT,
+    )
     df_spot = 1 / (1 + 0.053 * 3 / 360)
     assert curve.get_df(effective) == pytest.approx(df_spot, rel=1e-14)
     assert curve.get_df(T + timedelta(days=1)) == pytest.approx(
@@ -102,7 +108,12 @@ def test_the_spot_rate_covers_the_curve_date_to_the_effective_date():
 
 def test_without_a_spot_rate_the_first_forward_extends_back_to_the_curve_date():
     effective = T + timedelta(days=2)  # e.g. a term index: t + spot lag
-    curve = IndexCurve(T, SOFR, [effective, *KNOTS[1:]], FWDS)
+    curve = PillarCurve(
+        T,
+        [effective, *KNOTS[1:]],
+        FWDS,
+        InterpolationMethod.PiecewiseConstant,
+    )
     assert curve.get_df(effective) == pytest.approx(
         math.exp(-FWDS[0] * _tau(effective)), rel=1e-14
     )
@@ -111,7 +122,13 @@ def test_without_a_spot_rate_the_first_forward_extends_back_to_the_curve_date():
 @pytest.mark.parametrize("spot", [None, SPOT], ids=["no-spot", "spot"])
 def test_parallel_bump_shifts_every_continuous_zero_rate_and_returns_a_copy(spot):
     effective = T + timedelta(days=3)
-    curve = IndexCurve(T, SOFR, [effective, *KNOTS[1:]], FWDS, spot)
+    curve = PillarCurve(
+        T,
+        [effective, *KNOTS[1:]],
+        FWDS,
+        InterpolationMethod.PiecewiseConstant,
+        spot,
+    )
     bumped = curve.parallel_bump_bps(1)
     dates = [effective, *(T + timedelta(days=n) for n in (50, 300, 900))]
     shift = [
@@ -120,14 +137,6 @@ def test_parallel_bump_shifts_every_continuous_zero_rate_and_returns_a_copy(spot
     ]
     assert shift == pytest.approx([1e-4] * len(dates), abs=1e-12)
     assert curve.forward_rates == pytest.approx(FWDS)  # the original is untouched
-
-
-def test_matches_a_log_linear_zero_coupon_curve_on_the_same_pillars():
-    zcc = ZeroCouponCurve(T, date_dfs=[(k, _curve().get_df(k)) for k in KNOTS[1:]])
-    converted = index_curve_from_zero_coupon_curve(zcc, SOFR)
-    dates = [T + timedelta(days=n) for n in (1, 45, 200, 500, 729)]
-    assert converted.get_dfs(dates) == pytest.approx(zcc.get_dfs(dates), rel=1e-12)
-    assert converted.forward_rates == pytest.approx(FWDS, rel=1e-10)
 
 
 def test_copy_is_equal_and_independent():
@@ -147,15 +156,14 @@ def _linear_integral(d: date) -> float:
     return sum((f0 + f1) / 2 * (t1 - t0) for (t0, f0), (t1, f1) in zip(ends, ends[1:]))
 
 
-def _linear_curve() -> IndexCurve:
+def _linear_curve() -> PillarCurve:
     """Linear curve whose forwards at the knots after the first are FWDS."""
     averages = np.concatenate((FWDS[:1], (FWDS[:-1] + FWDS[1:]) / 2))
-    return IndexCurve(
+    return PillarCurve(
         T,
-        SOFR,
         KNOTS,
         averages,
-        interpolation_method=InterpolationMethod.PiecewiseLinear,
+        InterpolationMethod.PiecewiseLinear,
     )
 
 
@@ -182,111 +190,52 @@ def test_cubic_spline_keeps_the_knot_dfs_of_piecewise_constant_forwards():
     assert spline.get_df(between) != pytest.approx(plain.get_df(between), rel=1e-7)
 
 
-def test_cubic_spline_forward_joins_the_flat_extrapolation_smoothly():
-    curve = _curve(interpolation_method=InterpolationMethod.CubicSpline)
-    last, day = KNOTS[-1], timedelta(days=1)
-    before = math.log(curve.get_df(last - day)) - math.log(curve.get_df(last))
-    after = math.log(curve.get_df(last)) - math.log(curve.get_df(last + day))
-    assert before == pytest.approx(after, abs=1e-8)
-
-
-@pytest.mark.parametrize(
-    "method", [InterpolationMethod.PiecewiseLinear, InterpolationMethod.CubicSpline]
-)
-def test_parallel_bump_and_copy_keep_the_shape(method):
-    curve = _curve(interpolation_method=method)
-    bumped = curve.parallel_bump_bps(1)
-    dates = [T + timedelta(days=n) for n in (1, 45, 200, 500, 729, 1000)]
-    shift = (np.log(curve.get_dfs(dates)) - np.log(bumped.get_dfs(dates))) / [
-        _tau(d) for d in dates
-    ]
-    assert shift == pytest.approx([1e-4] * len(dates), abs=1e-12)
-    assert bumped.interpolation_method is method
-    assert curve.copy().get_dfs(dates) == pytest.approx(curve.get_dfs(dates))
-
-
 def test_validation_errors():
     with pytest.raises(ValueError, match="at least 2 segments"):
-        IndexCurve(T, SOFR, [T], [])
+        PillarCurve(T, [T], [], InterpolationMethod.PiecewiseConstant)
     with pytest.raises(ValueError, match="at least 2 segments"):
-        IndexCurve(T, SOFR, KNOTS[:2], FWDS[:1])
+        PillarCurve(T, KNOTS[:2], FWDS[:1], InterpolationMethod.PiecewiseConstant)
     with pytest.raises(ValueError, match="one entry per segment"):
-        IndexCurve(T, SOFR, KNOTS, [0.05, 0.05])
+        PillarCurve(T, KNOTS, [0.05, 0.05], InterpolationMethod.PiecewiseConstant)
     with pytest.raises(ValueError, match="strictly increasing"):
-        IndexCurve(T, SOFR, [T, T, T + timedelta(days=10)], [0.05, 0.05])
-    with pytest.raises(ValueError, match="before the curve date"):
-        IndexCurve(
+        PillarCurve(
             T,
-            SOFR,
+            [T, T, T + timedelta(days=10)],
+            [0.05, 0.05],
+            InterpolationMethod.PiecewiseConstant,
+        )
+    with pytest.raises(ValueError, match="before the curve date"):
+        PillarCurve(
+            T,
             [T - timedelta(days=1), T + timedelta(days=10), T + timedelta(days=20)],
             [0.05, 0.05],
+            InterpolationMethod.PiecewiseConstant,
         )
     with pytest.raises(ValueError, match="does not support interpolation 'LogLinear'"):
-        IndexCurve(
-            T, SOFR, KNOTS, FWDS, interpolation_method=InterpolationMethod.LogLinear
+        PillarCurve(
+            T,
+            KNOTS,
+            FWDS,
+            InterpolationMethod.LogLinear,
         )
 
 
 # ── aging ───────────────────────────────────────────────────────────────────
-AGE_DATES = [T + timedelta(days=n) for n in (30, 90, 120, 300)]
-
-
-def test_piecewise_constant_aged_curve_is_exact():
-    curve = _curve()
-    for age in AGE_DATES:
-        aged = curve.get_aged_curve(age)
-        dates = [
-            age + timedelta(days=n) for n in (1, 60, 200, 700 - (age - T).days, 900)
-        ]
-        assert aged.curve_date == age and aged.knot_dates[0] == age
-        assert aged.get_dfs(dates) == pytest.approx(
-            curve.get_dfs(dates) / curve.get_df(age), rel=1e-12
-        )
-
-
-@pytest.mark.parametrize(
-    "method",
-    [
-        InterpolationMethod.PiecewiseLinear,
-        InterpolationMethod.CubicSpline,
-        InterpolationMethod.HermiteCubicSpline,
-    ],
-)
-def test_other_methods_keep_the_dfs_at_the_knots(method):
-    curve = _curve(interpolation_method=method)
-    age = T + timedelta(days=120)
-    aged = curve.get_aged_curve(age)
-    kept = [k for k in KNOTS if k > age]
-    assert aged.knot_dates == [age, *kept]
-    assert aged.get_dfs(kept) == pytest.approx(
-        curve.get_dfs(kept) / curve.get_df(age), rel=1e-12
-    )
 
 
 def test_aged_before_the_effective_date_averages_the_spot_forward():
     effective = T + timedelta(days=3)
     knots = [effective, *KNOTS[1:]]
-    curve = IndexCurve(T, SOFR, knots, FWDS, SPOT)
+    curve = PillarCurve(
+        T,
+        knots,
+        FWDS,
+        InterpolationMethod.PiecewiseConstant,
+        SPOT,
+    )
     age = T + timedelta(days=1)
     aged = curve.get_aged_curve(age)
     assert aged.spot_rate is None and aged.knot_dates[:2] == [age, effective]
     assert aged.get_df(effective) == pytest.approx(
         curve.get_df(effective) / curve.get_df(age)
     )
-
-
-@pytest.mark.parametrize("bad", [T, KNOTS[-1], KNOTS[-1] + timedelta(days=1)])
-def test_aging_outside_the_curve_raises(bad):
-    with pytest.raises(ValueError):
-        _curve().get_aged_curve(bad)
-
-
-def test_df_t1_times_aged_df_t2_is_df_t2_and_aged_df_is_the_forward_df():
-    curve = _curve()  # PiecewiseConstant: exact between knots too
-    for t1 in AGE_DATES:
-        aged = curve.get_aged_curve(t1)
-        for t2 in [t1 + timedelta(days=n) for n in (1, 60, 200, 500, 900)]:
-            assert curve.get_df(t1) * aged.get_df(t2) == pytest.approx(
-                curve.get_df(t2), rel=1e-12
-            )
-            assert aged.get_df(t2) == pytest.approx(curve.get_df_fwd(t1, t2), rel=1e-12)

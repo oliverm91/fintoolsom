@@ -2,8 +2,11 @@ from enum import Enum
 
 
 class Locality(Enum):
+    """Calendar code of a currency's market: an ISO country code, or the code of a
+    financial-market calendar of the holidays library (EUR: TARGET2, ``"XECB"``)."""
+
     US = "US"
-    EU = "DE"
+    EU = "XECB"  # TARGET2, not one euro country's public holidays
     GB = "GB"
     JP = "JP"
     CH = "CH"

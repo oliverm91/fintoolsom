@@ -74,8 +74,8 @@ class _Source:
             )
         if kind == "index":  # the index curve's dfs (_par_leg_pv)
             return market.get_index_curve(args[0])._dfs_at_ordinals(*self.ordinals)
-        if kind == "accrual":  # the index curve's accruals (_projected_flows)
-            return market.get_index_curve(args[0])._accrual_at_ordinals(*self.ordinals)
+        if kind == "accrual":  # Market._accrual_at_ordinals (_projected_flows)
+            return market._accrual_at_ordinals(args[0], *self.ordinals)
         return market._future_fx_rates_at_ordinals(args[0], *self.ordinals)  # "fx"
 
 

@@ -144,6 +144,9 @@ def test_forward_rates_reproduce_forward_wealth_factors(curve, convention):
     assert single.rate == pytest.approx(rates[0].rate, abs=1e-14)
     values = curve.get_forward_rates_values(STARTS, ENDS, convention)
     assert values == pytest.approx([r.rate for r in rates], abs=1e-14)
+    assert curve.get_forward_rates_values(
+        STARTS[0], ENDS[0], convention
+    ) == pytest.approx(single.rate, abs=1e-14)
 
 
 @pytest.mark.parametrize(

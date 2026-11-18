@@ -33,10 +33,10 @@ build_curves(
 
 ## What it builds
 
-- **Index curves.** Every index a quote reads (collateral, floating legs) gets an
-  `IndexCurve` under its name, such as `"ICP"` or `"SOFR"`.
+- **Index curves.** Every index a quote reads (collateral, floating legs) gets a
+  `PillarCurve` under the index in `market.curves`, such as `icp` or `sofr`.
 - **Discount curves.** Every currency other than the risk-free index's gets a
-  `DiscountCurve` under `"<ccy>_<risk-free index>"`, such as `"USD_ICP"`.
+  `PillarCurve` under the currency, such as `Currency.USD` (USD under ICP).
 - **Interpolation.** New curves, discount and index alike, use `interp_method`:
   `PiecewiseConstant` forwards by default, or any other pillar-curve method. A
   curve already in the market keeps its own method when the build extends it past
@@ -106,7 +106,7 @@ build_curves(
     quotes, market,
     interp_method=InterpolationMethod.PiecewiseConstant,
 )
-list(market.curves)  # ['ICP', 'SOFR', 'USD_ICP']
+list(market.curves)  # [icp, sofr, Currency.USD]
 ```
 
 ## How it works
@@ -142,7 +142,7 @@ The build is split in private modules, driven by `builder._CurveBuilder`.
 - **Pillar dates.** Pillar dates are quote maturities, not a fixed grid. Two
   quotes of one group with the same maturity and no other open candidate both keep
   that pillar: the system is over-determined and the build fails. Drop one of them.
-- **Bumping.** Bump a built curve with `market.set_curve(curve.parallel_bump_bps(1))`.
+- **Bumping.** Bump a built curve with `market.set_curve(key, curve.parallel_bump_bps(1))`.
   Rebuilding from bumped quotes is the alternative for a quote-level risk view.
 - **Not built.** No synthetic numeraire curves (such as `CLP_SOFR`) and no
   discounting on term indexes.

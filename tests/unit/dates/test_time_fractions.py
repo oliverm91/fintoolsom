@@ -25,7 +25,7 @@ from fintoolsom.dates import (
     TF_NL_360,
     TF_NL_365,
 )
-from tests.factories.day_counts import D, calc360
+from tests.factories.day_counts import THIRTY_E_360, THIRTY_E_360_ISDA, D, calc360
 
 # (start, end, expected) — Strata rows ``{CONVENTION, y1, m1, d1, y2, m2, d2, value}``.
 ACT_ACT_ISDA = [
@@ -89,29 +89,7 @@ THIRTY_360_ISDA = [
     (D(2012, 5, 31), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
 ]
 
-# Strata THIRTY_E_360 rows (2006 ISDA 4.16(g)).
-THIRTY_E_360 = [
-    (D(2011, 2, 28), D(2012, 2, 29), calc360(2011, 2, 28, 2012, 2, 29)),
-    (D(2012, 2, 29), D(2016, 2, 29), calc360(2012, 2, 29, 2016, 2, 29)),
-    (D(2012, 5, 30), D(2013, 8, 29), calc360(2012, 5, 30, 2013, 8, 29)),
-    (D(2012, 5, 29), D(2013, 8, 31), calc360(2012, 5, 29, 2013, 8, 30)),
-    (D(2012, 5, 30), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
-    (D(2012, 5, 31), D(2013, 8, 30), calc360(2012, 5, 30, 2013, 8, 30)),
-    (D(2012, 5, 31), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
-]
-
-# Strata data_30E360ISDA, "not maturity" column: a last-of-February end date is
-# moved to 30 (the end date is not the termination date).
-THIRTY_E_360_ISDA_NOT_MATURITY = [
-    (D(2011, 12, 28), D(2012, 2, 28), calc360(2011, 12, 28, 2012, 2, 28)),
-    (D(2011, 12, 28), D(2012, 2, 29), calc360(2011, 12, 28, 2012, 2, 30)),
-    (D(2012, 2, 29), D(2012, 3, 28), calc360(2012, 2, 30, 2012, 3, 28)),
-    (D(2011, 2, 28), D(2012, 2, 28), calc360(2011, 2, 30, 2012, 2, 28)),
-    (D(2011, 2, 28), D(2012, 2, 29), calc360(2011, 2, 30, 2012, 2, 30)),
-    (D(2012, 2, 29), D(2016, 2, 29), calc360(2012, 2, 30, 2016, 2, 30)),
-    (D(2012, 5, 29), D(2013, 8, 31), calc360(2012, 5, 29, 2013, 8, 30)),
-    (D(2012, 5, 31), D(2013, 8, 31), calc360(2012, 5, 30, 2013, 8, 30)),
-]
+# THIRTY_E_360 and THIRTY_E_360_ISDA are shared with test_date_counts.py.
 
 
 @pytest.mark.parametrize("start, end, expected", ACT_ACT_ISDA)
@@ -205,11 +183,10 @@ def test_30e_360(start, end, days):
     )
 
 
-@pytest.mark.parametrize("start, end, days", THIRTY_E_360_ISDA_NOT_MATURITY)
-def test_30e_360_isda_moves_a_last_of_february_end_date_to_30(start, end, days):
-    assert TF_30E_360ISDA().get_day_count_factor(start, end) == pytest.approx(
-        days / 360, rel=1e-15
-    )
+@pytest.mark.parametrize("start, end, is_termination, days", THIRTY_E_360_ISDA)
+def test_30e_360_isda_matches_reference(start, end, is_termination, days):
+    tf = TF_30E_360ISDA(termination_date=end if is_termination else None)
+    assert tf.get_day_count_factor(start, end) == pytest.approx(days / 360, rel=1e-15)
 
 
 def test_coupon_factor_defaults_to_the_day_count_factor():

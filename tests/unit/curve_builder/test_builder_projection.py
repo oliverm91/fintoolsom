@@ -15,11 +15,12 @@ from fintoolsom.market import Market, Currency, CurrencyName
 from fintoolsom.market.index import OvernightRateIndex, TermRateIndex
 from fintoolsom.market.index_history import TermRateHistory
 from fintoolsom.rates import (
+    InterpolationMethod,
     Rate,
     RateConvention,
     LinearInterestConvention,
     ExponentialInterestConvention,
-    IndexCurve,
+    PillarCurve,
 )
 from fintoolsom.derivatives.swaps.builders import fixed_leg, term_rate_leg
 from fintoolsom.derivatives.swaps.swaps import Swap
@@ -48,7 +49,12 @@ def _market_with_sofr_discount() -> tuple[
     term3m = TermRateIndex("TERM3M", currency=USD, term=Term(3, TermUnit.M, adj))
 
     # Flat 5% (cont, act/365) SOFR curve.
-    sofr_curve = IndexCurve(T, sofr, [T, T + _days(365), T + _days(1095)], [0.05, 0.05])
+    sofr_curve = PillarCurve(
+        T,
+        [T, T + _days(365), T + _days(1095)],
+        [0.05, 0.05],
+        InterpolationMethod.PiecewiseConstant,
+    )
 
     term_hist = TermRateHistory(
         term3m,
@@ -62,7 +68,7 @@ def _market_with_sofr_discount() -> tuple[
         },
     )
     market = Market(T, indexes_history={"TERM3M": term_hist}, risk_free_index=sofr)
-    market.set_curve(sofr_curve)
+    market.set_curve(sofr, sofr_curve)
     return market, sofr, term3m, adj
 
 
@@ -113,7 +119,7 @@ def test_independent_projection_reprices_all_swaps():
     _bootstrap_projection(term3m, swaps, market)
 
     proj = market.get_index_curve(term3m)
-    assert isinstance(proj, IndexCurve)
+    assert isinstance(proj, PillarCurve)
     # One anchor segment + one solved segment per swap.
     assert len(proj.forward_rates) == 1 + len(swaps)
 
@@ -130,7 +136,7 @@ def test_independent_projection_forwards_are_positive_and_near_par():
     ]
     _bootstrap_projection(term3m, swaps, market)
     proj = market.get_index_curve(term3m)
-    assert isinstance(proj, IndexCurve)
+    assert isinstance(proj, PillarCurve)
     # Solved forwards should be sane (positive, in a plausible rate range).
     assert np.all(proj.forward_rates > 0.0)
     assert np.all(proj.forward_rates < 0.20)

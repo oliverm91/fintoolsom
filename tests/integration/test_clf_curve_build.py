@@ -19,7 +19,6 @@ from fintoolsom.curve_builder._keys import _instrument_of
 from fintoolsom.dates import (
     ActualDayCountConvention,
     ModifiedFollowingConvention,
-    TF_Actual360,
     last_known_uf_date,
 )
 from fintoolsom.dates.term import Term, TermUnit
@@ -81,7 +80,7 @@ def _cfnp() -> list[UFForward]:
 
 def _chswc() -> list[CrossCurrencyFixedFloatQuote]:
     def spec(ccy):
-        return (ccy, PaymentFrequency.SEMIANNUAL, CL, TF_Actual360())
+        return (ccy, PaymentFrequency.SEMIANNUAL, CL)
 
     return [
         CrossCurrencyFixedFloatQuote(
@@ -118,7 +117,7 @@ def built():
 
 def test_builds_a_clf_curve(built):
     market, _, _ = built
-    assert {"CLF_ICP", "ICP", "SOFR", "USD_ICP"} <= set(market.curves)
+    assert {Currency.CLF, ICP, SOFR, Currency.USD} <= set(market.curves)
 
 
 def test_uf_forwards_reprice_and_match_the_projected_uf(built):

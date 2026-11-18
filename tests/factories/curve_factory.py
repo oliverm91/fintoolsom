@@ -3,16 +3,13 @@
 import math
 from datetime import date, timedelta
 
-import numpy as np
 from dateutil.relativedelta import relativedelta
 
 from fintoolsom.rates import (
-    DiscountCurve,
-    IndexCurve,
+    PillarCurve,
     InterpolationMethod,
     ZeroCouponCurve,
 )
-from fintoolsom.rates.Curve import year_fractions
 
 SAMPLE_CURVE_DATE = date(2024, 7, 8)
 
@@ -40,54 +37,27 @@ SAMPLE_CURVE_DFS = [
 ]
 
 
-def discount_curve_from_dfs(
+def curve_from_dfs(
     curve_date,
-    currency,
-    risk_free_index,
     pillars,
     dfs,
     interpolation_method=InterpolationMethod.PiecewiseConstant,
     **kwargs,
-) -> DiscountCurve:
-    """The DiscountCurve whose forwards give `dfs` at ascending `pillars`.
-
-    A single pillar is split in two segments with the same forward.
-    """
+) -> PillarCurve:
+    """:meth:`PillarCurve.from_dfs`, also for a single pillar, which is split in two
+    segments with the same forward."""
     if len(pillars) == 1:
         days = (pillars[0] - curve_date).days
         pillars = [curve_date + timedelta(days=days // 2), pillars[0]]
         dfs = [dfs[0] ** ((days // 2) / days), dfs[0]]
-    knots = [curve_date, *pillars]
-    forwards = -np.diff(np.log([1.0, *dfs])) / np.diff(
-        year_fractions(curve_date, knots)
-    )
-    return DiscountCurve(
-        curve_date,
-        currency,
-        risk_free_index,
-        knots,
-        forwards,
-        interpolation_method,
-        **kwargs,
+    return PillarCurve.from_dfs(
+        curve_date, list(pillars), list(dfs), interpolation_method, **kwargs
     )
 
 
-def index_curve_from_zero_coupon_curve(zcc, index) -> IndexCurve:
-    """The piecewise-constant IndexCurve on a legacy curve's pillars and dfs."""
-    knots = [zcc.curve_date, *zcc.dates]
-    tau = year_fractions(zcc.curve_date, knots)
-    return IndexCurve(
-        zcc.curve_date, index, knots, -np.diff(np.log([1.0, *zcc.dfs])) / np.diff(tau)
-    )
-
-
-def discount_curve_from_zero_coupon_curve(
-    zcc, currency, risk_free_index
-) -> DiscountCurve:
-    """The piecewise-constant DiscountCurve on a legacy curve's pillars and dfs."""
-    return discount_curve_from_dfs(
-        zcc.curve_date, currency, risk_free_index, list(zcc.dates), zcc.dfs
-    )
+def curve_from_zero_coupon_curve(zcc) -> PillarCurve:
+    """The piecewise-constant PillarCurve on a legacy curve's pillars and dfs."""
+    return curve_from_dfs(zcc.curve_date, list(zcc.dates), zcc.dfs)
 
 
 def sample_zero_coupon_curve(

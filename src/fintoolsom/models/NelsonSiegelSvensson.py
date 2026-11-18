@@ -14,9 +14,42 @@ from ..dates import ActualDayCountConvention
 
 # ── NSS formulas ──
 
+HUMP_PEAK = 1.7932821329007607
+"""Where the curvature loading h(x) = (1 - e^-x)/x - e^-x is highest.
+
+h'(x) = 0 gives e^-x (x² + x + 1) = 1, i.e. x² + x + 1 = e^x, whose root other
+than 0 has no closed form: x ≈ 1.7933, where h ≈ 0.298.
+"""
+
+
+def _lambda_for_hump(years: float) -> float:
+    """The `lambda_` whose first hump peaks `years` out (x = t / lambda_)."""
+    return years / HUMP_PEAK
+
+
+def _mu_for_hump(years: float) -> float:
+    """The `mu_` whose second hump peaks `years` out (x = mu_ · t)."""
+    return HUMP_PEAK / years
+
+
+# Calibration bounds and starting points, written as the years to each hump: the
+# first between 0.5 and 3Y (around 2Y), the second between 2 and 20Y (around 5Y).
+# A later hump is a larger lambda_ but a smaller mu_, so mu_'s bounds swap ends.
+_HUMP_BOUNDS = (
+    (_lambda_for_hump(0.5), _lambda_for_hump(3.0)),
+    (_mu_for_hump(20.0), _mu_for_hump(2.0)),
+)
+_DEFAULT_HUMPS = (_lambda_for_hump(2.0), _mu_for_hump(5.0))
+
 
 def nss_factors(t: float | np.ndarray, lambda_: float, mu_: float) -> np.ndarray:
     """Factor loadings [level, slope, curvature, 2nd curvature] at year fraction `t`.
+
+    Both curvature loadings are h(x) = (1 - e^-x)/x - e^-x, the slope loading is
+    (1 - e^-x)/x, with x = t / lambda_ for the first hump and x = mu_ · t for the
+    second: `lambda_` is a time scale (the hump peaks at HUMP_PEAK · lambda_ years)
+    and `mu_` a decay rate (the hump peaks at HUMP_PEAK / mu_ years). See
+    :func:`lambda_for_hump` and :func:`mu_for_hump`.
 
     Shape (4,) for scalar `t`, (n, 4) for an array: the zero rate is linear in the
     betas, r(t) = nss_factors(t) @ [b0, b1, b2, b3]. At t=0 the formulas are 0/0; the
@@ -51,7 +84,10 @@ def nss_rate(
     lambda_: float,
     mu_: float,
 ) -> float | np.ndarray:
-    """Nelson-Siegel-Svensson continuously-compounded act/365 zero rate at year fraction `t`."""
+    """Nelson-Siegel-Svensson continuously-compounded act/365 zero rate at year fraction `t`.
+
+    `lambda_` is the first hump's time scale and `mu_` the second's decay rate (see
+    :func:`nss_factors`)."""
     return nss_factors(t, lambda_, mu_) @ np.array([beta0, beta1, beta2, beta3])
 
 
@@ -73,6 +109,25 @@ def nss_df(
 
 @dataclass
 class NelsonSiegelSvensson:
+    """Nelson-Siegel-Svensson zero-rate model, continuously compounded Act/365.
+
+    r(t) = b0 + b1·slope(t) + b2·h(t / lambda_) + b3·h(mu_ · t), with
+    h(x) = (1 - e^-x)/x - e^-x (see :func:`nss_factors`).
+
+    Attributes
+    ----------
+    b0, b1, b2, b3 : float
+        Level, slope, first and second curvature.
+    lambda_ : float
+        Time scale of the first hump, which peaks at HUMP_PEAK · lambda_ years.
+        Calibrated with the hump between 0.5 and 3 years.
+    mu_ : float
+        Decay rate of the second hump, which peaks at HUMP_PEAK / mu_ years.
+        Calibrated with the hump between 2 and 20 years.
+    first_hump, second_hump : float
+        The years to each hump (read-only).
+    """
+
     b0: float = field(init=False)
     b1: float = field(init=False)
     b2: float = field(init=False)
@@ -81,14 +136,18 @@ class NelsonSiegelSvensson:
     mu_: float = field(init=False)
 
     def __post_init__(self):
-        self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_ = (
-            0.03,
-            0.01,
-            0,
-            0.01,
-            0.5,
-            0.2,
-        )
+        self.b0, self.b1, self.b2, self.b3 = 0.03, 0.01, 0, 0.01
+        self.lambda_, self.mu_ = _DEFAULT_HUMPS  # humps at 2 and 5 years
+
+    @property
+    def first_hump(self) -> float:
+        """Years to the first hump: HUMP_PEAK · lambda_."""
+        return HUMP_PEAK * self.lambda_
+
+    @property
+    def second_hump(self) -> float:
+        """Years to the second hump: HUMP_PEAK / mu_."""
+        return HUMP_PEAK / self.mu_
 
     def get_rate(self, t: float | np.ndarray) -> float | np.ndarray:
         return nss_rate(t, *self.get_params())
@@ -120,6 +179,13 @@ class NelsonSiegelSvensson:
         initial_guess: Optional[list[float]] = None,
         method: Optional[str] = "powell",
     ):
+        """Fit the six parameters to the bonds' prices at their IRRs.
+
+        `initial_guess` is ``[b0, b1, b2, b3, lambda_, mu_]`` in the model's own
+        parameters (use :func:`lambda_for_hump` / :func:`mu_for_hump` to start from
+        hump years); by default the betas come from the IRRs and the humps start at
+        2 and 5 years.
+        """
         bonds_irr_list.sort(
             key=lambda b_irr_tuple: (
                 (b_irr_tuple[0].get_maturity_date() - calibration_date).days
@@ -162,19 +228,12 @@ class NelsonSiegelSvensson:
             self.b1 = sum(short_term_yields) / len(short_term_yields) - self.b0
             self.b2 = 0
             self.b3 = 0.01
-            self.lambda_ = 2  # First hump around 2Y
-            self.mu_ = 5  # Second hump arond 5Y
+            self.lambda_, self.mu_ = _DEFAULT_HUMPS
             initial_guess = [self.b0, self.b1, self.b2, self.b3, self.lambda_, self.mu_]
 
         with np.errstate(over="ignore"):
-            bounds = [
-                (None, None),  # beta0
-                (None, None),  # beta1
-                (None, None),  # beta2
-                (None, None),  # beta3
-                (0.5, 3),  # lambda | First hump to be between 0.5 and 7Y
-                (2, 20),  # mu | Second hump to be 3 and 20Y
-            ]
+            # Free betas; the first hump between 0.5 and 3Y, the second between 2 and 20Y.
+            bounds = [(None, None)] * 4 + list(_HUMP_BOUNDS)
             result = minimize(
                 get_valuation_error,
                 initial_guess,
@@ -208,6 +267,12 @@ class NelsonSiegelSvensson:
         initial_guess: Optional[list[float]] = None,
         method: str = "powell",
     ):
+        """Fit the model to the curve's continuously compounded Act/365 zero rates.
+
+        `initial_guess` is ``[lambda_, mu_]`` in the model's own parameters (by
+        default the humps at 2 and 5 years); the betas are then solved exactly by
+        least squares.
+        """
         # For fixed lambda_/mu_, the NSS rate is linear in b0..b3 (see _get_design_matrix), so betas
         # can be solved exactly via least squares instead of optimizing over all 6 params. Only
         # lambda_/mu_ need the nonlinear optimizer, and target rates are computed once upfront.
@@ -226,12 +291,9 @@ class NelsonSiegelSvensson:
             fitted_rates = design_matrix @ betas
             return np.sum((fitted_rates - target_rates) ** 2)
 
-        bounds = [
-            (0.5, 3),  # lambda | First hump to be between 0.5 and 3Y
-            (2, 20),  # mu | Second hump to be between 2 and 20Y
-        ]
+        bounds = list(_HUMP_BOUNDS)  # first hump in 0.5-3Y, second in 2-20Y
         if initial_guess is None:
-            initial_guess = [2, 5]  # First hump around 2Y, second hump around 5Y
+            initial_guess = list(_DEFAULT_HUMPS)
         with np.errstate(over="ignore"):
             result = minimize(
                 get_valuation_error,

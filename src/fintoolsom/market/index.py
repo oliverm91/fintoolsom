@@ -75,8 +75,14 @@ class InterestIndex(ABC):
     """Marker for interest-bearing index definitions (their history accrues).
 
     Types interest-bearing references such as a floating-leg or collateral index,
-    so price-only indexes are excluded by type.
+    so price-only indexes are excluded by type. Every concrete interest index has a
+    ``rate_convention``: the convention its rates are quoted in, whose day count and
+    base are also the default of a spread over it.
     """
+
+
+def _linear_act_360() -> RateConvention:
+    return RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
 
 
 @dataclass(eq=False)
@@ -91,9 +97,17 @@ class RateIndex(Index, InterestIndex):
     spot_lag : int, default 0
         Business days from the fixing date to the accrual start (keyword-only):
         0 for an overnight index, typically 2 for a term rate.
+    rate_convention : RateConvention, default linear Act/360
+        Convention the index's rates are quoted in (keyword-only), e.g. linear
+        Act/365 for SONIA. A leg on the index built without a spread gets a zero
+        spread that is linear in this day count and base. The fixings themselves
+        are :class:`Rate` values and keep their own conventions.
     """
 
     spot_lag: int = field(default=0, kw_only=True)
+    rate_convention: RateConvention = field(
+        default_factory=_linear_act_360, kw_only=True
+    )
 
 
 class OvernightIndex(ABC):
@@ -147,10 +161,6 @@ class PriceIndex(Index):
     :class:`OvernightInterestPriceIndex`. (The UF is not an index: it is the
     currency ``Currency.CLF``, see :mod:`fintoolsom.market.uf`.)
     """
-
-
-def _linear_act_360() -> RateConvention:
-    return RateConvention(LinearInterestConvention, ActualDayCountConvention, 360)
 
 
 @dataclass(eq=False)

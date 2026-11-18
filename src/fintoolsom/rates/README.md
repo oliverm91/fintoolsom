@@ -16,31 +16,29 @@ Interest rates and the curves used for pricing.
 
 `Curve` (`Curve.py`) is the base of everything a `Market` stores. Every curve can
 discount: `get_df(s)`, `get_df_fwd`, `get_wealth_factor`, `get_zero_rate`,
-`get_forward_rate`. `parallel_bump_bps` returns a bumped copy that shifts every
-continuously compounded zero rate. `get_id()` is the key the curve is stored under
-in `Market.curves`.
+`get_forward_rate`, and projects: `get_accrual` (wealth factor - 1).
+`parallel_bump_bps` returns a bumped copy that shifts every continuously compounded
+zero rate.
+
+A curve has no role of its own. The `Market` key it is stored under gives it one:
+under an `Index` it projects that index (and discounts the index's currency when the
+index is the risk-free one), under a `Currency` it discounts that currency under the
+market's risk-free index.
 
 `ModelCurve` is the family for parametric curves and has no implementation yet.
-`PillarCurve` (`PillarCurve.py`) is every curve defined at dates. Its parameters are
-one forward rate per segment between knots, and discount factors are only a result of
-them. It also holds the `InterpolationMethod`. `IndexCurve` and `DiscountCurve` are its
-two roles.
+`PillarCurve` (`PillarCurve.py`) is the curve defined at dates:
+`PillarCurve(curve_date, knot_dates, forward_rates, interpolation_method, spot_rate=None)`.
+Its parameters are one forward rate per segment between knots, and discount factors
+are only a result of them.
 
-| Class | `get_id()` | Stores | Interpolation |
-|---|---|---|---|
-| `IndexCurve` | `index.name` (`"SOFR"`) | knot dates, one average forward per segment, optional spot rate | any, `PiecewiseConstant` by default |
-| `DiscountCurve` | `"<ccy>_<risk-free index>"` (`"USD_ICP"`) | knot dates from the curve date, one average forward per segment | any, `PiecewiseConstant` by default |
-
-- **IndexCurve.** `df(d) = df_spot · exp(−∫ f)`, with Act/365 continuous forwards
-  starting at the effective date. Before the effective date (the next business day
-  for an overnight index) the spot `Rate` discounts in its own convention. It
-  projects its index (`get_accrual`). When its index is the risk-free one, it also
-  discounts that currency.
-- **DiscountCurve.** A currency seen from the risk-free index of another currency,
-  such as USD under ICP. Its first knot is the curve date. A currency has no
-  DiscountCurve under its own risk-free index: the index's IndexCurve is used
-  instead.
-- Both curves extend the last forward flat past their last date.
+- `df(d) = df(first knot) · exp(−∫ f)`, with Act/365 continuous forwards from the
+  first knot. When the first knot is after the curve date (the next business day for
+  an overnight index, the spot lag of a term index), `spot_rate` discounts up to it
+  in its own convention; without one, the first forward is extended back.
+- `PillarCurve.from_dfs(curve_date, dates, dfs, method)` and
+  `PillarCurve.from_zero_rates(curve_date, dates, rates, method)` build one from
+  pillars; each zero `Rate` is read in its own convention.
+- The last forward is extended flat past the last knot.
 - Every pillar curve needs at least 2 segments (3 knots).
 - `InterpolationMethod` only chooses the function integrated between knots, and every
   pillar curve accepts every method. `LogLinear` exists only for the legacy
@@ -62,19 +60,22 @@ two roles.
 from datetime import date
 
 from fintoolsom.dates import ActualDayCountConvention
-from fintoolsom.market import Currency, OvernightInterestPriceIndex
-from fintoolsom.rates import DiscountCurve, IndexCurve, LinearInterestConvention, Rate, RateConvention
+from fintoolsom.market import Currency, Market, OvernightInterestPriceIndex
+from fintoolsom.rates import InterpolationMethod, LinearInterestConvention, PillarCurve, Rate, RateConvention
 
 t, one_year, ten_years = date(2024, 7, 8), date(2025, 7, 8), date(2034, 7, 8)
 r = Rate(RateConvention(LinearInterestConvention, ActualDayCountConvention, 360), 0.05)
 r.get_wealth_factor(t, one_year)  # 1 + 0.05 * 365 / 360
 
-icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
-icp_curve = IndexCurve(t, icp, [t, one_year, ten_years], [0.05, 0.045])
-usd_curve = DiscountCurve(t, Currency.USD, icp, [t, one_year, ten_years], [0.04, 0.035])
-icp_curve.get_id(), usd_curve.get_id()  # ('ICP', 'USD_ICP')
+pc = InterpolationMethod.PiecewiseConstant
+icp_curve = PillarCurve(t, [t, one_year, ten_years], [0.05, 0.045], pc)
+usd_curve = PillarCurve.from_dfs(t, [one_year, ten_years], [0.961, 0.69], pc)
 icp_curve.get_forward_rate(date(2025, 1, 8), one_year)  # Rate, compounded Act/365 by default
+icp_curve.get_accrual(date(2025, 1, 8), one_year)       # wealth factor - 1
 usd_curve.parallel_bump_bps(1).get_df(date(2030, 1, 8))
+
+icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
+market = Market(t, risk_free_index=icp, curves={icp: icp_curve, Currency.USD: usd_curve})
 ```
 
 ## Legacy

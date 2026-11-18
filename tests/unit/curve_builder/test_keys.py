@@ -1,8 +1,8 @@
 """Curve-builder routing: every index gets exactly one curve, keyed by the index.
 
 Whether that curve also discounts (the risk-free index, or a collateral index) or
-only projects (any other floating index), it is the same IndexCurve key; a
-currency other than the risk-free index's is a DiscountCurve key.
+only projects (any other floating index), it is the same PillarCurve key; a
+currency other than the risk-free index's is a PillarCurve key.
 """
 
 from types import SimpleNamespace
@@ -27,7 +27,6 @@ FIXED_CLP = LegCase(Ccy.CLP, LegKind.FIXED)
 
 
 def _quote(float_kind: LegKind, collateral=None) -> SimpleNamespace:
-    # with_spread=True: the builders' float default spread is still a known bug.
     case = SwapCase(
         "irs", FIXED_CLP, LegCase(Ccy.CLP, float_kind), SwapStatus.NOT_STARTED, True
     )

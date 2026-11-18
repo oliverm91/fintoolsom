@@ -39,7 +39,7 @@ get_irr(flows, dates, valuation_date=date(2024, 1, 2), pv=100.0)  # about 0.05
 
 - **Legacy curves.** This package still uses the legacy
   `fintoolsom.rates.ZeroCouponCurve`, which warns on creation. Its curve-based
-  methods are not yet migrated to `IndexCurve` / `DiscountCurve`, so they cannot
+  methods are not yet migrated to `PillarCurve`, so they cannot
   read curves from a `Market` directly.
 - **Strings, not `Currency`.** Currencies are plain strings here (stored
   lowercased), not `fintoolsom.market.Currency` objects.

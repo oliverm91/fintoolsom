@@ -1,28 +1,30 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, KW_ONLY
+from dataclasses import KW_ONLY, dataclass, field, fields
 from datetime import date
 from enum import Enum
 from typing import TYPE_CHECKING
 
 from dateutil.relativedelta import relativedelta
 
-from .conventions import FixedLegSpec, FloatingLegSpec
-from .currencies import Currency, CurrencyPair, FX_Rate
-from .localities import Locality
-from .index import InterestIndex
 from ..dates import (
     AdjustmentDateConventionBase,
+    Calendar,
     ModifiedFollowingConvention,
     PrecedingConvention,
     get_calendar,
+    get_joint_calendar,
     last_known_uf_date,
 )
 from ..dates.term import Term
+from .conventions import FixedLegSpec, FloatingLegSpec, LegSpec
+from .currencies import Currency, CurrencyPair, FX_Rate
+from .index import InterestIndex
+from .localities import Locality
 
 if TYPE_CHECKING:
-    from ..derivatives.forwards.forwards import Forward, NDF
+    from ..derivatives.forwards.forwards import NDF, Forward
     from ..derivatives.swaps.swaps import Swap
 
 
@@ -94,6 +96,13 @@ def _check_settlement(
         )
 
 
+def _quote_calendar(locality: Locality | None, currencies) -> Calendar:
+    """`locality`'s calendar, else the joint calendar of `currencies`' localities."""
+    if locality is not None:
+        return get_calendar(locality.value)
+    return get_joint_calendar(*(ccy.locality.value for ccy in currencies))
+
+
 # ── Private: forward base classes ──────────────────────────────────────────
 
 
@@ -122,6 +131,13 @@ class _ForwardQuote(InstrumentQuote):
                 f"forward quote must be an NDF: provide fixing_date or term."
             )
 
+    def _calendar(self):
+        """`locality`'s calendar, else the joint calendar of the pair's currencies."""
+        return _quote_calendar(
+            self.locality,
+            (self.currency_pair.base_currency, self.currency_pair.quote_currency),
+        )
+
     def _effective_fixing_date(self) -> date | None:
         """Explicit fixing date, else spot date + `term`; None for a deliverable forward."""
         if self.fixing_date is not None:
@@ -144,7 +160,7 @@ class _ForwardQuote(InstrumentQuote):
             return self.payment_date
         fixing = self._effective_fixing_date()
         if fixing is not None:
-            cal = self.term.adj_convention.calendar if self.term else get_calendar()
+            cal = self.term.adj_convention.calendar if self.term else self._calendar()
             return cal.add_business_days(fixing, self.payment_lag)
         raise ValueError(
             "Cannot derive payment_date: provide payment_date, fixing_date or term."
@@ -156,7 +172,7 @@ class _ForwardQuote(InstrumentQuote):
         An NDF when a fixing date is set or derivable; a deliverable Forward
         otherwise.
         """
-        from ..derivatives.forwards.forwards import Forward, NDF
+        from ..derivatives.forwards.forwards import NDF, Forward
 
         fixing = self._effective_fixing_date()
         pmt = self._effective_payment_date()
@@ -200,9 +216,12 @@ class _SwapQuote(InstrumentQuote):
     quote_date : date
         Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
-        Schedule adjustment; defaults to modified following, weekend calendar.
+        Adjustment of the spot date and the schedules; defaults to modified
+        following on `locality`'s calendar, else on the joint calendar of the legs'
+        currencies (one currency's calendar for a single-currency swap).
     locality : Locality, optional
-        Market locality of the quote.
+        Market locality of the quote, whose calendar the default `adj_convention`
+        uses.
     spot_lag : int, default 2
         Business days from `quote_date` to the start (keyword-only).
     start_date : date, optional
@@ -217,9 +236,7 @@ class _SwapQuote(InstrumentQuote):
 
     quoted_side: QuotedSide
     term: Term
-    adj_convention: AdjustmentDateConventionBase = field(
-        default_factory=ModifiedFollowingConvention
-    )
+    adj_convention: AdjustmentDateConventionBase | None = field(default=None)
     locality: Locality | None = field(default=None)
     _: KW_ONLY
     spot_lag: int = field(default=2)
@@ -232,6 +249,17 @@ class _SwapQuote(InstrumentQuote):
     collateral_index: InterestIndex | None = field(default=None)
     stub_first: bool = True
     long_stub: bool = False
+
+    def __post_init__(self):
+        if self.adj_convention is None:
+            currencies = [
+                spec.currency
+                for f in fields(self)
+                if isinstance(spec := getattr(self, f.name), LegSpec)
+            ]
+            self.adj_convention = ModifiedFollowingConvention(
+                _quote_calendar(self.locality, currencies)
+            )
 
     def _effective_start(self) -> date:
         """Explicit start, else `spot_lag` business days after `quote_date`."""
@@ -448,7 +476,7 @@ class IRSQuote(_SwapQuote):
     quote_date : date
         Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
-        Schedule adjustment; defaults to modified following, weekend calendar.
+        Schedule adjustment; defaults as in :class:`_SwapQuote` (the legs' calendar).
     locality : Locality, optional
         Market locality of the quote.
     spot_lag : int, default 2
@@ -477,6 +505,7 @@ class IRSQuote(_SwapQuote):
     floating_leg: FloatingLegSpec
 
     def __post_init__(self):
+        super().__post_init__()
         if self.fixed_leg.currency != self.floating_leg.currency:
             raise ValueError(
                 f"IRS requires both legs in the same currency. "
@@ -484,8 +513,8 @@ class IRSQuote(_SwapQuote):
             )
 
     def get_instrument(self) -> Swap:
-        from ..derivatives.swaps.swaps import Swap
         from ..derivatives.swaps.builders import fixed_leg, floating_leg
+        from ..derivatives.swaps.swaps import Swap
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
@@ -543,7 +572,7 @@ class IRBasisQuote(_SwapQuote):
     quote_date : date
         Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
-        Schedule adjustment; defaults to modified following, weekend calendar.
+        Schedule adjustment; defaults as in :class:`_SwapQuote` (the legs' calendar).
     locality : Locality, optional
         Market locality of the quote.
     spot_lag : int, default 2
@@ -570,6 +599,7 @@ class IRBasisQuote(_SwapQuote):
     pay_leg: FloatingLegSpec
 
     def __post_init__(self):
+        super().__post_init__()
         if self.receive_leg.currency != self.pay_leg.currency:
             raise ValueError(
                 f"IR Basis requires both legs in the same currency. "
@@ -577,8 +607,8 @@ class IRBasisQuote(_SwapQuote):
             )
 
     def get_instrument(self) -> Swap:
-        from ..derivatives.swaps.swaps import Swap
         from ..derivatives.swaps.builders import floating_leg
+        from ..derivatives.swaps.swaps import Swap
 
         start = self._effective_start()
         mat = self._effective_maturity(start)
@@ -619,7 +649,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
     quote_date : date
         Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
-        Schedule adjustment; defaults to modified following, weekend calendar.
+        Schedule adjustment; defaults as in :class:`_SwapQuote` (the legs' calendar).
     locality : Locality, optional
         Market locality of the quote.
     spot_lag : int, default 2
@@ -659,6 +689,7 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
     fx_fixing_lag: int = 0
 
     def __post_init__(self):
+        super().__post_init__()
         if self.fixed_leg.currency == self.floating_leg.currency:
             raise ValueError(
                 "CrossCurrencyFixedFloat requires legs in different currencies."
@@ -670,8 +701,8 @@ class CrossCurrencyFixedFloatQuote(_SwapQuote):
         )
 
     def get_instrument(self, market=None) -> Swap:
-        from ..derivatives.swaps.swaps import Swap
         from ..derivatives.swaps.builders import fixed_leg, floating_leg
+        from ..derivatives.swaps.swaps import Swap
         from .currencies import CurrencyPair
 
         start = self._effective_start()
@@ -753,7 +784,7 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
     quote_date : date
         Quote date; the start is `spot_lag` business days later (keyword-only).
     adj_convention : AdjustmentDateConventionBase, optional
-        Schedule adjustment; defaults to modified following, weekend calendar.
+        Schedule adjustment; defaults as in :class:`_SwapQuote` (the legs' calendar).
     locality : Locality, optional
         Market locality of the quote.
     spot_lag : int, default 2
@@ -791,6 +822,7 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
     fx_fixing_lag: int = 0
 
     def __post_init__(self):
+        super().__post_init__()
         if self.receive_leg.currency == self.pay_leg.currency:
             raise ValueError(
                 "CrossCurrencyFloatFloat requires legs in different currencies."
@@ -802,8 +834,8 @@ class CrossCurrencyFloatFloatQuote(_SwapQuote):
         )
 
     def get_instrument(self, market=None) -> Swap:
-        from ..derivatives.swaps.swaps import Swap
         from ..derivatives.swaps.builders import floating_leg
+        from ..derivatives.swaps.swaps import Swap
         from .currencies import CurrencyPair
 
         start = self._effective_start()

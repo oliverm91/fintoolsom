@@ -14,7 +14,7 @@ from ..dates import ActualDayCountConvention
 
 _LEGACY_MESSAGE = (
     "ZeroCouponCurve is legacy, kept for CLBonds and Nelson-Siegel-Svensson fitting; "
-    "pricing, Market and the curve builder use IndexCurve / DiscountCurve."
+    "pricing, Market and the curve builder use PillarCurve."
 )
 _ZCC_METHODS = frozenset(
     {InterpolationMethod.LogLinear, InterpolationMethod.HermiteCubicSpline}
@@ -66,6 +66,8 @@ class ZeroCouponCurve(LegacyCurve):
     rates: list[Rate] = field(init=False, default=None)
     _cashed_dfs: dict[tuple[date, ...], np.ndarray] = field(init=False, default=None)
     _str_dates_rates: str = field(init=False, default=None)
+    # (days, dfs, PchipInterpolator) built from those exact arrays, for Hermite reads.
+    _pchip: tuple | None = field(init=False, default=None, repr=False, compare=False)
 
     def __post_init__(self):
         warnings.warn(_LEGACY_MESSAGE, DeprecationWarning, stacklevel=3)
@@ -152,27 +154,29 @@ class ZeroCouponCurve(LegacyCurve):
         return self.get_dfs([date])[0]
 
     def get_dfs(self, dates_t: list[date]) -> np.ndarray:
+        """Discount factors on `dates_t`, in any order (a new array on every call).
+
+        Before the first pillar the first pillar's rate applies, after the last the
+        last one's; in between the pillar dfs are interpolated.
+        """
         cache_key = tuple(dates_t)
-        if cache_key in self._cashed_dfs:
-            return self._cashed_dfs[cache_key]
+        cached = self._cashed_dfs.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+        dates_t = list(dates_t)
         tenors = ActualDayCountConvention.get_day_count(self.curve_date, dates_t)
-        min_tenor = min(self.days)
-        max_tenor = max(self.days)
-        tenors_smaller_than_min = tenors[tenors < min_tenor]
-        tenors_greater_than_max = tenors[tenors > max_tenor]
-        normal_tenors = tenors[(tenors >= min_tenor) & (tenors <= max_tenor)]
-        small_tenors_amount = len(tenors_smaller_than_min)
-        greater_tenors_amount = len(tenors_greater_than_max)
+        below = tenors < self.days[0]
+        above = tenors > self.days[-1]
+        inside = ~(below | above)
+        normal_tenors = tenors[inside]
         dfs = np.zeros(len(tenors))
-        if small_tenors_amount:
-            dfs[:small_tenors_amount] = self.curve_points[0].rate.get_discount_factor(
-                self.curve_date, dates_t[:small_tenors_amount]
+        if below.any():
+            dfs[below] = self.curve_points[0].rate.get_discount_factor(
+                self.curve_date, [d for d, b in zip(dates_t, below) if b]
             )
-        if greater_tenors_amount:
-            dfs[-greater_tenors_amount:] = self.curve_points[
-                -1
-            ].rate.get_discount_factor(
-                self.curve_date, dates_t[-greater_tenors_amount:]
+        if above.any():
+            dfs[above] = self.curve_points[-1].rate.get_discount_factor(
+                self.curve_date, [d for d, a in zip(dates_t, above) if a]
             )
 
         # Start of interpolation part
@@ -180,18 +184,29 @@ class ZeroCouponCurve(LegacyCurve):
             # Single pillar: normal_tenors can only be the pillar's exact date; return it directly.
             interp_dfs = np.full(len(normal_tenors), self.dfs[0])
         elif self.df_interpolation_method == InterpolationMethod.HermiteCubicSpline:
-            chs = PchipInterpolator(self.days, self.dfs)
-            interp_dfs = chs(normal_tenors)
+            interp_dfs = self._hermite()(normal_tenors)
         elif self.df_interpolation_method == InterpolationMethod.LogLinear:
             interp_dfs = np.exp(np.interp(normal_tenors, self.days, np.log(self.dfs)))
         else:
             raise NotImplementedError(
                 f"Interpolation method: '{self.df_interpolation_method}' currently not implemented."
             )
-        dfs[small_tenors_amount : len(tenors) - greater_tenors_amount] = interp_dfs
+        dfs[inside] = interp_dfs
         # End of interpolation part
         self._cashed_dfs[cache_key] = dfs
-        return dfs
+        return dfs.copy()
+
+    def _hermite(self) -> PchipInterpolator:
+        """The PCHIP of the pillar dfs, rebuilt only when `days` or `dfs` is replaced
+        (sort, add_point, delete_point, parallel_bump_rates_bps)."""
+        cached = self._pchip
+        if cached is None or cached[0] is not self.days or cached[1] is not self.dfs:
+            cached = self._pchip = (
+                self.days,
+                self.dfs,
+                PchipInterpolator(self.days, self.dfs),
+            )
+        return cached[2]
 
     def get_df_fwd(self, start_date: date, end_date: date) -> float:
         return self.get_df(end_date) / self.get_df(start_date)

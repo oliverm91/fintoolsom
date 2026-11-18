@@ -1,7 +1,6 @@
 import dataclasses
 
 import pytest
-from fintoolsom.dates import TF_Actual360
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.derivatives.swaps.legs import TermRateLeg, XCCYFloatingLeg
 from fintoolsom.market import Currency
@@ -39,7 +38,6 @@ def _fixed_spec(ccy: Currency) -> FixedLegSpec:
         currency=ccy,
         payment_frequency=PaymentFrequency.QUARTERLY,
         adj_convention=ADJ_CLP,
-        time_fraction=TF_Actual360,
         rate=_rate(0.055),
     )
 
@@ -49,7 +47,6 @@ def _float_spec(index) -> FloatingLegSpec:
         currency=index.currency,
         payment_frequency=PaymentFrequency.QUARTERLY,
         adj_convention=ADJ_CLP,
-        time_fraction=TF_Actual360,
         index=index,
         spread=SPREAD,
     )
@@ -354,3 +351,82 @@ def test_swap_quote_passes_each_leg_spec_payment_lag_to_its_leg():
         assert leg.payment_dates == [
             calendar.add_business_days(d, lag) for d in leg.end_dates
         ]
+
+
+# ── Default calendars: the legs' currencies, not weekends only (V1) ─────────
+
+
+def _clp_irs(**kw):
+    from datetime import date
+
+    from fintoolsom.market.quotes import IRSQuote
+
+    cl = adj_convention(Ccy.CLP)
+    leg = dict(currency=CLP, payment_frequency=PaymentFrequency.SEMIANNUAL, adj_convention=cl)
+    return IRSQuote(
+        QuotedSide.RECEIVE,
+        Term(1, TermUnit.Y, cl),
+        quote_date=date(2026, 9, 17),
+        fixed_leg=FixedLegSpec(**leg, rate=_rate(0.05)),
+        floating_leg=FloatingLegSpec(**leg, index=ICP, spread=SPREAD),
+        **kw,
+    )
+
+
+def test_a_swap_quote_defaults_to_its_currency_calendar():
+    from datetime import date
+
+    from fintoolsom.dates import get_calendar
+
+    quote = _clp_irs()
+    assert quote.adj_convention.calendar is get_calendar("CL")
+    # T+2 skips Fiestas Patrias (18-19 September): not 2026-09-21.
+    assert quote._effective_start() == date(2026, 9, 22)
+
+
+def test_a_swap_quote_locality_picks_the_default_calendar():
+    from fintoolsom.dates import get_calendar
+    from fintoolsom.market.localities import Locality
+
+    assert _clp_irs(locality=Locality.US).adj_convention.calendar is get_calendar("US")
+
+
+def test_an_explicit_adj_convention_is_kept():
+    from fintoolsom.dates import ModifiedFollowingConvention
+
+    adj = ModifiedFollowingConvention()
+    assert _clp_irs(adj_convention=adj).adj_convention is adj
+
+
+def test_a_cross_currency_quote_defaults_to_the_joint_calendar():
+    from fintoolsom.dates import get_joint_calendar
+
+    cl = adj_convention(Ccy.CLP)
+    quote = CrossCurrencyFloatFloatQuote(
+        QuotedSide.RECEIVE,
+        Term(2, TermUnit.Y, cl),
+        quote_date=VAL_DATE,
+        receive_leg=FloatingLegSpec(CLP, PaymentFrequency.SEMIANNUAL, cl, index=ICP, spread=SPREAD),
+        pay_leg=FloatingLegSpec(USD, PaymentFrequency.SEMIANNUAL, cl, index=SOFR, spread=SPREAD),
+    )
+    assert quote.adj_convention.calendar is get_joint_calendar("CL", "US")
+    assert repr(quote.adj_convention.calendar) == "Calendar(CL + US)"
+
+
+def test_a_forward_payment_lag_without_term_uses_the_pair_calendar():
+    from datetime import date
+
+    from fintoolsom.market import CurrencyPair
+    from fintoolsom.market.quotes import ForwardPriceQuote
+
+    quote = ForwardPriceQuote(
+        CurrencyPair(USD, CLP),
+        950.0,
+        True,
+        quote_date=date(2026, 9, 15),
+        fixing_date=date(2026, 9, 17),
+    )
+    # 18 September is a CL holiday: payment one business day after the fixing.
+    assert quote.get_instrument().payment_date == date(2026, 9, 21)
+    us_only = dataclasses.replace(quote, fixing_date=date(2026, 7, 2))
+    assert us_only.get_instrument().payment_date == date(2026, 7, 6)  # 3 July (US)

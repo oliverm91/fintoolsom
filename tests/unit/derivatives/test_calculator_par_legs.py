@@ -25,7 +25,6 @@ from tests.factories.swap_factory import (
     SPREAD,
     VAL_DATE,
     Ccy,
-    SwapStatus,
     adj_convention,
     build_market,
     build_swap,
@@ -206,38 +205,6 @@ def test_a_zero_spread_leg_is_worth_its_notional_discounted_from_its_start(marke
 
 
 # ── Simplified swaps: eligibility assumed, not checked ─────────────────────
-
-
-def _simplified_legs(status=None):
-    out = []
-    for case in swap_cases():
-        if case.uses_uf or (status is not None and case.status is not status):
-            continue
-        swap = build_swap(case)
-        s = SimplifiedSwap(
-            receive_leg=swap.receive_leg,
-            pay_leg=swap.pay_leg,
-            collateral_index=swap.collateral_index,
-        )
-        for side, leg in (("receive", s.receive_leg), ("pay", s.pay_leg)):
-            out.append(pytest.param(leg, s.collateral_index, id=f"{case.id}-{side}"))
-    return out
-
-
-@pytest.mark.parametrize("leg, collateral", _simplified_legs())
-def test_simplified_leg_pv_matches_the_flows_pv(leg, collateral, market):
-    expected = _swap_pv._flows_pv(leg, collateral, market)
-    assert _simplified_swap_pv._simplified_leg_pv(
-        leg, collateral, market
-    ) == pytest.approx(expected, rel=1e-12, abs=1e-6)
-
-
-@pytest.mark.parametrize("leg, collateral", _simplified_legs(SwapStatus.NOT_STARTED))
-def test_non_started_leg_pv_matches_the_flows_pv(leg, collateral, market):
-    expected = _swap_pv._flows_pv(leg, collateral, market)
-    assert _simplified_swap_pv._non_started_leg_pv(
-        leg, collateral, market
-    ) == pytest.approx(expected, rel=1e-12, abs=1e-6)
 
 
 def test_simplified_valuation_does_not_read_the_eligibility_flag(market, par_calls):

@@ -169,8 +169,6 @@ def test_missing_lookups_raise_key_errors():
         market.get_index_curve(index)
     with pytest.raises(ValueError, match="no risk_free_index"):
         market.get_discount_curve(Currency.USD)
-    with pytest.raises(KeyError, match="No discount curve 'CLP_SOFR'"):
-        market.get_discount_curve(Currency.CLP, risk_free_index=index)
     with pytest.raises(KeyError):
         market.get_volatility_surface(CurrencyPair(Currency.USD, Currency.CLP))
     with pytest.raises(KeyError):

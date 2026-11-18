@@ -49,13 +49,13 @@ from fintoolsom.market import (
 )
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from fintoolsom.rates import (
-    DiscountCurve,
-    IndexCurve,
+    PillarCurve,
+    InterpolationMethod,
     LinearInterestConvention,
     Rate,
     RateConvention,
 )
-from tests.factories.curve_factory import discount_curve_from_dfs
+from tests.factories.curve_factory import curve_from_dfs
 
 # ── Dates ──────────────────────────────────────────────────────────────────
 
@@ -335,16 +335,19 @@ _PILLARS = [
 ]
 
 
-def _flat_index_curve(index, rate: float) -> IndexCurve:
+def _flat_index_curve(rate: float) -> PillarCurve:
     """Flat continuously compounded act/365 `rate` from the valuation date."""
-    return IndexCurve(
-        VAL_DATE, index, [VAL_DATE, _PILLARS[0], _PILLARS[-1]], [rate, rate]
+    return PillarCurve(
+        VAL_DATE,
+        [VAL_DATE, _PILLARS[0], _PILLARS[-1]],
+        [rate, rate],
+        InterpolationMethod.PiecewiseConstant,
     )
 
 
-def _flat_discount_curve(currency, rate: float) -> DiscountCurve:
+def _flat_discount_curve(rate: float) -> PillarCurve:
     dfs = [math.exp(-rate * (d - VAL_DATE).days / 365) for d in _PILLARS]
-    return discount_curve_from_dfs(VAL_DATE, currency, RISKLESS, list(_PILLARS), dfs)
+    return curve_from_dfs(VAL_DATE, list(_PILLARS), dfs)
 
 
 def _history_days() -> list[date]:
@@ -367,8 +370,8 @@ def build_market() -> Market:
         *FLOAT_INDEXES.values(),
         *(c for c in COLLATERAL_INDEXES.values() if c is not None),
     }
-    curves = [_flat_index_curve(index, FLAT_RATES[index]) for index in indexes]
-    curves += [_flat_discount_curve(ccy, r) for ccy, r in CURRENCY_CURVE_RATES.items()]
+    curves = {index: _flat_index_curve(FLAT_RATES[index]) for index in indexes}
+    curves |= {ccy: _flat_discount_curve(r) for ccy, r in CURRENCY_CURVE_RATES.items()}
 
     # Daily fixings (every calendar day, so any calendar's business days are covered),
     # exposed both as Market.interest_rates (read by the calculator today) and as

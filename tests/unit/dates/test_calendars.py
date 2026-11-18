@@ -1,6 +1,7 @@
 from datetime import date
 from fintoolsom.dates import (
     Calendar,
+    get_calendar,
 )
 
 
@@ -111,6 +112,51 @@ def test_combine_chains_and_takes_a_weekends_only_calendar():
     assert not (Calendar() + Calendar()).is_holiday(date(2024, 3, 4))
 
 
+def test_combined_shared_calendars_load_any_year_in_any_order():
+    # The parts loading years on their own used to make the combined calendar raise
+    # RuntimeError (dictionary changed size during iteration) on its next new year.
+    from fintoolsom.dates import get_calendar
+
+    cl, us = get_calendar("CL"), get_calendar("US")
+    joint = cl + us
+    cl.is_holiday(date(2045, 6, 15))
+    us.is_holiday(date(2025, 6, 15))
+    assert not joint.is_holiday(date(2024, 6, 14))  # an ordinary Friday
+    assert joint.is_holiday(date(2024, 7, 4)) and joint.is_holiday(date(2024, 9, 18))
+
+
+def test_a_holiday_added_to_a_part_reaches_the_combined_calendar():
+    us, cl = Calendar(country="US"), Calendar(country="CL")
+    combined = us + cl
+    extra = date(2024, 3, 5)  # an ordinary Tuesday
+    assert combined.add_business_days(date(2024, 3, 4), 1) == extra
+    cl.add_custom_holiday(extra)
+    assert combined.is_holiday(extra)
+    assert combined.add_business_days(date(2024, 3, 4), 1) == date(2024, 3, 6)
+    cl.remove_custom_holiday(extra)
+    assert not combined.is_holiday(extra) and not cl.is_holiday(extra)
+
+
+def test_remove_custom_holiday_keeps_the_country_holidays():
+    cl = Calendar(country="CL")
+    cl.add_custom_holiday(date(2024, 9, 18))  # also Fiestas Patrias
+    cl.remove_custom_holiday(date(2024, 9, 18))
+    assert cl.custom_holidays == [] and cl.is_holiday(date(2024, 9, 18))
+    cl.remove_custom_holiday(date(2024, 3, 5))  # not a custom holiday: no-op
+    assert not cl.is_holiday(date(2024, 3, 5))
+
+
+def test_add_business_days_crosses_years_and_counts_from_a_holiday():
+    cl = Calendar(country="CL")
+    # 31 Dec (bank holiday) and 1 Jan closed: Monday 30 Dec 2024 -> Thursday 2 Jan 2025.
+    assert cl.add_business_days(date(2024, 12, 30), 1) == date(2025, 1, 2)
+    assert cl.add_business_days(date(2025, 1, 2), -1) == date(2024, 12, 30)
+    assert cl.add_business_days(date(2024, 12, 31), 0) == date(2025, 1, 2)
+    assert cl.add_business_days(date(2024, 12, 30), 0) == date(2024, 12, 30)
+    start = date(2024, 6, 3)
+    assert cl.add_business_days(cl.add_business_days(start, 600), -600) == start
+
+
 def test_combine_leaves_its_calendars_unchanged():
     us, cl = Calendar(country="US"), Calendar(country="CL")
     combined = us + cl
@@ -169,7 +215,8 @@ def test_a_holiday_added_to_a_shared_calendar_reaches_every_consumer():
             extra
         )  # an own calendar is independent
     finally:
-        get_calendar("CL")._calendar.pop(extra)
+        get_calendar("CL").remove_custom_holiday(extra)
+    assert convention.adjust(extra) == extra
 
 
 def test_repr_is_short():
@@ -196,3 +243,28 @@ def test_a_combined_calendar_repr_names_every_calendar_in_order():
     assert repr(cl + custom) == "Calendar(CL, 2 custom)"
     assert (cl + us)._countries == ["CL", "US"]
     assert cl._countries == ["CL"] and us._countries == ["US"]  # inputs unchanged
+
+
+# ── EUR: the TARGET2 calendar (V5) ──────────────────────────────────────────
+
+
+def test_eur_indices_use_the_target2_calendar():
+    from fintoolsom.market import Currency, OvernightRateIndex
+
+    estr = OvernightRateIndex("ESTR", currency=Currency.EUR)
+    assert estr.calendar is get_calendar("XECB")
+    # German public holidays, TARGET2 business days.
+    for d in (date(2025, 5, 29), date(2025, 6, 9), date(2025, 10, 3)):
+        assert not estr.calendar.is_holiday(d), d
+    # TARGET2 closing days.
+    for d in (date(2025, 4, 18), date(2025, 4, 21), date(2025, 5, 1), date(2025, 12, 26)):
+        assert estr.calendar.is_holiday(d), d
+    assert estr.calendar.add_business_days(date(2025, 4, 17), 2) == date(2025, 4, 23)
+
+
+def test_a_financial_market_calendar_combines_with_a_country_calendar():
+    joint = get_calendar("CL") + get_calendar("XECB")
+    assert repr(joint) == "Calendar(CL + XECB)"
+    assert joint.is_holiday(date(2025, 9, 18))  # CL only
+    assert joint.is_holiday(date(2025, 12, 26))  # TARGET2 only
+    assert not joint.is_holiday(date(2025, 10, 3))

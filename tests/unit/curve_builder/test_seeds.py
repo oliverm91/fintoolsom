@@ -19,7 +19,7 @@ from fintoolsom.market import (
 )
 from fintoolsom.market.index import TermRateIndex
 from fintoolsom.market.index_history import OvernightInterestPriceHistory
-from fintoolsom.rates import IndexCurve, Rate, RateConvention
+from fintoolsom.rates import PillarCurve, InterpolationMethod, Rate, RateConvention
 
 RISKLESS = OvernightRateIndex("OIS", currency=Currency.CLP)
 
@@ -53,14 +53,20 @@ def test_basis_seed_shifts_the_index_curve_by_the_spread():
     market = Market(
         t=t,
         risk_free_index=RISKLESS,
-        curves=[
-            IndexCurve(
-                t, RISKLESS, [t, t + (maturity - t) / 2, maturity], [0.06, 0.06]
+        curves={
+            RISKLESS: PillarCurve(
+                t,
+                [t, t + (maturity - t) / 2, maturity],
+                [0.06, 0.06],
+                InterpolationMethod.PiecewiseConstant,
             ),
-            IndexCurve(
-                t, sofr, [t, t + (maturity - t) / 2, maturity], [z_sofr, z_sofr]
+            sofr: PillarCurve(
+                t,
+                [t, t + (maturity - t) / 2, maturity],
+                [z_sofr, z_sofr],
+                InterpolationMethod.PiecewiseConstant,
             ),
-        ],
+        },
     )
     clp_leg = SimpleNamespace(
         index=RISKLESS, currency=Currency.CLP, spread=Rate(RateConvention(), spread)

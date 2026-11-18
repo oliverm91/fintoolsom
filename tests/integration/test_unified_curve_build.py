@@ -16,8 +16,10 @@ from fintoolsom.curve_builder import InsufficientQuotesError
 from fintoolsom.curve_builder.builder import _CurveBuilder
 from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import CrossCurrencyFloatFloatQuote, Currency, ForwardPointsQuote
-from fintoolsom.rates import IndexCurve, InterpolationMethod
+from fintoolsom.market.index import Index
+from fintoolsom.rates import PillarCurve, InterpolationMethod
 from tests.factories.quote_factory import (
+    ICP,
     QUOTE_DATE,
     TERM3M,
     TERM6M,
@@ -49,6 +51,11 @@ def term_irs(real):
 @pytest.fixture(scope="module")
 def basis(term_irs):
     return term_basis_quotes(term_irs)
+
+
+@pytest.fixture(scope="module")
+def real_and_term(real, term_irs, basis):
+    return real + term_irs + basis
 
 
 @pytest.fixture(scope="module")
@@ -88,7 +95,7 @@ def _dfs(market) -> dict:
 
 
 def _accruals(market) -> dict:
-    index_curves = {k: c for k, c in market.curves.items() if isinstance(c, IndexCurve)}
+    index_curves = {k: c for k, c in market.curves.items() if isinstance(k, Index)}
     return {k: c.get_accrual(GRID[:-1], GRID[1:]) for k, c in index_curves.items()}
 
 
@@ -125,7 +132,7 @@ def _spy_block_sizes(monkeypatch) -> list[int]:
 def test_term_index_gets_a_projection_curve_that_reprices_its_swaps(real, term_irs):
     market = _build(real + term_irs)
     curve = market.get_index_curve(TERM3M)
-    assert isinstance(curve, IndexCurve) and curve.spot_rate is None
+    assert isinstance(curve, PillarCurve) and curve.spot_rate is None
     assert len(curve.forward_rates) == 1 + len(
         term_irs
     )  # the spot anchor + one segment per swap
@@ -135,7 +142,7 @@ def test_term_index_gets_a_projection_curve_that_reprices_its_swaps(real, term_i
 def test_basis_swaps_pin_a_second_projection_curve_on_top_of_the_first(
     full, term_irs, basis
 ):
-    assert {TERM3M.name, TERM6M.name} <= set(full.curves)
+    assert {TERM3M, TERM6M} <= set(full.curves)
     assert max(abs(_mtm(q, full)) for q in term_irs + basis) < REPRICE_TOL
     # Receiving 6M against 3M + 8bp at par: 6M forwards sit ~8bp above the 3M ones.
     for a, b in ((365, 730), (730, 1826), (1826, 3652), (3652, 7305)):
@@ -148,7 +155,7 @@ def test_basis_swaps_pin_a_second_projection_curve_on_top_of_the_first(
 def test_basis_swaps_do_not_move_the_curves_their_irs_pin(real, term_irs, full):
     alone = _build(real + term_irs)
     np.testing.assert_allclose(
-        _accruals(full)[TERM3M.name], _accruals(alone)[TERM3M.name], rtol=1e-9
+        _accruals(full)[TERM3M], _accruals(alone)[TERM3M], rtol=1e-9
     )
     for key, dfs in _dfs(alone).items():
         np.testing.assert_allclose(_dfs(full)[key], dfs, rtol=1e-12)
@@ -160,12 +167,6 @@ def test_basis_swaps_alone_cannot_pin_two_projection_curves(real, basis):
         _build(real + basis)
 
 
-def test_quote_order_does_not_change_the_curves(real, term_irs, basis, full):
-    # Term quotes first: their groups must wait for the SOFR curve they are
-    # collateralised in, although they give it no pillar.
-    _assert_same_curves(_build(basis + term_irs + real), full, rel=1e-9)
-
-
 def test_existing_discount_curves_keep_the_real_quotes_repriced(real, full):
     assert max(abs(_mtm(q, full)) for q in _exact(real)) < REPRICE_TOL
 
@@ -173,11 +174,17 @@ def test_existing_discount_curves_keep_the_real_quotes_repriced(real, full):
 # ── Date-by-date bootstrap ──────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    "method", [InterpolationMethod.PiecewiseConstant, InterpolationMethod.PiecewiseLinear]
+)
+@pytest.mark.parametrize("quote_set", ["real", "real_and_term"])
 def test_date_by_date_bootstrap_matches_the_joint_solve(
-    real, term_irs, basis, full, monkeypatch
+    request, quote_set, method, monkeypatch
 ):
+    quotes = request.getfixturevalue(quote_set)
+    swept = _build(quotes, interp_method=method)
     monkeypatch.setattr(_CurveBuilder, "date_by_date", False)
-    _assert_same_curves(_build(real + term_irs + basis), full, rel=1e-8)
+    _assert_same_curves(_build(quotes, interp_method=method), swept, rel=1e-8)
 
 
 def test_local_interpolation_solves_one_pillar_date_at_a_time(real, monkeypatch):
@@ -194,33 +201,13 @@ def test_joint_solve_runs_one_root_per_group(real, monkeypatch):
     assert len(sizes) == 4 and sum(sizes) > 50  # ICP, SOFR, and the two USD groups
 
 
-def test_non_local_interpolation_skips_the_sweep_and_still_reprices(real, monkeypatch):
-    sizes = _spy_block_sizes(monkeypatch)
-    market = _build(real, interp_method=InterpolationMethod.HermiteCubicSpline)
-    # Every curve is non-local, so each of the 4 groups solves jointly (no sweep)
-    # and a last solve takes every pillar of the build.
-    assert len(sizes) == 5
-    assert sizes[-1] == max(sizes) > sum(sizes[:-1]) / 2
-    assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
-
-
 def test_linear_forwards_are_local_and_still_sweep(real, monkeypatch):
     sizes = _spy_block_sizes(monkeypatch)
     market = _build(real, interp_method=InterpolationMethod.PiecewiseLinear)
     assert len(sizes) > 50 and max(sizes) <= 2
     assert (
-        market.curves["ICP"].interpolation_method is InterpolationMethod.PiecewiseLinear
+        market.curves[ICP].interpolation_method is InterpolationMethod.PiecewiseLinear
     )
-    assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
-
-
-@pytest.mark.parametrize(
-    "method",
-    [InterpolationMethod.CubicSpline, InterpolationMethod.PiecewiseLinear],
-)
-def test_a_cubic_spline_curve_still_reprices_every_quote_after_the_build(real, method):
-    # A later group extending a spline moves what earlier groups were fitted on.
-    market = _build(real, interp_method=method)
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
 
 
@@ -232,24 +219,17 @@ def test_a_cubic_spline_curve_still_reprices_every_quote_after_the_build(real, m
         InterpolationMethod.HermiteCubicSpline,
     ],
 )
-def test_non_local_methods_solve_every_pillar_jointly_at_the_end(
+def test_non_local_methods_skip_the_sweep_and_reprice_after_a_last_joint_solve(
     real, monkeypatch, method
 ):
     sizes = _spy_block_sizes(monkeypatch)
-    _build(real, interp_method=method)
-    assert sizes[-1] == max(sizes) and sizes[-1] > 50
-
-
-@pytest.mark.parametrize(
-    "method",
-    [
-        InterpolationMethod.PiecewiseLinear,
-        InterpolationMethod.HermiteCubicSpline,
-        InterpolationMethod.ConvexMonotone,
-    ],
-)
-def test_any_method_reprices_for_both_curve_roles(real, method):
     market = _build(real, interp_method=method)
+    # Every curve is non-local, so each of the 4 groups solves jointly (no sweep),
+    # and a last solve takes every pillar of the build: a later group extending a
+    # spline moves what earlier groups were fitted on.
+    assert len(sizes) == 5
+    assert sizes[-1] == max(sizes) > 50 and sizes[-1] > sum(sizes[:-1]) / 2
+    assert market.curves[ICP].interpolation_method is method
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
 
 

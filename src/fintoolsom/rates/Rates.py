@@ -195,20 +195,33 @@ class Rate:
         return Rate(self.rate_convention.copy(), self.rate)
 
     def get_wealth_factor(
-        self, start_date: date | list[date], end_date: date | list[date]
+        self,
+        start_date: date | list[date],
+        end_date: date | list[date],
+        termination_date: date | None = None,
     ) -> float | np.ndarray:
+        """Wealth factor from `start_date` to `end_date`.
+
+        `termination_date` is the schedule's last date, for day counts with a rule
+        for it (30E/360 ISDA keeps an end on the last of February that is it).
+        """
         tfb = self.rate_convention.time_fraction_base
-        return self.rate_convention.interest_convention.get_wf_from_rate(
-            self.rate,
-            self.rate_convention.day_count_convention.get_time_fraction(
-                start_date, end_date, tfb
-            ),
-        )
+        dcc = self.rate_convention.day_count_convention
+        if termination_date is None:
+            tf = dcc.get_time_fraction(start_date, end_date, tfb)
+        else:
+            tf = dcc.get_time_fraction(
+                start_date, end_date, tfb, termination_date=termination_date
+            )
+        return self.rate_convention.interest_convention.get_wf_from_rate(self.rate, tf)
 
     def get_discount_factor(
-        self, start_date: date | list[date], end_date: date | list[date]
+        self,
+        start_date: date | list[date],
+        end_date: date | list[date],
+        termination_date: date | None = None,
     ) -> float | np.ndarray:
-        wf = self.get_wealth_factor(start_date, end_date)
+        wf = self.get_wealth_factor(start_date, end_date, termination_date)
         df = 1 / wf
         return df
 
@@ -217,8 +230,9 @@ class Rate:
         n: float | np.ndarray,
         start_date: date | list[date],
         end_date: date | list[date],
+        termination_date: date | None = None,
     ) -> float | np.ndarray:
-        wf = self.get_wealth_factor(start_date, end_date)
+        wf = self.get_wealth_factor(start_date, end_date, termination_date)
         interest = n * (wf - 1)
         return interest
 

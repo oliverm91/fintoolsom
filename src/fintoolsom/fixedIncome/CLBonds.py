@@ -1,5 +1,4 @@
 from bisect import bisect_right
-from copy import copy
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Self
@@ -7,10 +6,15 @@ from typing import Self
 import numpy as np
 from scipy.optimize import newton
 
-from .. import rates
-from .. import dates
-from ..rates import Rate, RateConvention, CompoundedInterestConvention
+from .. import dates, rates
 from ..dates import ActualDayCountConvention
+from ..rates import (
+    CompoundedInterestConvention,
+    ExponentialInterestConvention,
+    LinearInterestConvention,
+    Rate,
+    RateConvention,
+)
 
 
 @dataclass(slots=True)
@@ -127,7 +131,9 @@ class Coupons:
             self._validate_residuals()
 
     def copy(self) -> Self:
-        return Coupons([c.copy() for c in self.coupons])
+        return Coupons(
+            [c.copy() for c in self.coupons], check_residuals=self.check_residuals
+        )
 
     def __copy__(self) -> Self:
         return self.copy()
@@ -192,13 +198,21 @@ class Coupons:
         return cc.get_accrued_interest(date, accrue_rate=rate)
 
     def adjust_to_notional(self, notional: float):
+        """Rescale the coupons in place so the first residual is `notional`.
+
+        Amortizations, interests, residuals and flows all scale by the same ratio;
+        the accrual rates and wealth factors do not change.
+        """
         coupons_notional = self.coupons[0].residual
         ratio = notional / coupons_notional
         n = 0
         for coupon in self.coupons:
             coupon.amortization *= ratio
-            n += coupon.amortization
+            coupon.interest *= ratio
             coupon.residual *= ratio
+            coupon.flow = coupon.amortization + coupon.interest
+            n += coupon.amortization
+        self.flows = self.get_flows()
         if self.check_residuals:
             if abs(round(float(n), 1) / round(float(notional), 1) - 1) >= 1 / 100:
                 raise ValueError(
@@ -222,12 +236,12 @@ class CLBond:
         if not isinstance(notional, (int, float)) or notional <= 0:
             raise ValueError(f"notional must be a positive number. Got {notional}")
 
-        self.coupons = coupons
+        # Everything is calculated on base 100, then scaled to `notional`. The bond
+        # rescales its own copy: the caller's coupons keep their base.
+        self.coupons = coupons.copy()
         self.currency = currency.lower()
         self.notional = float(notional)
-        self.coupons.adjust_to_notional(
-            100
-        )  # Everything is calculated to N = 100. Then adjusted to notional. This makes CLBond is made with coupons with base 100.
+        self.coupons.adjust_to_notional(100)
         self.start_date = self.coupons.first_start_date
         self.end_dates = self.coupons.end_dates
         self.accrue_rate = self.coupons.get_accrue_rate()
@@ -242,7 +256,7 @@ class CLBond:
 
     def copy(self) -> Self:
         return CLBond(
-            coupons=copy(self.coupons),
+            coupons=self.coupons,  # __init__ copies it
             currency=self.currency,
             notional=self.notional,
             tera=self.tera,
@@ -504,7 +518,11 @@ class CLBond:
 
     def get_dv01(self, date: date, irr: rates.Rate) -> float:
         """
-        Calculate dv01 of the bond with: - present_value * duration / 10.000
+        Value change of the bond for a 1 bp rise of `irr`: dPV/dy / 10,000, on the notional.
+
+        The exact derivative in the IRR's own convention, with τ its year fractions:
+        compounded ``-PV · D / (1 + y)`` (modified duration), exponential ``-PV · D``
+        (Macaulay), linear ``-Σ τ · CF · DF²``.
         ----------
         Parameters:
         ----
@@ -513,13 +531,29 @@ class CLBond:
         ----
         Returns:
         ----
-            dv01 (float): The dv01 of the bond.
+            dv01 (float): The dv01 of the bond (negative for a long position).
         """
-        dur = self.get_duration(date, irr)
-        pv = self.get_present_value(date, irr)  # PV base 100
-        dv01 = -pv * dur / 10_000  # Base 100 DV01
-        dv01 *= self.notional / 100  # Notional adjusted
-        return dv01
+        convention = irr.rate_convention
+        interest = convention.interest_convention
+        interest = interest if isinstance(interest, type) else type(interest)
+        end_dates = self.coupons.get_remaining_end_dates(date)
+        taus = np.asarray(
+            convention.day_count_convention.get_time_fraction(
+                date, end_dates, convention.time_fraction_base
+            ),
+            dtype=float,
+        )
+        pvs = self.get_flows_pv(date, irr)  # CF · DF, base 100
+        if issubclass(interest, CompoundedInterestConvention):
+            slope = taus * pvs / (1 + irr.rate)
+        elif issubclass(interest, ExponentialInterestConvention):
+            slope = taus * pvs
+        elif issubclass(interest, LinearInterestConvention):
+            slope = taus * pvs / (1 + irr.rate * taus)  # DF = 1 / (1 + y τ)
+        else:
+            raise NotImplementedError(f"DV01 for interest convention {interest}.")
+        dv01 = -float(slope.sum()) / 10_000  # Base 100 DV01
+        return dv01 * self.notional / 100  # Notional adjusted
 
     def get_amount_value(self, date: date, irr: Rate, fx: float = 1.0) -> float:
         """

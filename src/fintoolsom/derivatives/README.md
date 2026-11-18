@@ -79,7 +79,7 @@ initial exchange, and coupons paid on or before `t` are dropped.
 - `get_leg_dv01(swap, side, market, currency)` is `−PV · duration / 10 000`, for
   fixed legs only (a floating leg raises `NotImplementedError`). It is a
   first-order estimate: a full revaluation with
-  `market.set_curve(curve.parallel_bump_bps(1))` matches it to first order.
+  `market.set_curve(icp, curve.parallel_bump_bps(1))` matches it to first order.
 - Forwards: `get_forward_mtm` and `get_ndf_mtm`. Options: `get_option_mtm`,
   `get_option_delta`, `get_option_gamma`, `get_option_vega` and the strikes from
   delta.
@@ -93,11 +93,12 @@ from fintoolsom.dates import ModifiedFollowingConvention, Term, TermUnit
 from fintoolsom.derivatives import Calculator
 from fintoolsom.derivatives.swaps import LegSide, Swap, builders
 from fintoolsom.market import Currency, Market, OvernightInterestPriceIndex
-from fintoolsom.rates import IndexCurve, Rate, RateConvention
+from fintoolsom.rates import InterpolationMethod, PillarCurve, Rate, RateConvention
 
 t = date(2024, 7, 8)
 icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
-market = Market(t, risk_free_index=icp, curves=[IndexCurve(t, icp, [t, date(2034, 7, 8)], [0.05])])
+curve = PillarCurve(t, [t, date(2029, 7, 9), date(2034, 7, 10)], [0.05, 0.05], InterpolationMethod.PiecewiseConstant)
+market = Market(t, risk_free_index=icp, curves={icp: curve})
 
 mf = ModifiedFollowingConvention("CL")
 start = icp.calendar.add_business_days(t, 2)  # spot start: a coupon running at t would read ICP fixings

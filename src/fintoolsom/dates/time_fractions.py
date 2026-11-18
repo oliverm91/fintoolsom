@@ -3,6 +3,8 @@ import calendar
 from dataclasses import dataclass
 from datetime import date
 
+from .date_counts import _d1_d2_30e_360_isda
+
 
 @dataclass
 class TimeFractionBase(ABC):
@@ -66,6 +68,14 @@ class TF_30E_360(TF_30_360Base):
 
 @dataclass
 class TF_30E_360ISDA(TF_30_360Base):
+    """30E/360 ISDA; `termination_date` is the schedule's last date (see D2 below).
+
+    Same rule as Days30EISDADayCountConvention: without a termination date every end
+    date is taken as an intermediate one.
+    """
+
+    termination_date: date | None = None
+
     def get_d_1_and_2(self, start_date: date, end_date: date) -> tuple[int, int]:
         """
         From 2006 ISDA Definitions - 4.16 (h).
@@ -77,25 +87,9 @@ class TF_30E_360ISDA(TF_30_360Base):
         February but not the Termination Date or (ii) such number would be 31, in which case D2 will be
         30.
         """
-        d1 = start_date.day
-        sd_eom_day = calendar.monthrange(start_date.year, start_date.month)[1]
-        d1 = (
-            d1
-            if not (
-                (start_date.month == 2 and start_date.day == sd_eom_day) or d1 == 31
-            )
-            else 30
+        return _d1_d2_30e_360_isda(
+            start_date, end_date, end_date == self.termination_date
         )
-
-        d2 = end_date.day
-        ed_eom_day = calendar.monthrange(end_date.year, end_date.month)[1]
-        d2 = (
-            d2
-            if not ((end_date.month == 2 and end_date.day == ed_eom_day) or d2 == 31)
-            else 30
-        )
-
-        return d1, d2
 
 
 @dataclass

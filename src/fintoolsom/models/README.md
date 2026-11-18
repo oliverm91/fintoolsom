@@ -45,7 +45,7 @@ nss_df(t, *params)
 - **Legacy curves.** Calibration works on `fintoolsom.fixedIncome.CLBond` and on
   the legacy `ZeroCouponCurve`, which is kept for this module.
 - **No market curve.** To use a fitted curve in a `Market`, sample `nss_df` on
-  pillar dates and build a `rates.DiscountCurve` or `rates.IndexCurve` from them.
+  pillar dates and build a `rates.PillarCurve` from them (`PillarCurve.from_dfs`).
   `NelsonSiegelSvensson.get_curve` was removed together with `NSSCurve`.
 - **Optimiser.** `calibrate_from_bonds` uses `scipy.optimize.minimize` (`powell` by default);
   pass `initial_guess` to start from a previous fit.

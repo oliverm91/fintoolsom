@@ -52,7 +52,7 @@ class _CurveBuilder:
     Quotes are grouped by the curves they read; each quote owns at most one pillar.
     A group is solved once no other pending group still owns a pillar it reads, so
     every curve is complete where it is read; groups waiting on each other are
-    merged and solved jointly. Curves go to ``market.curves`` under their ids.
+    merged and solved jointly. Curves go to ``market.curves`` under their keys.
     Mutates `market` in place.
 
     Parameters
@@ -111,6 +111,9 @@ class _CurveBuilder:
         self._pinning: list = []  # (instrument, report currency) of every quote that owned a pillar
         self._pinned_dates: list[date] = []  # the pillar each of `_pinning` owns
         self._pinned_groups: list = []  # the group each of `_pinning` was solved in
+        # (instruments, report currency, the solver's batch of them) per solved group,
+        # in `_pinning` order: the repricing check reuses the batches.
+        self._pinned_batches: list = []
         self._fixed: dict = {}  # curve -> its fixed part before this build's first pillar
         self._free_dates: dict[CurveKey, list[date]] = defaultdict(list)
 
@@ -242,6 +245,7 @@ class _CurveBuilder:
                     "more quotes in this build."
                 )
 
+        batches: dict = {}
         y = _solve_unknowns(
             solve,
             residual_instruments,
@@ -250,11 +254,19 @@ class _CurveBuilder:
             f"Curve solve for group {set(free_dates)}",
             date_by_date=self.date_by_date,
             sweep_tol=self.sweep_tol,
+            batches=batches,
         )
         solve.apply(y)  # root's last f-eval is not guaranteed to be at the solution.
         self._pinning += [(i, report_currency) for i in residual_instruments]
         self._pinned_dates += pillar_dates
         self._pinned_groups += [group] * len(residual_instruments)
+        self._pinned_batches.append(
+            (
+                residual_instruments,
+                report_currency,
+                batches.get(id(residual_instruments)),
+            )
+        )
         for curve, dates in free_dates.items():
             self._fixed.setdefault(curve, fixed_pillars[curve])
             self._free_dates[curve] += dates
@@ -296,12 +308,24 @@ class _CurveBuilder:
         )
         solve.apply(y)
 
+    def _pinned_mtms(self) -> list[float]:
+        """MTM of each quote of `_pinning` on the curves as they are now.
+
+        From the solver's batches, which give to the bit what Calculator.valuate
+        gives; a group without one is valued instrument by instrument.
+        """
+        mtms: list[float] = []
+        for instruments, ccy, batch in self._pinned_batches:
+            if batch is None:
+                mtms += [Calculator.valuate(i, self.market, ccy) for i in instruments]
+            else:
+                mtms += batch.values().tolist()
+        return mtms
+
     def _check_repricing(self) -> None:
         """Raise if a quote that pinned a pillar was moved off par by a later group, or
         the fitted quotes of a group add up to more than `group_tol`."""
-        mtms = [
-            abs(Calculator.valuate(i, self.market, ccy)) for i, ccy in self._pinning
-        ]
+        mtms = [abs(v) for v in self._pinned_mtms()]
         off = [(v, i) for v, (i, _) in zip(mtms, self._pinning) if v > self.reprice_tol]
         if off:
             worst, instr = max(off, key=lambda p: p[0])
@@ -454,9 +478,9 @@ def build_curves(
 ) -> None:
     """Bootstrap the curves that reprice `quotes` into `market`, in place.
 
-    Every index a quote reads gets an :class:`IndexCurve`, under the index name;
-    a currency other than the risk-free index's gets a :class:`DiscountCurve`,
-    under ``<currency>_<risk-free index>``. Both go to ``market.curves``.
+    Every index a quote reads gets a :class:`PillarCurve` under the index; a
+    currency other than the risk-free index's gets one under the currency. Both go
+    to ``market.curves``.
 
     Parameters
     ----------

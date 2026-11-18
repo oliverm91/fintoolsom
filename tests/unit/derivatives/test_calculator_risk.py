@@ -96,11 +96,11 @@ def test_fixed_leg_dv01_is_negative_and_matches_a_curve_bump(market):
     assert dv01 < 0
     base = Calculator.get_leg_pv(swap, LegSide.RECEIVE, market, CLP)
     curve = market.get_index_curve(ICP)
-    market.set_curve(curve.parallel_bump_bps(1.0))
+    market.set_curve(ICP, curve.parallel_bump_bps(1.0))
     try:
         bumped = Calculator.get_leg_pv(swap, LegSide.RECEIVE, market, CLP)
     finally:
-        market.set_curve(curve)
+        market.set_curve(ICP, curve)
     # The bump shifts continuous zero rates by 1bp: first order, the DV01 itself.
     assert bumped - base == pytest.approx(dv01, rel=0.01)
 

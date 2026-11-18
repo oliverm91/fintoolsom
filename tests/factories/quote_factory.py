@@ -9,6 +9,7 @@ cross-currency basis swaps. Unlike the notebook loader, it reads the quoted
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 from copy import deepcopy
 from datetime import date
@@ -18,7 +19,6 @@ from fintoolsom.curve_builder import build_curves
 from fintoolsom.dates import (
     ActualDayCountConvention,
     ModifiedFollowingConvention,
-    TF_Actual360,
 )
 from fintoolsom.dates.term import Term, TermUnit
 from fintoolsom.market import (
@@ -67,7 +67,8 @@ _INTEREST = {
     "Linear": LinearInterestConvention,
     "Compounded": CompoundedInterestConvention,
 }
-_TIME_FRACTION = {"TF_Actual360": (TF_Actual360(), ActualDayCountConvention, 360)}
+# The fixed rate's day count, by the "day_count_convention" key of the JSON.
+_DAY_COUNT = {"TF_Actual360": (ActualDayCountConvention, 360)}
 
 
 def _merge(base: dict, override: dict) -> dict:
@@ -82,7 +83,7 @@ def _merge(base: dict, override: dict) -> dict:
 
 
 def _fixed_spec(leg: dict, adj, tf_key: str) -> FixedLegSpec:
-    tf, dcc, base = _TIME_FRACTION[tf_key]
+    dcc, base = _DAY_COUNT[tf_key]
     convention = RateConvention(
         _INTEREST[leg.get("interest_convention", "Linear")], dcc, base
     )
@@ -90,12 +91,11 @@ def _fixed_spec(leg: dict, adj, tf_key: str) -> FixedLegSpec:
         currency=_CURRENCY[leg["currency"]],
         payment_frequency=PaymentFrequency[leg["payment_frequency"]],
         adj_convention=adj,
-        time_fraction=tf,
         rate=Rate(convention, leg["rate"]),
     )
 
 
-def _float_spec(leg: dict, adj, tf_key: str) -> FloatingLegSpec:
+def _float_spec(leg: dict, adj) -> FloatingLegSpec:
     index = _INDEX[leg["index"]]
     spread = Rate(
         RateConvention(LinearInterestConvention, ActualDayCountConvention, 360),
@@ -105,7 +105,6 @@ def _float_spec(leg: dict, adj, tf_key: str) -> FloatingLegSpec:
         currency=_CURRENCY[leg["currency"]] if "currency" in leg else index.currency,
         payment_frequency=PaymentFrequency[leg["payment_frequency"]],
         adj_convention=adj,
-        time_fraction=_TIME_FRACTION[tf_key][0],
         index=index,
         spread=spread,
     )
@@ -150,7 +149,6 @@ def load_quotes(
                         floating_leg=_float_spec(
                             _merge(group["floating_leg"], q.get("floating_leg", {})),
                             adj,
-                            tf_key,
                         ),
                         **common,
                     )
@@ -164,10 +162,9 @@ def load_quotes(
                         receive_leg=_float_spec(
                             _merge(group["receive_leg"], q.get("receive_leg", {})),
                             adj,
-                            tf_key,
                         ),
                         pay_leg=_float_spec(
-                            _merge(group["pay_leg"], q.get("pay_leg", {})), adj, tf_key
+                            _merge(group["pay_leg"], q.get("pay_leg", {})), adj
                         ),
                         **common,
                     )
@@ -216,14 +213,28 @@ def quote_market(t: date = QUOTE_DATE) -> Market:
     )
 
 
-def built_market(
-    quotes: list[InstrumentQuote] | None = None,
-) -> tuple[Market, list[InstrumentQuote]]:
-    """Market with every curve bootstrapped from `quotes` (the full JSON set by default)."""
-    quotes = load_quotes() if quotes is None else quotes
+def _build(quotes: list[InstrumentQuote]) -> tuple[Market, list[InstrumentQuote]]:
     market = quote_market(quotes[0].quote_date)
     build_curves(quotes, market)
     return market, quotes
+
+
+@functools.cache
+def _standard_build() -> tuple[Market, list[InstrumentQuote]]:
+    return _build(load_quotes())
+
+
+def built_market(
+    quotes: list[InstrumentQuote] | None = None,
+) -> tuple[Market, list[InstrumentQuote]]:
+    """Market with every curve bootstrapped from `quotes` (the full JSON set by default).
+
+    The default set is built once per process and each call gets a deep copy of it
+    (about 3 ms against 120 ms for a build), so a test may change what it gets.
+    """
+    if quotes is None:
+        return deepcopy(_standard_build())
+    return _build(quotes)
 
 
 # ── Synthetic USD term-index quotes on top of the real set ──────────────────
@@ -264,7 +275,6 @@ def _term_float(
         currency=Currency.USD,
         payment_frequency=frequency,
         adj_convention=US_ADJ,
-        time_fraction=TF_Actual360(),
         index=index,
         spread=Rate(_LIN360, spread),
     )
@@ -290,7 +300,6 @@ def term_irs_quotes(
                 currency=Currency.USD,
                 payment_frequency=PaymentFrequency.QUARTERLY,
                 adj_convention=US_ADJ,
-                time_fraction=TF_Actual360(),
                 rate=Rate(_LIN360, ois[tenor].fixed_leg.rate.rate + spread_bps / 1e4),
             ),
             floating_leg=_term_float(TERM3M, PaymentFrequency.QUARTERLY),

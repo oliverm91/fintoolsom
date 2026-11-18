@@ -21,10 +21,9 @@ from scipy.optimize import root
 
 from ..derivatives.calculator import ValuationBatch
 from ..market.currencies import Currency
-from ..market.index import Index
 from ..market.market import Market
-from ..rates import DiscountCurve, IndexCurve, InterpolationMethod
-from ._keys import CurveKey, _built, _curve_id
+from ..rates import InterpolationMethod, PillarCurve
+from ._keys import CurveKey, _built
 
 # A date-by-date bootstrap is accepted when every instrument reprices to this
 # (report currency); otherwise the group falls back to one joint solve.
@@ -312,10 +311,10 @@ class _GroupSolve:
             return
         precalculate = not self.local
         built = self._new_curve(curve, forwards, precalculate)
-        self.market.set_curve(built)
+        self.market.set_curve(curve, built)
         self._owned[curve] = built
 
-    def private_curve(self, curve: CurveKey, values) -> DiscountCurve | IndexCurve:
+    def private_curve(self, curve: CurveKey, values) -> PillarCurve:
         """A new curve as :meth:`set_curve` would build it from `values`, without a
         grid and outside the market (to bump freely)."""
         fixed = self.fixed_pillars[curve]
@@ -323,28 +322,14 @@ class _GroupSolve:
             curve, [*fixed.forwards, *(float(v) for v in values)], False
         )
 
-    def _new_curve(
-        self, curve: CurveKey, forwards, precalculate: bool
-    ) -> DiscountCurve | IndexCurve:
+    def _new_curve(self, curve: CurveKey, forwards, precalculate: bool) -> PillarCurve:
         fixed = self.fixed_pillars[curve]
-        knots = [*fixed.knots, *self.free_dates[curve]]
-        if isinstance(curve, Index):
-            return IndexCurve(
-                self.t,
-                curve,
-                knots,
-                forwards,
-                fixed.spot_rate,
-                self.methods[curve],
-                precalculate=precalculate,
-            )
-        return DiscountCurve(
+        return PillarCurve(
             self.t,
-            curve,
-            self.market.risk_free_index,
-            knots,
+            [*fixed.knots, *self.free_dates[curve]],
             forwards,
             self.methods[curve],
+            fixed.spot_rate,
             precalculate=precalculate,
         )
 
@@ -353,11 +338,9 @@ class _GroupSolve:
         self._owned.clear()
         for curve, previous in self._snapshot.items():
             if previous is None:
-                self.market.curves.pop(
-                    _curve_id(curve, self.market.risk_free_index), None
-                )
+                self.market.curves.pop(curve, None)
             else:
-                self.market.set_curve(previous)
+                self.market.set_curve(curve, previous)
 
 
 class _Jacobian:
@@ -510,6 +493,7 @@ def _solve_unknowns(
     *,
     date_by_date: bool = True,
     sweep_tol: float = _SWEEP_TOL,
+    batches: dict[int, ValuationBatch] | None = None,
 ) -> np.ndarray:
     """Bootstrap the free pillars date by date, falling back to one joint solve.
 
@@ -534,6 +518,10 @@ def _solve_unknowns(
         False always runs the joint solve.
     sweep_tol : float, optional
         Largest residual a sweep may leave before the joint solve runs from it.
+    batches : dict, optional
+        Where the compiled batches are kept, under ``id`` of their instrument list.
+        Pass one to reuse the batch of `instruments` after the solve: it is always
+        compiled, since both the sweep and the joint solve value the whole list.
 
     Returns
     -------
@@ -541,7 +529,8 @@ def _solve_unknowns(
         Solved unknowns.
     """
 
-    batches: dict[int, ValuationBatch] = {}
+    if batches is None:
+        batches = {}
 
     def batch_of(instrs) -> ValuationBatch:
         """The batch of `instrs` (one list each: the batch is compiled once)."""

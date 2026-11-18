@@ -22,9 +22,10 @@ from ..market.quotes import (
     InstrumentQuote,
 )
 
-# A curve the builder solves: an Index is that index's IndexCurve (it projects the
-# index and may discount); a Currency is its DiscountCurve under the market's
-# risk-free index (a currency other than the risk-free index's).
+# A curve the builder solves, and its key in ``Market.curves``: an Index is that
+# index's curve (it projects the index and may discount); a Currency is its discount
+# curve under the market's risk-free index (a currency other than the risk-free
+# index's).
 CurveKey = Index | Currency
 
 # Quote types whose instrument needs the market FX to fully materialise: XCCY (to size
@@ -46,13 +47,13 @@ def _funding_key(risk_free_index: Index, currency: Currency) -> CurveKey:
 
 
 def _curve_id(key: CurveKey, risk_free_index: Index) -> str:
-    """Id of the curve under `key` in ``Market.curves``."""
+    """Name of the curve under `key`, for messages and a stable order of curves."""
     return key.name if isinstance(key, Index) else f"{key.value}_{risk_free_index.name}"
 
 
 def _built(market: Market, key: CurveKey):
     """Curve of `key` in `market`, or None."""
-    return market.curves.get(_curve_id(key, market.risk_free_index))
+    return market.curves.get(key)
 
 
 def _instrument_of(quote: InstrumentQuote, market: Market):
