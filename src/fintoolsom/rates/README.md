@@ -18,14 +18,19 @@ Interest rates and the curves used for pricing.
 discount: `get_df(s)`, `get_df_fwd`, `get_wealth_factor`, `get_zero_rate`,
 `get_forward_rate`, and projects: `get_accrual` (wealth factor - 1).
 `parallel_bump_bps` returns a bumped copy that shifts every continuously compounded
-zero rate.
+zero rate. Bonds take any curve: `CLBond.get_present_value_zc`, `get_z_spread`,
+`get_irr_with_zcc` and `get_duration_from_curve`.
 
 A curve has no role of its own. The `Market` key it is stored under gives it one:
 under an `Index` it projects that index (and discounts the index's currency when the
 index is the risk-free one), under a `Currency` it discounts that currency under the
 market's risk-free index.
 
-`ModelCurve` is the family for parametric curves and has no implementation yet.
+There are two curves: `PillarCurve`, defined at dates, and `ModelCurve`, backed by a
+term-structure model.
+
+### `PillarCurve`
+
 `PillarCurve` (`PillarCurve.py`) is the curve defined at dates:
 `PillarCurve(curve_date, knot_dates, forward_rates, interpolation_method, spot_rate=None)`.
 Its parameters are one forward rate per segment between knots, and discount factors
@@ -52,6 +57,31 @@ are only a result of them.
   Graeme West, with Simon Ibbotson's QuantLib enhancements at quadraticity 0.3 and
   monotonicity 0.7. Forwards can go negative between knots, because QuantLib's
   `forcePositive` floor is not included.
+
+### `ModelCurve`
+
+`ModelCurve(curve_date, model, horizon, spread=0.0, model_date=None)` (`ModelCurve.py`)
+takes its dfs
+from a `TermStructureModel`: any object with `get_df(t)` at Act/365 year fractions,
+such as `models.NelsonSiegel` or `models.NelsonSiegelSvensson`. It is a `Protocol`,
+so a model qualifies without inheriting from `rates`.
+
+```python
+from fintoolsom.models import NelsonSiegelSvensson
+from fintoolsom.rates import ModelCurve
+
+nss = NelsonSiegelSvensson()
+errors = nss.calibrate_from_bonds(t, bonds_and_irrs)  # per bond: term and error_bps
+curve = ModelCurve(t, nss, horizon=last_maturity)     # usable in a Market or by CLBond
+bond.get_duration_from_curve(t, curve)                # a bond's term in errors
+```
+
+- The curve copies the model, so recalibrating `nss` later does not move `curve`.
+- `horizon` is its `last_date`, e.g. the last maturity fitted. Past it the model keeps
+  evaluating its own formula.
+- `parallel_bump_bps` adds to `spread`, a continuous Act/365 shift of every zero rate.
+  `get_aged_curve(d)` keeps the model and its t = 0 (`model_date`) and divides by the
+  df at `d`, so it is exact.
 
 ## Example
 

@@ -222,7 +222,7 @@ def test_z_spread_reprices_the_irr_value_on_the_bumped_curve(
 def test_duration_is_below_maturity_and_dv01_uses_the_modified_duration():
     bond = clbond_factory.btp0470930()
     t, irr = date(2026, 6, 24), rate(0.05)
-    duration = bond.get_duration(t, irr)  # Macaulay
+    duration = bond.get_duration_from_rate(t, irr)  # Macaulay
     assert 0 < duration < (bond.get_maturity_date() - t).days / 365
     pv = bond.get_present_value(t, irr)
     expected = -pv * duration / 1.05 / 10_000 * bond.notional / 100
@@ -290,3 +290,53 @@ def test_irr_from_amount_round_trips_in_the_default_or_a_given_convention():
     given = bond.get_irr_from_amount(t, linear, irr_rate_convention=lin_act360())
     assert given.rate_convention == lin_act360() and given.rate == 0.054576
     assert bond.get_amount_value(t, given) == linear
+
+
+# ── Duration on a curve ─────────────────────────────────────────────────────
+
+
+def _flat_continuous_curve(t: date, r: float):
+    from fintoolsom.rates import ModelCurve
+
+    class _Flat:
+        def get_df(self, years):
+            import numpy as np
+
+            return np.exp(-r * np.asarray(years, dtype=float))
+
+    return ModelCurve(t, _Flat(), date(t.year + 40, t.month, t.day))
+
+
+def test_duration_on_a_flat_curve_is_the_duration_at_that_rate():
+    bond = clbond_factory.btp0470930()
+    t = date(2026, 6, 24)
+    on_curve = bond.get_duration_from_curve(t, _flat_continuous_curve(t, 0.05))
+    at_rate = bond.get_duration_from_rate(t, rate(0.05, exp_act365()))
+    assert on_curve == pytest.approx(at_rate, rel=1e-12)
+    assert 0 < on_curve < (bond.get_maturity_date() - t).days / 365
+
+
+def test_duration_on_a_curve_is_the_df_weighted_average_time():
+    bond = clbond_factory.btp0470930()
+    t = date(2026, 6, 24)
+    curve = curve_factory.sample_curve()  # curve date 2024-07-08, before t
+    dates = bond.coupons.get_remaining_end_dates(t)
+    pvs = bond.coupons.get_remaining_flows(t) * curve.get_dfs(dates)
+    times = [(d - t).days / 365 for d in dates]
+    expected = sum(p * x for p, x in zip(pvs, times)) / sum(pvs)
+    assert bond.get_duration_from_curve(t, curve) == pytest.approx(expected, rel=1e-12)
+
+
+def test_a_zero_coupon_duration_on_any_curve_is_its_maturity():
+    t = date(2024, 7, 8)
+    bond = clbond_factory.bullet_clbond(start=t, n_coupons=1, coupon_amount=0.0)
+    maturity = (bond.get_maturity_date() - t).days / 365
+    assert bond.get_duration_from_curve(t, curve_factory.sample_curve()) == pytest.approx(
+        maturity, rel=1e-12
+    )
+
+
+def test_a_matured_bond_has_no_duration_on_a_curve():
+    bond = clbond_factory.two_coupon_bond()
+    with pytest.raises(ZeroDivisionError):
+        bond.get_duration_from_curve(date(2026, 1, 1), curve_factory.sample_curve())

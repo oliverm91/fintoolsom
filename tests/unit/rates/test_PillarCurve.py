@@ -9,7 +9,6 @@ from fintoolsom.rates import (
     Curve,
     PillarCurve,
     InterpolationMethod,
-    ModelCurve,
 )
 from fintoolsom.rates.PillarCurve import _warn_piecewise_linear
 from tests.factories.curve_factory import curve_from_dfs
@@ -28,12 +27,6 @@ PROBE = [T + timedelta(days=d) for d in range(0, 5000, 7)]
 
 def test_pillar_curve_is_a_concrete_curve():
     assert issubclass(PillarCurve, Curve) and not PillarCurve.__abstractmethods__
-
-
-def test_model_curve_is_a_curve_and_stays_abstract():
-    assert issubclass(ModelCurve, Curve)
-    with pytest.raises(TypeError):
-        ModelCurve()  # type: ignore[abstract]
 
 
 def test_the_interpolation_belongs_to_pillar_curves():

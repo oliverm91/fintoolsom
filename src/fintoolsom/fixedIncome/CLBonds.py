@@ -489,7 +489,7 @@ class CLBond:
         price = round(100.0 * pv / par_value, price_decimals)
         return price, par_value
 
-    def get_duration(
+    def get_duration_from_rate(
         self,
         date: date,
         irr: rates.Rate,
@@ -497,28 +497,74 @@ class CLBond:
         time_fraction_base: int = 365,
     ) -> float:
         """
-        Calculates the bond duration.
+        Calculates the bond's Macaulay duration at an IRR: Σ t · PV(flow) / PV, with
+        each flow discounted at `irr`.
         ----------
         Parameters:
         ----
             date (date): The date for which the duration is calculated.
             irr (Rate): The interest rate.
-            day_count_convention (DayCountConvention): Optional. The day count convention. Default is Actual.
-            time_fraction_base (int): The time fraction base. Default is 365.
+            day_count_convention (DayCountConvention): Optional. The day count convention of t. Default is Actual.
+            time_fraction_base (int): The time fraction base of t. Default is 365.
         ----
         Returns:
         ----
-            duration (float): The bond duration.
+            duration (float): The bond duration, in years.
         """
+        return self._macaulay_duration(
+            date,
+            self.get_flows_pv(date, irr),
+            day_count_convention,
+            time_fraction_base,
+        )
+
+    def get_duration_from_curve(
+        self,
+        date: date,
+        curve: rates.Curve,
+        day_count_convention: dates.DayCountConventionBase = dates.ActualDayCountConvention,
+        time_fraction_base: int = 365,
+    ) -> float:
+        """
+        Calculates the bond's duration on a discount curve: Σ t · flow · df / Σ flow · df,
+        with each flow discounted on `curve` (Macaulay with the curve's dfs, the
+        Fisher-Weil duration).
+
+        The dfs may be measured from the curve's own date: dividing every df by
+        df(date) cancels in the ratio, so `date` need not be the curve date.
+        ----------
+        Parameters:
+        ----
+            date (date): The date for which the duration is calculated.
+            curve (Curve): The curve that discounts the flows (e.g. a PillarCurve or a ModelCurve).
+            day_count_convention (DayCountConvention): Optional. The day count convention of t. Default is Actual.
+            time_fraction_base (int): The time fraction base of t. Default is 365.
+        ----
+        Returns:
+        ----
+            duration (float): The bond duration, in years.
+        """
+        end_dates = self.coupons.get_remaining_end_dates(date)
+        pvs = self.coupons.get_remaining_flows(date) * curve.get_dfs(end_dates)
+        return self._macaulay_duration(
+            date, pvs, day_count_convention, time_fraction_base
+        )
+
+    def _macaulay_duration(
+        self,
+        date: date,
+        flows_pvs: np.ndarray,
+        day_count_convention: dates.DayCountConventionBase,
+        time_fraction_base: int,
+    ) -> float:
+        """Σ t · PV(flow) / Σ PV(flow) over the remaining flows."""
         end_dates = self.coupons.get_remaining_end_dates(date)
         tenors = day_count_convention.get_time_fraction(
             date, end_dates, time_fraction_base
         )
-        pvs = self.get_flows_pv(date, irr)
         # Python floats: a matured bond must raise ZeroDivisionError, not return nan.
-        total_pv = float(pvs.sum())
-        duration = float((pvs * tenors).sum()) / total_pv
-        return duration
+        total_pv = float(flows_pvs.sum())
+        return float((flows_pvs * tenors).sum()) / total_pv
 
     def get_dv01(self, date: date, irr: rates.Rate) -> float:
         """

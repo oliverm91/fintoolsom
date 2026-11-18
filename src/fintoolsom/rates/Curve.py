@@ -1,8 +1,8 @@
 """Curves used for pricing, the market and the curve builder.
 
-:class:`Curve` is the discounting interface every curve implements. Its families are
-:class:`ModelCurve` (parametric, not implemented yet) and
-:class:`~fintoolsom.rates.PillarCurve` (forward rates between dates).
+:class:`Curve` is the discounting interface every curve implements:
+:class:`~fintoolsom.rates.PillarCurve` (forward rates between dates) and
+:class:`~fintoolsom.rates.ModelCurve` (a term-structure model, e.g. Nelson-Siegel).
 
 A curve has no role of its own: the :class:`~fintoolsom.market.Market` key it is
 stored under gives it one. Under an ``Index`` it projects that index (and discounts
@@ -85,7 +85,8 @@ class Curve(ABC):
     @property
     @abstractmethod
     def last_date(self) -> date:
-        """Last pillar or knot; past it the curve extrapolates (flat forward)."""
+        """Last date the curve is built for: a pillar curve's last knot, a model
+        curve's horizon. Past it each curve extrapolates its own way."""
 
     @abstractmethod
     def parallel_bump_bps(self, bps: float) -> Self:
@@ -184,13 +185,6 @@ class Curve(ABC):
                 )
             ),
         )
-
-
-class ModelCurve(Curve):
-    """Curve given by a parametric model rather than by pillars.
-
-    Not implemented yet: it stays abstract until a model implements :class:`Curve`.
-    """
 
 
 class DailyGridCurve(Curve):

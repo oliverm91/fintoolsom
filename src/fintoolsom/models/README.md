@@ -1,28 +1,50 @@
 # fintoolsom.models
 
-Parametric term-structure models. Today: Nelson-Siegel-Svensson.
+Parametric term-structure models: Nelson-Siegel and Nelson-Siegel-Svensson.
 
-## Nelson-Siegel-Svensson (`NelsonSiegelSvensson.py`)
+## Nelson-Siegel family (`NelsonSiegelSvensson.py`)
 
 The zero rate (continuous, Act/365) at year fraction `t` is:
 
 ```
-r(t) = b0 + b1·L1(t/λ) + b2·C(t/λ) + b3·C(μ·t)
-L1(x) = (1 − e^−x) / x,   C(x) = L1(x) − e^−x
+Nelson-Siegel:   r(t) = b0 + b1·S(x) + b2·C(x)
+Svensson:        r(t) = b0 + b1·S(x) + b2·C(x) + b3·C(y)
+S(x) = (1 − e^−x) / x,   C(x) = S(x) − e^−x
+x = HUMP_PEAK·t / λ,     y = HUMP_PEAK·t / μ
 ```
 
-`b0` is the level, `b1` the slope, and `b2` and `b3` the two curvatures. Note the
-two decays enter differently: `λ` is a time scale (`t/λ`), while `μ` is a rate
-(`μ·t`).
+`b0` is the level, `b1` the slope, and `b2` and `b3` the curvatures. `λ` and `μ`
+are the years to each hump: `C` peaks at `HUMP_PEAK` ≈ 1.7933, so `C(x)` peaks at
+`t = λ`.
 
 | Name | What it does |
 |---|---|
-| `nss_factors(t, λ, μ)` | Factor loadings `[level, slope, curvature, curvature 2]` |
-| `nss_rate(t, b0..b3, λ, μ)` | Zero rate at `t` |
-| `nss_df(t, b0..b3, λ, μ)` | Discount factor `exp(−r(t)·t)`, 1 at `t = 0` |
-| `NelsonSiegelSvensson` | Holds the parameters: `get_rate(t)`, `get_df(t)`, `get_params()` |
-| `.calibrate_from_bonds(date, [(CLBond, Rate), ...])` | Fits the parameters to bond IRRs (`calibrate` is a deprecated alias) |
-| `.calibrate_from_curve(curve)` | Fits the parameters to a `PillarCurve`'s zero rates at its knots |
+| `ns_factors(t, λ)`, `nss_factors(t, λ, μ)` | Factor loadings `[level, slope, curvature(, curvature 2)]` |
+| `ns_rate(t, b0..b2, λ)`, `nss_rate(t, b0..b3, λ, μ)` | Zero rate at `t` |
+| `ns_df(...)`, `nss_df(...)` | Discount factor `exp(−r(t)·t)`, 1 at `t = 0` |
+| `NelsonSiegel(b0, b1, b2, lambda_)` | One hump, calibrated in 0.25-20 years |
+| `NelsonSiegelSvensson(b0, b1, b2, b3, lambda_, mu_)` | Two humps, calibrated in 0.25-3 and 2-20 years |
+| `.get_rate(t)`, `.get_df(t)`, `.get_params()` | Both models; `get_params()` is the betas, then the humps |
+| `.calibrate_from_bonds(date, [(CLBond, Rate), ...])` | Fits every parameter to the bonds' PVs at their IRRs; returns one `CalibrationError` per bond |
+| `.calibrate_from_curve(curve)` | Fits a `PillarCurve`'s zero rates at its knots (humps by the solver, betas solved exactly for each); returns one `CalibrationError` per knot |
+| `CalibrationError` | `TypedDict` `{"term": float, "error_bps": float}`: the fit at one point |
+
+### Calibration errors
+
+Both calibrations set the model's parameters and return the fit at each point,
+fitted minus observed: `[{"term": 1.0, "error_bps": 2.1}, ...]`.
+
+- Bonds, in the order given: `term` is the bond's duration on the fitted curve,
+  `CLBond.get_duration_from_curve` (Σ t·flow·df / PV), and `error_bps` the IRR that
+  prices the bond at its fitted PV minus its quoted IRR, in the quote's convention.
+- Curve, per knot after the curve date: `term` is its Act/365 year fraction, and
+  `error_bps` the fitted zero rate minus the curve's, continuous Act/365.
+
+An exact fit reports errors of about 1e-7bp, the floor of the normal equations.
+
+Every parameter has a default, the starting point of a fit, so `NelsonSiegel()`
+works. The two models are siblings, not a subclass of each other: they share their
+calibration, but not their parameters.
 
 The functions take year fractions (floats or numpy arrays), not dates, so they can
 be vectorised and used inside optimisers.
@@ -32,18 +54,54 @@ be vectorised and used inside optimisers.
 ```python
 import numpy as np
 
-from fintoolsom.models.NelsonSiegelSvensson import nss_df, nss_rate
+from fintoolsom.models import NelsonSiegel, NelsonSiegelSvensson
+from fintoolsom.models.NelsonSiegelSvensson import nss_rate
 
-params = (0.05, -0.01, 0.02, -0.01, 1.5, 0.1)  # b0, b1, b2, b3, lambda, mu
 t = np.array([0.5, 1, 5, 10, 30])
-nss_rate(t, *params)
-nss_df(t, *params)
+nss_rate(t, 0.05, -0.01, 0.02, -0.01, 1.5, 12.0)  # b0..b3, humps at 1.5y and 12y
+NelsonSiegel(0.05, -0.01, 0.02, lambda_=3.0).get_df(t)
+```
+
+Fitting Nelson-Siegel to a curve with two humps leaves a few bp at each pillar:
+
+```python
+from datetime import date, timedelta
+
+from fintoolsom.rates import InterpolationMethod, PillarCurve
+
+curve_date = date(2024, 7, 8)
+pillars = [curve_date + timedelta(days=round(365 * y)) for y in (0.5, 1, 2, 5, 10, 30)]
+dfs = [0.9775, 0.9522, 0.8998, 0.7524, 0.5552, 0.1848]
+curve = PillarCurve.from_dfs(curve_date, pillars, dfs, InterpolationMethod.PiecewiseConstant)
+
+ns = NelsonSiegel()
+errors = ns.calibrate_from_curve(curve)
+# [{'term': 0.4986, 'error_bps': 3.78}, {'term': 1.0, 'error_bps': -3.55}, ...,
+#  {'term': 30.0, 'error_bps': 0.99}]; ns.lambda_ is about 5.09 years
 ```
 
 ## Notes
 
-- **No market curve.** To use a fitted curve in a `Market`, sample `nss_df` on
-  pillar dates and build a `rates.PillarCurve` from them (`PillarCurve.from_dfs`).
-  `NelsonSiegelSvensson.get_curve` was removed together with `NSSCurve`.
-- **Optimiser.** `calibrate_from_bonds` uses `scipy.optimize.minimize` (`powell` by default);
-  pass `initial_guess` to start from a previous fit.
+- **As a curve.** `rates.ModelCurve(t, model, horizon)` wraps a fitted model into a
+  `Curve` for a `Market` or `CLBond`; both models are `rates.TermStructureModel`s.
+- **Fewer inputs, fewer humps.** With a handful of bonds Svensson's two humps are
+  close to collinear; `NelsonSiegel` fits them more stably.
+- **Solver.** Both calibrations are bounded least squares on a residual vector
+  (`scipy.optimize.least_squares`, trust-region reflective) with an analytic
+  Jacobian, and raise `ValueError` if it does not converge:
+  - `calibrate_from_bonds`: one residual per bond (model PV minus PV at the IRR),
+    all parameters fitted jointly, since the betas sit inside the dfs' exponential.
+  - `calibrate_from_curve`: variable projection. Each evaluation solves the betas
+    exactly for the humps it is given, so the solver only moves the humps and the
+    betas always belong to them (Golub-Pereyra Jacobian). It starts from the best
+    point of a coarse hump grid (~150 points, one batched linear solve), which
+    keeps two-hump fits out of local minima.
+  - On 10 bonds / 20 pillars: bonds 2.3 ms (NS) and 5.1 ms (NSS), about 0.5 ms of
+    which is the IRR solves behind the errors; curve 0.8 ms and 1.3 ms. Powell took
+    42, 30, 3.3 and 7.1 ms.
+  - Pass `initial_guess` to start from a previous fit. Its humps start at least 1%
+    inside their bounds (0.25 to 0.2525, 20 to 19.8), and the fit can still end on
+    one.
+- **Short humps.** A hump before the first pillar or bond flow is weakly
+  identified: the fit's rates still match, but the hump itself moves more than the
+  rates do.

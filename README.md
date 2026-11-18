@@ -48,7 +48,7 @@ bond = CLBond(coupons, currency="clp", notional=380_000_000)
 t, irr = date(2024, 7, 8), Rate(RateConvention(), 0.06)  # IRR: compounded Act/365
 bond.get_price(t, irr)                     # (93.8945, 101.6537): price and par value, in %
 bond.get_amount_value(t, irr)              # 362_699_638 CLP to pay
-bond.get_duration(t, irr), bond.get_dv01(t, irr)    # 5.29 years, -192_012 CLP per bp
+bond.get_duration_from_rate(t, irr), bond.get_dv01(t, irr)    # 5.29 years, -192_012 CLP per bp
 bond.get_irr_from_amount(t, 360_000_000)   # Rate of 6.1498%
 ```
 
