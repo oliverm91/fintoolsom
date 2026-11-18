@@ -52,8 +52,8 @@ market.get_dfs(Currency.CLP, dates, collateral=sofr)  # CLP_ICP * SOFR / USD_ICP
 - A market has one numeraire, its `risk_free_index`. The risk-free index's currency
   is not a key: it discounts on the index's curve, so `set_curve(Currency.CLP, ...)`
   under ICP raises a `ValueError`.
-- `set_curve` rejects legacy `ZeroCouponCurve`s and keys that are neither an `Index`
-  nor a `Currency`.
+- `set_curve` rejects values that are not a `Curve` and keys that are neither an
+  `Index` nor a `Currency`.
 
 ## UF
 

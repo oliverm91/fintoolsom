@@ -7,9 +7,8 @@ from scipy.optimize import minimize
 import numpy as np
 
 from ..fixedIncome.CLBonds import CLBond
-from ..rates.Rates import Rate, RateConvention, ExponentialInterestConvention
-from ..rates.ZeroCouponCurve import ZeroCouponCurve
-from ..dates import ActualDayCountConvention
+from ..rates.Rates import Rate
+from ..rates.PillarCurve import PillarCurve
 
 
 # ── NSS formulas ──
@@ -263,11 +262,12 @@ class NelsonSiegelSvensson:
 
     def calibrate_from_curve(
         self,
-        curve: ZeroCouponCurve,
+        curve: PillarCurve,
         initial_guess: Optional[list[float]] = None,
         method: str = "powell",
     ):
-        """Fit the model to the curve's continuously compounded Act/365 zero rates.
+        """Fit the model to the curve's continuously compounded Act/365 zero rates at
+        its knots after the curve date.
 
         `initial_guess` is ``[lambda_, mu_]`` in the model's own parameters (by
         default the humps at 2 and 5 years); the betas are then solved exactly by
@@ -276,13 +276,9 @@ class NelsonSiegelSvensson:
         # For fixed lambda_/mu_, the NSS rate is linear in b0..b3 (see _get_design_matrix), so betas
         # can be solved exactly via least squares instead of optimizing over all 6 params. Only
         # lambda_/mu_ need the nonlinear optimizer, and target rates are computed once upfront.
-        rate_convention = RateConvention(
-            interest_convention=ExponentialInterestConvention,
-            day_count_convention=ActualDayCountConvention,
-            time_fraction_base=365,
-        )
-        t = curve.days / 365
-        target_rates = curve.get_zero_rates_values(rate_convention)
+        pillars = [d for d in curve.knot_dates if d > curve.curve_date]
+        t = np.array([(d - curve.curve_date).days for d in pillars]) / 365
+        target_rates = -np.log(curve.get_dfs(pillars)) / t
 
         def get_valuation_error(tau_params):
             lambda_, mu_ = tau_params

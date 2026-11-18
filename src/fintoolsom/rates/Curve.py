@@ -34,7 +34,7 @@ class InterpolationMethod(Enum):
     """How a :class:`~fintoolsom.rates.PillarCurve` fills the gaps between its knots.
 
     It only chooses the function integrated between knots; every pillar curve accepts
-    every method except ``LogLinear``:
+    every method:
 
     * ``PiecewiseConstant``: one constant forward per segment, i.e. linear in
       ``log(df)`` between knots;
@@ -46,11 +46,9 @@ class InterpolationMethod(Enum):
       curve;
     * ``ConvexMonotone``: continuous forwards, quadratic by pieces, from the monotone
       convex method of Hagan & West (2006) as enhanced in QuantLib. A knot moves only
-      the segments next to it;
-    * ``LogLinear``: only for the legacy ``ZeroCouponCurve``, which stores dfs.
+      the segments next to it.
     """
 
-    LogLinear = 1
     HermiteCubicSpline = 2
     PiecewiseConstant = 3
     PiecewiseLinear = 4

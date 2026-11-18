@@ -7,9 +7,6 @@ from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
 from tests.factories.swap_factory import build_market
-from tests.factories.curve_factory import (
-    curve_from_zero_coupon_curve,
-)
 
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
@@ -26,23 +23,23 @@ def _market(curve_date, zero_coupon_curve, spot: float) -> Market:
         risk_free_index=RISKLESS,
         curves={
             # CLP: the riskless index's own curve
-            RISKLESS: curve_from_zero_coupon_curve(zero_coupon_curve),
+            RISKLESS: zero_coupon_curve,
             # USD: uncollateralised
-            Currency.USD: curve_from_zero_coupon_curve(zero_coupon_curve),
+            Currency.USD: zero_coupon_curve,
         },
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))
     return market
 
 
-def test_forward_mtm_is_zero_at_fair_strike(sample_zero_coupon_curve, curve_date):
+def test_forward_mtm_is_zero_at_fair_strike(sample_curve, curve_date):
     spot = 900.0
     payment_date = date(2025, 1, 10)
-    df_d = sample_zero_coupon_curve.get_df(payment_date)
-    df_f = sample_zero_coupon_curve.get_df(payment_date)
+    df_d = sample_curve.get_df(payment_date)
+    df_f = sample_curve.get_df(payment_date)
     fair_strike = spot * df_f / df_d
 
-    market = _market(curve_date, sample_zero_coupon_curve, spot)
+    market = _market(curve_date, sample_curve, spot)
     forward = Forward(
         1_000_000, fair_strike, payment_date, is_buy=True, currency_pair=USDCLP
     )
@@ -50,11 +47,11 @@ def test_forward_mtm_is_zero_at_fair_strike(sample_zero_coupon_curve, curve_date
     assert mtm == 0
 
 
-def test_forward_mtm_sign_flips_with_is_buy(sample_zero_coupon_curve, curve_date):
+def test_forward_mtm_sign_flips_with_is_buy(sample_curve, curve_date):
     spot = 900.0
     strike = 800.0
     payment_date = date(2025, 1, 10)
-    market = _market(curve_date, sample_zero_coupon_curve, spot)
+    market = _market(curve_date, sample_curve, spot)
 
     buy_forward = Forward(
         1_000_000, strike, payment_date, is_buy=True, currency_pair=USDCLP
@@ -69,13 +66,11 @@ def test_forward_mtm_sign_flips_with_is_buy(sample_zero_coupon_curve, curve_date
     assert buy_mtm > 0  # spot > strike, buying is in the money
 
 
-def test_ndf_mtm_matches_forward_when_fixing_equals_payment(
-    sample_zero_coupon_curve, curve_date
-):
+def test_ndf_mtm_matches_forward_when_fixing_equals_payment(sample_curve, curve_date):
     spot = 900.0
     strike = 800.0
     payment_date = date(2025, 1, 10)
-    market = _market(curve_date, sample_zero_coupon_curve, spot)
+    market = _market(curve_date, sample_curve, spot)
 
     forward = Forward(
         1_000_000, strike, payment_date, is_buy=True, currency_pair=USDCLP

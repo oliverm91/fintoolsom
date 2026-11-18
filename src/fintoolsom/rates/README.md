@@ -41,8 +41,7 @@ are only a result of them.
 - The last forward is extended flat past the last knot.
 - Every pillar curve needs at least 2 segments (3 knots).
 - `InterpolationMethod` only chooses the function integrated between knots, and every
-  pillar curve accepts every method. `LogLinear` exists only for the legacy
-  `ZeroCouponCurve`.
+  pillar curve accepts every method. `PiecewiseConstant` is log-linear in the dfs.
 - `PiecewiseLinear` forwards zig-zag: each knot forward is `2 * segment average -
   previous knot forward`, so a change in one segment reaches every later knot without
   decaying. Hagan & West (2006), "Interpolation Methods for Curve Construction",
@@ -77,9 +76,3 @@ usd_curve.parallel_bump_bps(1).get_df(date(2030, 1, 8))
 icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
 market = Market(t, risk_free_index=icp, curves={icp: icp_curve, Currency.USD: usd_curve})
 ```
-
-## Legacy
-
-`ZeroCouponCurve` (built on `LegacyCurve`) is kept only for `fixedIncome.CLBond`
-and `models.NelsonSiegelSvensson`. It emits a `DeprecationWarning` when created,
-and `Market` refuses to store it.

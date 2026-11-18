@@ -7,7 +7,6 @@ from fintoolsom.derivatives.swaps.swaps import Swap
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.rates import Rate, RateConvention, LinearInterestConvention
 from fintoolsom.dates import ActualDayCountConvention
-from tests.factories.curve_factory import curve_from_zero_coupon_curve
 
 
 SOFR = OvernightRateIndex("SOFR", currency=Currency.USD)
@@ -21,16 +20,14 @@ FIXED_RATE = Rate(
 )
 
 
-def _sofr_market(curve_date, sample_zero_coupon_curve) -> Market:
+def _sofr_market(curve_date, sample_curve) -> Market:
     # SOFR's index curve (SOFR is the risk-free index) both discounts USD and projects SOFR.
-    sofr = curve_from_zero_coupon_curve(sample_zero_coupon_curve)
+    sofr = sample_curve
     return Market(t=curve_date, risk_free_index=SOFR, curves={SOFR: sofr})
 
 
-def test_leg_pv_projects_overnight_leg_via_projection_curve(
-    curve_date, sample_zero_coupon_curve
-):
-    market = _sofr_market(curve_date, sample_zero_coupon_curve)
+def test_leg_pv_projects_overnight_leg_via_projection_curve(curve_date, sample_curve):
+    market = _sofr_market(curve_date, sample_curve)
 
     start_date = date(2024, 9, 10)
     end_date = date(2024, 10, 10)
@@ -47,16 +44,16 @@ def test_leg_pv_projects_overnight_leg_via_projection_curve(
     pv = Calculator._leg_pv(leg, None, market)
 
     # Overnight coupon accrues the forward WEALTH factor (>1): interest = residual*(wf-1).
-    wf_fwd = sample_zero_coupon_curve.get_wf_fwd(start_date, end_date)
+    wf_fwd = sample_curve.get_wealth_factor(start_date, end_date)
     expected_flow = coupon.residual * (wf_fwd - 1)
-    expected_pv = expected_flow * sample_zero_coupon_curve.get_df(end_date)
+    expected_pv = expected_flow * sample_curve.get_df(end_date)
     assert pv == pytest.approx(expected_pv)
 
 
 def test_swap_mtm_discounts_projected_floating_leg_against_fixed_leg(
-    curve_date, sample_zero_coupon_curve
+    curve_date, sample_curve
 ):
-    market = _sofr_market(curve_date, sample_zero_coupon_curve)
+    market = _sofr_market(curve_date, sample_curve)
 
     start_date = date(2024, 9, 10)
     end_date = date(2024, 10, 10)
@@ -85,11 +82,9 @@ def test_swap_mtm_discounts_projected_floating_leg_against_fixed_leg(
 
     mtm = Calculator.get_swap_mtm(swap, market, Currency.USD)
 
-    fixed_pv = fixed_coupon.flow * sample_zero_coupon_curve.get_df(end_date)
-    wf_fwd = sample_zero_coupon_curve.get_wf_fwd(start_date, end_date)
+    fixed_pv = fixed_coupon.flow * sample_curve.get_df(end_date)
+    wf_fwd = sample_curve.get_wealth_factor(start_date, end_date)
     floating_pv = (
-        overnight_coupon.residual
-        * (wf_fwd - 1)
-        * sample_zero_coupon_curve.get_df(end_date)
+        overnight_coupon.residual * (wf_fwd - 1) * sample_curve.get_df(end_date)
     )
     assert mtm == pytest.approx(fixed_pv - floating_pv)

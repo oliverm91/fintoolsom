@@ -1,5 +1,5 @@
 from bisect import bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Self
 
@@ -12,6 +12,7 @@ from ..rates import (
     CompoundedInterestConvention,
     ExponentialInterestConvention,
     LinearInterestConvention,
+    PillarCurve,
     Rate,
     RateConvention,
 )
@@ -316,14 +317,13 @@ class CLBond:
         total_pv = pvs.sum()
         return total_pv
 
-    def get_present_value_zc(
-        self, date: date, zc_curve: rates.ZeroCouponCurve
-    ) -> float:
+    def get_present_value_zc(self, date: date, zc_curve: rates.Curve) -> float:
         """
-        Retuns present value using a Zero Coupon Curve object.
+        Retuns present value discounting the remaining flows on a curve.
         ----------
             date (date): date at which the present value is calculated.
-            zc_curve (ZeroCouponCurve): Zero Coupon Curve to discount bond flows.
+            zc_curve (Curve): curve to discount bond flows (e.g. a PillarCurve), from
+                its curve date.
         ----
         Returns:
         ----
@@ -339,17 +339,19 @@ class CLBond:
         self,
         date: date,
         irr: rates.Rate,
-        zc_curve: rates.ZeroCouponCurve,
+        zc_curve: rates.Curve,
         initial_guess: float = None,
         maxiter: int = 50,
     ) -> float:
         """
-        Returns the z-spread given the internal rate of return (IRR) and a Zero Coupon Curve.
-        This is, basis points to do a parallel bump to the Zero Coupon Curve so that IRR_value == ZCC_value.
+        Returns the z-spread given the internal rate of return (IRR) and a curve.
+        This is, basis points of a parallel bump of the curve's continuously compounded
+        Act/365 zero rates (:meth:`Curve.parallel_bump_bps`) so that IRR_value ==
+        curve value.
         ----------
             date (date): date at which the z-spread is calculated.
             irr (Rate): internal rate of return to match.
-            zc_curve (ZeroCouponCurve): Zero Coupon Curve to discount bond flows.
+            zc_curve (Curve): curve to discount bond flows.
             initial_guess (Optional, float): default is None.
             maxiter (Optional, int): Max iterations for solver. Default is 50.
         ----
@@ -365,11 +367,13 @@ class CLBond:
                 (self.notional / 100) * (irr_value - current_zc_value) / dv01
             )
 
+        # Every Newton step reads a bumped copy at a few dates: skip its daily grid.
+        if isinstance(zc_curve, PillarCurve) and zc_curve.precalculate:
+            zc_curve = replace(zc_curve, precalculate=False)
+
         def bp_bump_curve_value(bp_bump: float) -> float:
-            zc_curve.parallel_bump_rates_bps(bp_bump)
-            bumped_val = self.get_present_value_zc(date, zc_curve)
-            zc_curve.parallel_bump_rates_bps(-bp_bump)
-            return bumped_val - irr_value
+            bumped = zc_curve.parallel_bump_bps(float(bp_bump))
+            return self.get_present_value_zc(date, bumped) - irr_value
 
         result = newton(bp_bump_curve_value, initial_guess, maxiter=maxiter)
         return result
@@ -413,17 +417,17 @@ class CLBond:
     def get_irr_with_zcc(
         self,
         date: date,
-        zero_coupon_curve: rates.ZeroCouponCurve,
+        zero_coupon_curve: rates.Curve,
         irr_rate_convention: RateConvention,
         initial_guess: float = None,
     ) -> Rate:
         """
-        Calculates the internal rate of return of a bond for a given a ZeroCouponCurve.
+        Calculates the internal rate of return of a bond for a given curve.
         --------
         Parameters:
         ----
             date (date): The date for which the IRR is calculated.
-            zero_coupon_curve (ZeroCouponCurve): A Zero Coupon Curve that will be used to calculate the Present Value of the bond.
+            zero_coupon_curve (Curve): A curve (e.g. a PillarCurve) that will be used to calculate the Present Value of the bond.
             irr_rate_convention (RateConvention): The convention for the IRR.
         ----
         Returns:

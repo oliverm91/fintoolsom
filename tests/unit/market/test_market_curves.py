@@ -8,7 +8,7 @@ import pytest
 from fintoolsom.market import Market
 from fintoolsom.market.currencies import Currency, CurrencyName
 from fintoolsom.market.index import OvernightRateIndex
-from fintoolsom.rates import PillarCurve, InterpolationMethod, ZeroCouponCurve
+from fintoolsom.rates import PillarCurve, InterpolationMethod
 from tests.factories.curve_factory import curve_from_dfs
 
 T = date(2024, 7, 8)
@@ -102,11 +102,9 @@ def test_index_curve_lookup_and_missing_curves():
         market.get_index_curve(OvernightRateIndex("TAB", currency=CLP))
 
 
-def test_legacy_curves_are_rejected():
-    with pytest.warns(DeprecationWarning, match="legacy"):
-        zcc = ZeroCouponCurve(T, date_dfs=[(END, 0.6)])
-    with pytest.raises(TypeError, match="use PillarCurve"):
-        _market().set_curve(SOFR, zcc)
+def test_only_curves_are_stored():
+    with pytest.raises(TypeError, match="must be Curve instances"):
+        _market().set_curve(SOFR, [0.6])
 
 
 def test_curves_are_keyed_by_index_or_currency():

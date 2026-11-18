@@ -4,9 +4,6 @@ from fintoolsom.derivatives.calculator import Calculator
 from fintoolsom.derivatives.forwards.forwards import Forward, NDF
 from fintoolsom.market import Currency, Market, OvernightRateIndex
 from fintoolsom.market.currencies import CurrencyPair, FX_Rate
-from tests.factories.curve_factory import (
-    curve_from_zero_coupon_curve,
-)
 
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
@@ -23,20 +20,20 @@ def _market_with_fx_forward_setup(curve_date, zero_coupon_curve, spot: float) ->
         risk_free_index=RISKLESS,
         curves={
             # CLP: the riskless index's own curve
-            RISKLESS: curve_from_zero_coupon_curve(zero_coupon_curve),
+            RISKLESS: zero_coupon_curve,
             # USD: uncollateralised
-            Currency.USD: curve_from_zero_coupon_curve(zero_coupon_curve),
+            Currency.USD: zero_coupon_curve,
         },
     )
     market.add_fx_rate(curve_date, FX_Rate(USDCLP, spot))
     return market
 
 
-def test_valuate_forward_matches_get_forward_mtm(sample_zero_coupon_curve, curve_date):
+def test_valuate_forward_matches_get_forward_mtm(sample_curve, curve_date):
     spot = 900.0
     strike = 800.0
     payment_date = date(2025, 1, 10)
-    market = _market_with_fx_forward_setup(curve_date, sample_zero_coupon_curve, spot)
+    market = _market_with_fx_forward_setup(curve_date, sample_curve, spot)
 
     forward = Forward(
         1_000_000,
@@ -50,11 +47,11 @@ def test_valuate_forward_matches_get_forward_mtm(sample_zero_coupon_curve, curve
     assert dispatched_mtm == direct_mtm
 
 
-def test_valuate_ndf_matches_get_ndf_mtm(sample_zero_coupon_curve, curve_date):
+def test_valuate_ndf_matches_get_ndf_mtm(sample_curve, curve_date):
     spot = 900.0
     strike = 800.0
     payment_date = date(2025, 1, 10)
-    market = _market_with_fx_forward_setup(curve_date, sample_zero_coupon_curve, spot)
+    market = _market_with_fx_forward_setup(curve_date, sample_curve, spot)
 
     ndf = NDF(
         1_000_000,

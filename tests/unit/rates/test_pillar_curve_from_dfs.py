@@ -118,7 +118,7 @@ def test_knots_and_forwards_are_validated():
             T,
             [T, PILLARS[0]],
             [0.05],
-            InterpolationMethod.LogLinear,
+            "LogLinear",  # type: ignore[arg-type],
         )
 
 

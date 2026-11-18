@@ -14,7 +14,8 @@ from fintoolsom.rates import (
     RateConvention,
     CompoundedInterestConvention,
     ExponentialInterestConvention,
-    ZeroCouponCurve,
+    InterpolationMethod,
+    PillarCurve,
 )
 from fintoolsom.dates import ActualDayCountConvention
 
@@ -88,13 +89,15 @@ def test_nss_calibrate_from_curve_fits_zero_rates():
     ]
     ts = np.array([(mat - curve_date).days / 365 for mat in maturities])
     dfs = source_nss.get_df(ts)
-    curve = ZeroCouponCurve(curve_date, date_dfs=list(zip(maturities, dfs)))
+    curve = PillarCurve.from_dfs(
+        curve_date, maturities, list(dfs), InterpolationMethod.PiecewiseConstant
+    )
 
     fitted_nss = NelsonSiegelSvensson()
     fitted_nss.calibrate_from_curve(curve)
 
     fitted_rates = fitted_nss.get_rate(ts)
-    target_rates = curve.get_zero_rates_values(convention)
+    target_rates = [curve.get_zero_rate(m, convention).rate for m in maturities]
     assert fitted_rates == pytest.approx(target_rates, abs=1e-4)
 
 
@@ -202,8 +205,11 @@ def test_calibrate_from_curve_recovers_a_long_second_hump(
     maturities = [curve_date + timedelta(days=round(365 * y)) for y in years]
     ts = np.array([(m - curve_date).days / 365 for m in maturities])
     target = _svensson_rate(ts, betas, first_hump, second_hump)
-    curve = ZeroCouponCurve(
-        curve_date, date_dfs=list(zip(maturities, np.exp(-target * ts)))
+    curve = PillarCurve.from_dfs(
+        curve_date,
+        maturities,
+        list(np.exp(-target * ts)),
+        InterpolationMethod.PiecewiseConstant,
     )
 
     nss = NelsonSiegelSvensson()

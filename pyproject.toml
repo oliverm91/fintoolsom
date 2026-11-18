@@ -65,8 +65,6 @@ testpaths = ["tests"]
 # Four workers by default (pytest-xdist): about 2x faster on the full suite. Pass
 # -n 0 for a serial run (a single file, a debugger, -x).
 addopts = "-n 4"
-# CLBonds / NelsonSiegelSvensson tests still use the legacy ZeroCouponCurve on purpose.
-filterwarnings = ["ignore:ZeroCouponCurve is legacy:DeprecationWarning"]
 
 [tool.coverage.run]
 source = ["fintoolsom"]

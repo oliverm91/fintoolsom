@@ -9,14 +9,7 @@ from datetime import timedelta
 import numpy as np
 import pytest
 
-from fintoolsom.rates import (
-    PillarCurve,
-    InterpolationMethod,
-    ZeroCouponCurve,
-)
-from tests.factories.curve_factory import (
-    curve_from_zero_coupon_curve,
-)
+from fintoolsom.rates import PillarCurve, InterpolationMethod
 
 from .test_PillarCurve import DFS, FORWARDS, PILLARS, T
 
@@ -26,7 +19,6 @@ KNOTS = [T, *PILLARS]
 INSIDE = [T + timedelta(days=n) for n in (1, 10, 95, 400, 1100, 2500, 3655)]
 
 _BUILD = {"pillar": lambda method: PillarCurve(T, KNOTS, FORWARDS, method)}
-_FROM_ZCC = {"pillar": curve_from_zero_coupon_curve}
 
 
 @pytest.fixture(params=list(_BUILD))
@@ -53,17 +45,16 @@ def test_the_dfs_at_the_knots_do_not_depend_on_the_method(role, method):
     np.testing.assert_allclose(_curve(role, method).get_dfs(PILLARS), DFS, rtol=1e-13)
 
 
-def test_log_linear_is_only_for_the_legacy_curve(role):
-    with pytest.raises(ValueError, match="does not support interpolation 'LogLinear'"):
-        _curve(role, InterpolationMethod.LogLinear)
-
-
-def test_piecewise_constant_matches_a_log_linear_legacy_curve(role):
-    zcc = ZeroCouponCurve(T, date_dfs=list(zip(PILLARS, DFS)))
-    converted = _FROM_ZCC[role](zcc)
-    assert converted.interpolation_method is PC
-    assert converted.get_dfs(INSIDE) == pytest.approx(zcc.get_dfs(INSIDE), rel=1e-12)
-    assert converted.forward_rates == pytest.approx(FORWARDS, rel=1e-10)
+def test_piecewise_constant_dfs_are_log_linear_between_pillars(role):
+    curve = _curve(role)
+    knots, log_dfs = [T, *PILLARS], np.log([1.0, *DFS])
+    days = [(d - T).days for d in knots]
+    inside = [d for d in INSIDE if d <= PILLARS[-1]]
+    expected = np.exp(np.interp([(d - T).days for d in inside], days, log_dfs))
+    np.testing.assert_allclose(curve.get_dfs(inside), expected, rtol=1e-12)
+    np.testing.assert_allclose(
+        PillarCurve.from_dfs(T, PILLARS, DFS, PC).forward_rates, FORWARDS, rtol=1e-10
+    )
 
 
 def test_cubic_spline_forward_joins_the_flat_extrapolation_smoothly(role):

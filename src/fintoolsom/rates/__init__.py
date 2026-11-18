@@ -8,5 +8,3 @@ from .Rates import (
 )
 from .Curve import Curve, ModelCurve, InterpolationMethod, DAY_BASE
 from .PillarCurve import PillarCurve
-from .LegacyCurve import LegacyCurve
-from .ZeroCouponCurve import ZeroCouponCurve, ZeroCouponCurvePoint

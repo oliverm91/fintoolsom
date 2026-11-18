@@ -21,7 +21,9 @@ Chilean bonds, deposits and a generic IRR solver.
 - `get_amount_value` and `get_irr_from_amount` work on the traded amount.
 - `get_duration` and `get_dv01` are risk measures at an IRR.
 - `get_present_value_zc`, `get_z_spread` and `get_irr_with_zcc` value the bond on
-  a `ZeroCouponCurve`.
+  any `rates.Curve`, e.g. a `PillarCurve` or `market.get_discount_curve(ccy)`. The
+  z-spread is a parallel shift of the curve's continuously compounded Act/365 zero
+  rates (`Curve.parallel_bump_bps`).
 
 ## Example
 
@@ -37,10 +39,6 @@ get_irr(flows, dates, valuation_date=date(2024, 1, 2), pv=100.0)  # about 0.05
 
 ## Notes
 
-- **Legacy curves.** This package still uses the legacy
-  `fintoolsom.rates.ZeroCouponCurve`, which warns on creation. Its curve-based
-  methods are not yet migrated to `PillarCurve`, so they cannot
-  read curves from a `Market` directly.
 - **Strings, not `Currency`.** Currencies are plain strings here (stored
   lowercased), not `fintoolsom.market.Currency` objects.
 - **Calibration input.** `models.NelsonSiegelSvensson.calibrate_from_bonds` takes a list of

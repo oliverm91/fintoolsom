@@ -232,7 +232,3 @@ def test_non_local_methods_skip_the_sweep_and_reprice_after_a_last_joint_solve(
     assert market.curves[ICP].interpolation_method is method
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
 
-
-def test_log_linear_is_rejected_for_new_curves(real):
-    with pytest.raises(ValueError, match="does not support interpolation 'LogLinear'"):
-        _build(real, interp_method=InterpolationMethod.LogLinear)

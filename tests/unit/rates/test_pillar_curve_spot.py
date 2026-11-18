@@ -216,7 +216,7 @@ def test_validation_errors():
             T,
             KNOTS,
             FWDS,
-            InterpolationMethod.LogLinear,
+            "LogLinear",  # type: ignore[arg-type],
         )
 
 

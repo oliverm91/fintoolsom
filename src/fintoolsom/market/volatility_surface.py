@@ -22,7 +22,7 @@ from scipy.interpolate import CubicSpline, PchipInterpolator, interp1d
 from scipy.optimize import LinearConstraint, least_squares, minimize
 from scipy.special import ndtri
 
-from ..rates import Curve, LegacyCurve
+from ..rates import Curve
 
 DAYS_IN_YEAR = 365
 """Day base of the surface time ``T = days / 365`` (ACT/365, as in option pricing)."""
@@ -716,7 +716,7 @@ def _validated_grid(
     return days_arr[order], deltas_t, vols_arr[order]
 
 
-def _foreign_dfs(days: np.ndarray, foreign_curve: Curve | LegacyCurve) -> np.ndarray:
+def _foreign_dfs(days: np.ndarray, foreign_curve: Curve) -> np.ndarray:
     """Foreign discount factor at ``foreign_curve.curve_date + days``."""
     t0 = foreign_curve.curve_date
     return np.array([foreign_curve.get_df(t0 + timedelta(days=int(d))) for d in days])
@@ -829,7 +829,7 @@ class VolatilitySurface:
         days: ArrayLike,
         deltas: Sequence,
         vols: ArrayLike,
-        foreign_curve: Curve | LegacyCurve,
+        foreign_curve: Curve,
         interpolation_method: VolatilitySurfaceInterpolationMethod = VolatilitySurfaceInterpolationMethod.VannaVolga,
         **kwargs,
     ):

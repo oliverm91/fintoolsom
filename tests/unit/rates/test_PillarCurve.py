@@ -81,16 +81,9 @@ def test_discount_curve_returns_its_pillars(method):
 
 
 def test_a_method_without_an_integral_raises(monkeypatch):
-    monkeypatch.setattr(
-        PillarCurve, "allowed_methods", frozenset({InterpolationMethod.LogLinear})
-    )
+    monkeypatch.setattr(PillarCurve, "allowed_methods", frozenset({"unknown"}))
     with pytest.raises(ValueError, match="No forward integral defined"):
-        PillarCurve(
-            T,
-            [T, *PILLARS],
-            FORWARDS,
-            InterpolationMethod.LogLinear,
-        )
+        PillarCurve(T, [T, *PILLARS], FORWARDS, "unknown")  # type: ignore[arg-type]
 
 
 EVERY_METHOD = sorted(PillarCurve.allowed_methods, key=lambda m: m.name)

@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from fintoolsom.fixedIncome import CLBond
-from fintoolsom.rates import ZeroCouponCurve
+from fintoolsom.rates import PillarCurve
 from tests.factories import clbond_factory, curve_factory
 
 
@@ -13,8 +13,8 @@ def curve_date() -> date:
 
 
 @pytest.fixture
-def sample_zero_coupon_curve() -> ZeroCouponCurve:
-    return curve_factory.sample_zero_coupon_curve()
+def sample_curve() -> PillarCurve:
+    return curve_factory.sample_curve()
 
 
 @pytest.fixture

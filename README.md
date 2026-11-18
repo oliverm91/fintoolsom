@@ -151,9 +151,8 @@ builds ICP, SOFR and USD curves from a full set of real 2026-06-29 quotes.
 
 ## Design notes
 
-- **Curves.** `Market.curves` holds curves by id. Every curve discounts; index curves also project.
+- **Curves.** One curve class, `PillarCurve`; its `Market.curves` key (`Index` or `Currency`) says what it projects or discounts.
 - **CSA collateral.** Swaps carry their CSA index, applied when discounting (`get_dfs(..., collateral=)`).
-- **Legacy.** `ZeroCouponCurve` is kept for `CLBond` and Nelson-Siegel-Svensson only; it warns on creation.
 
 ## Install
 

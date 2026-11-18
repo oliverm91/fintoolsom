@@ -9,7 +9,7 @@ import numpy as np
 from .currencies import Currency, CurrencyPair, FX_Rate, FX_RateData
 from .index import Index
 from .index_history import IndexHistory
-from ..rates import Rate, Curve, LegacyCurve
+from ..rates import Rate, Curve
 from ..dates import Calendar, get_calendar
 from ..dates.date_counts import date_ordinals
 
@@ -95,17 +95,12 @@ class Market:
         Raises
         ------
         TypeError
-            If `curve` is not a :class:`Curve` (e.g. a legacy ZeroCouponCurve), or
-            `key` is neither an ``Index`` nor a ``Currency``.
+            If `curve` is not a :class:`Curve`, or `key` is neither an ``Index`` nor
+            a ``Currency``.
         ValueError
             If `key` is the currency of :attr:`risk_free_index`: that currency
             discounts on the index's own curve.
         """
-        if isinstance(curve, LegacyCurve):
-            raise TypeError(
-                f"{type(curve).__name__} is a legacy curve and cannot be stored in a Market; "
-                "use PillarCurve."
-            )
         if not isinstance(curve, Curve):
             raise TypeError(
                 f"Market curves must be Curve instances, got {type(curve).__name__}."

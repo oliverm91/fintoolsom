@@ -11,7 +11,7 @@ from fintoolsom.market.volatility_surface import (
     VolatilitySurfaceInterpolationMethod as Method,
 )
 from fintoolsom.market.currencies import Currency, CurrencyPair
-from tests.factories.curve_factory import flat_zero_coupon_curve
+from tests.factories.curve_factory import flat_curve
 
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
@@ -25,49 +25,47 @@ def _surface(curve, days=DAYS, deltas=DELTAS, vols=FLAT_VOLS, **kwargs):
     return VolatilitySurface(days, deltas, vols, curve, **kwargs)
 
 
-def test_volatility_surface_flat_smile_returns_flat_vol(sample_zero_coupon_curve):
+def test_volatility_surface_flat_smile_returns_flat_vol(sample_curve):
     vs = _surface(
-        sample_zero_coupon_curve,
+        sample_curve,
         interpolation_method=Method.DoubleMonotoneCubic,
     )
     vol = vs.get_volatility(0.1, 60)
     assert vol == pytest.approx(0.15, abs=1e-15)
 
 
-def test_call_mtm_is_positive_for_in_the_money_option(sample_zero_coupon_curve):
+def test_call_mtm_is_positive_for_in_the_money_option(sample_curve):
     spot = 940
     strike = 900
     maturity = date(2024, 10, 12)
     t_val = date(2024, 8, 12)
 
     vs = _surface(
-        sample_zero_coupon_curve,
+        sample_curve,
         interpolation_method=Method.DoubleMonotoneCubic,
     )
     call = Call(1000, strike, maturity, currency_pair=USDCLP)
     log_moneyness = Calculator.get_option_log_moneyness(
-        call, spot, sample_zero_coupon_curve, sample_zero_coupon_curve
+        call, spot, sample_curve, sample_curve
     )
     vol = vs.get_volatility(log_moneyness, (maturity - t_val).days)
-    mtm = Calculator.get_option_mtm(
-        call, t_val, spot, vol, sample_zero_coupon_curve, sample_zero_coupon_curve
-    )
+    mtm = Calculator.get_option_mtm(call, t_val, spot, vol, sample_curve, sample_curve)
     assert mtm > 0
 
 
-def test_rows_are_sorted_by_days_without_touching_the_inputs(sample_zero_coupon_curve):
+def test_rows_are_sorted_by_days_without_touching_the_inputs(sample_curve):
     days = np.array([90, 30])
     vols = np.array([[0.16, 0.15, 0.14], [0.12, 0.11, 0.10]])
-    vs = _surface(sample_zero_coupon_curve, days=days, vols=vols)
+    vs = _surface(sample_curve, days=days, vols=vols)
     assert vs.days.tolist() == [30, 90]
     assert vs.vols.tolist() == [[0.12, 0.11, 0.10], [0.16, 0.15, 0.14]]
     assert days.tolist() == [90, 30]  # caller's arrays are not reordered
     assert vols[0].tolist() == [0.16, 0.15, 0.14]
 
 
-def test_atm_column_has_zero_log_moneyness(sample_zero_coupon_curve):
+def test_atm_column_has_zero_log_moneyness(sample_curve):
     vs = _surface(
-        sample_zero_coupon_curve,
+        sample_curve,
         deltas=[25, "atm", 75],
         interpolation_method=Method.DoubleLinear,
     )
@@ -95,14 +93,14 @@ def test_atm_column_has_zero_log_moneyness(sample_zero_coupon_curve):
         "nan",
     ],
 )
-def test_invalid_grid_is_rejected(sample_zero_coupon_curve, kwargs, error):
+def test_invalid_grid_is_rejected(sample_curve, kwargs, error):
     with pytest.raises(error):
-        _surface(sample_zero_coupon_curve, **kwargs)
+        _surface(sample_curve, **kwargs)
 
 
 def test_pillar_log_moneyness_closed_form(curve_date):
     rate = 0.04
-    foreign = flat_zero_coupon_curve(curve_date, rate)
+    foreign = flat_curve(curve_date, rate)
     days, deltas = [30, 365, 730], [10, 25, 75]
     vols = np.array([[0.13, 0.12, 0.115], [0.14, 0.13, 0.12], [0.15, 0.14, 0.13]])
     vs = VolatilitySurface(days, deltas, vols, foreign)
@@ -116,6 +114,6 @@ def test_pillar_log_moneyness_closed_form(curve_date):
 
 def test_put_delta_above_the_foreign_discount_factor_is_rejected(curve_date):
     # 90-delta put at 3Y with an 8% foreign rate: df_q ~ 0.787 < 0.90.
-    foreign = flat_zero_coupon_curve(curve_date, 0.08)
+    foreign = flat_curve(curve_date, 0.08)
     with pytest.raises(ValueError, match="unreachable"):
         VolatilitySurface([30, 1095], [25, 90], [[0.1, 0.1], [0.1, 0.1]], foreign)

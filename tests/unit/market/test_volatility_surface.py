@@ -29,7 +29,7 @@ from fintoolsom.market.volatility_surface import (
     svi_volatility,
     vanna_volga_volatility,
 )
-from tests.factories.curve_factory import flat_zero_coupon_curve
+from tests.factories.curve_factory import flat_curve
 
 USDCLP = CurrencyPair(Currency.USD, Currency.CLP)
 Q, R, SPOT = 0.04, 0.06, 940.0  # foreign (USD) rate, domestic (CLP) rate, spot
@@ -57,12 +57,12 @@ INTERPOLATING = [Method.DoubleLinear, Method.DoubleMonotoneCubic, Method.VannaVo
 
 @pytest.fixture
 def foreign(curve_date):
-    return flat_zero_coupon_curve(curve_date, Q)
+    return flat_curve(curve_date, Q)
 
 
 @pytest.fixture
 def domestic(curve_date):
-    return flat_zero_coupon_curve(curve_date, R)
+    return flat_curve(curve_date, R)
 
 
 def _surface(foreign, method=Method.VannaVolga, deltas=DELTAS, vols=VOLS, days=DAYS):

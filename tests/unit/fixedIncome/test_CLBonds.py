@@ -202,7 +202,7 @@ def test_irr_with_curve_reprices_the_curve_value():
     bond = clbond_factory.bullet_clbond(
         start=date(2024, 3, 1), n_coupons=10, coupon_amount=2.5
     )
-    curve = curve_factory.sample_zero_coupon_curve()
+    curve = curve_factory.sample_curve()
     t = curve.curve_date
     irr = bond.get_irr_with_zcc(t, curve, comp_act365())
     assert bond.get_present_value(t, irr) == pytest.approx(
@@ -211,14 +211,12 @@ def test_irr_with_curve_reprices_the_curve_value():
 
 
 def test_z_spread_reprices_the_irr_value_on_the_bumped_curve(
-    sample_bond, sample_zero_coupon_curve, curve_date
+    sample_bond, sample_curve, curve_date
 ):
     irr = rate(0.06)
-    z_spread = sample_bond.get_z_spread(curve_date, irr, sample_zero_coupon_curve)
-    sample_zero_coupon_curve.parallel_bump_rates_bps(z_spread)
-    assert sample_bond.get_present_value_zc(
-        curve_date, sample_zero_coupon_curve
-    ) == pytest.approx(sample_bond.get_present_value(curve_date, irr), abs=1e-4)
+    z_spread = sample_bond.get_z_spread(curve_date, irr, sample_curve)
+    bumped = sample_curve.parallel_bump_bps(z_spread)
+    assert sample_bond.get_present_value_zc(curve_date, bumped) == pytest.approx(sample_bond.get_present_value(curve_date, irr), abs=1e-4)
 
 
 def test_duration_is_below_maturity_and_dv01_uses_the_modified_duration():

@@ -1,15 +1,11 @@
-"""Zero-coupon curves used across the tests."""
+"""Discount curves used across the tests."""
 
 import math
 from datetime import date, timedelta
 
 from dateutil.relativedelta import relativedelta
 
-from fintoolsom.rates import (
-    PillarCurve,
-    InterpolationMethod,
-    ZeroCouponCurve,
-)
+from fintoolsom.rates import InterpolationMethod, PillarCurve
 
 SAMPLE_CURVE_DATE = date(2024, 7, 8)
 
@@ -55,26 +51,23 @@ def curve_from_dfs(
     )
 
 
-def curve_from_zero_coupon_curve(zcc) -> PillarCurve:
-    """The piecewise-constant PillarCurve on a legacy curve's pillars and dfs."""
-    return curve_from_dfs(zcc.curve_date, list(zcc.dates), zcc.dfs)
+def sample_curve(
+    method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
+) -> PillarCurve:
+    """The sample CLP curve on SAMPLE_CURVE_DFS (log-linear dfs by default)."""
+    dates, dfs = zip(*SAMPLE_CURVE_DFS)
+    return PillarCurve.from_dfs(SAMPLE_CURVE_DATE, list(dates), list(dfs), method)
 
 
-def sample_zero_coupon_curve(
-    method: InterpolationMethod | None = None,
-) -> ZeroCouponCurve:
-    """The sample CLP curve (log-linear unless `method` is given)."""
-    kwargs = {} if method is None else {"df_interpolation_method": method}
-    return ZeroCouponCurve(SAMPLE_CURVE_DATE, date_dfs=list(SAMPLE_CURVE_DFS), **kwargs)
-
-
-def flat_zero_coupon_curve(
-    t: date, rate: float, years: int = 30, method: InterpolationMethod | None = None
-) -> ZeroCouponCurve:
+def flat_curve(
+    t: date,
+    rate: float,
+    years: int = 30,
+    method: InterpolationMethod = InterpolationMethod.PiecewiseConstant,
+) -> PillarCurve:
     """Curve at a flat continuously compounded act/365 `rate`, yearly pillars to `years`."""
     pillars = [t + relativedelta(days=1)] + [
         t + relativedelta(years=y) for y in range(1, years + 1)
     ]
-    date_dfs = [(d, math.exp(-rate * (d - t).days / 365)) for d in pillars]
-    kwargs = {} if method is None else {"df_interpolation_method": method}
-    return ZeroCouponCurve(t, date_dfs=date_dfs, **kwargs)
+    dfs = [math.exp(-rate * (d - t).days / 365) for d in pillars]
+    return PillarCurve.from_dfs(t, pillars, dfs, method)

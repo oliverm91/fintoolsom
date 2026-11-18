@@ -22,7 +22,7 @@ two decays enter differently: `λ` is a time scale (`t/λ`), while `μ` is a rat
 | `nss_df(t, b0..b3, λ, μ)` | Discount factor `exp(−r(t)·t)`, 1 at `t = 0` |
 | `NelsonSiegelSvensson` | Holds the parameters: `get_rate(t)`, `get_df(t)`, `get_params()` |
 | `.calibrate_from_bonds(date, [(CLBond, Rate), ...])` | Fits the parameters to bond IRRs (`calibrate` is a deprecated alias) |
-| `.calibrate_from_curve(zcc)` | Fits the parameters to a `ZeroCouponCurve` |
+| `.calibrate_from_curve(curve)` | Fits the parameters to a `PillarCurve`'s zero rates at its knots |
 
 The functions take year fractions (floats or numpy arrays), not dates, so they can
 be vectorised and used inside optimisers.
@@ -42,8 +42,6 @@ nss_df(t, *params)
 
 ## Notes
 
-- **Legacy curves.** Calibration works on `fintoolsom.fixedIncome.CLBond` and on
-  the legacy `ZeroCouponCurve`, which is kept for this module.
 - **No market curve.** To use a fitted curve in a `Market`, sample `nss_df` on
   pillar dates and build a `rates.PillarCurve` from them (`PillarCurve.from_dfs`).
   `NelsonSiegelSvensson.get_curve` was removed together with `NSSCurve`.
