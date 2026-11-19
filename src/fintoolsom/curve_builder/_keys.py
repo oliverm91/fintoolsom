@@ -236,7 +236,16 @@ def _maturities(instrument, risk_free_index: Index) -> tuple[dict, date]:
                 )
             last.append(pay)
             if isinstance(leg, FloatingLeg):
-                add(leg.index, end := max(leg.end_dates))
+                # The last date the leg reads its index curve on: its last accrual
+                # end, or a later fixing-window end of a term-rate coupon (an end
+                # adjusted off the index tenor, a final stub). The pillar sits there,
+                # so no later segment moves a fitted quote.
+                end = max(leg.end_dates)
+                if leg._window_end_ordinals.size:
+                    end = max(
+                        end, date.fromordinal(int(leg._window_end_ordinals.max()))
+                    )
+                add(leg.index, end)
                 last.append(end)
         return pinned, max(last)
     if isinstance(instrument, Forward):

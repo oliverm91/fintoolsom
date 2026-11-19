@@ -119,14 +119,22 @@ def _leg_flows(leg, market: Market) -> tuple[np.ndarray, np.ndarray]:
 def _projected_flows(leg, market: Market, mask: np.ndarray) -> np.ndarray:
     """Flows of the `mask` coupons, interest projected over their whole period.
 
+    The index accrues over each coupon's projection window: its period, or for a
+    term-rate coupon its fixing window, whose forward is then accrued over the
+    period (:meth:`FloatingLeg._projected_interest`). One vectorised curve read for
+    all the coupons.
+
     ``fixed_flows`` holds the spread and the notional repaid with the final
     coupon (final exchange): same-currency legs cancel it, cross-currency legs
     exchange it.
     """
     accruals = market._accrual_at_ordinals(
-        leg.index, leg._start_ordinals[mask], leg._end_ordinals[mask]
+        leg.index, leg._window_start_ordinals[mask], leg._window_end_ordinals[mask]
     )
-    return leg.residuals[mask] * accruals + leg.fixed_flows[mask]
+    return (
+        leg.residuals[mask] * leg._projected_interest(accruals, mask)
+        + leg.fixed_flows[mask]
+    )
 
 
 def _running_flows(leg, market: Market, mask: np.ndarray) -> np.ndarray:

@@ -30,7 +30,13 @@ import numpy as np
 
 from ...market.currencies import CurrencyPair
 from ..forwards.forwards import NDF
-from ..swaps.legs import FixedLeg, FloatingLeg, TermRateLeg
+from ..swaps.legs import (
+    FixedLeg,
+    FloatingLeg,
+    TermRateLeg,
+    _interest_from_window,
+    _interest_from_window_slope,
+)
 from ..swaps.swaps import Swap
 from ._swap_pv import _discounted_on_index_curve, _nothing_realised
 
@@ -267,8 +273,12 @@ class ValuationBatch:
                 self._n_terms + np.arange(n),
                 leg.residuals[future],
                 leg.fixed_flows[future],
+                leg._window_ratios[future],
+                leg._window_power[future],
                 self._ref(
-                    accrual, leg._start_ordinals[future], leg._end_ordinals[future]
+                    accrual,
+                    leg._window_start_ordinals[future],
+                    leg._window_end_ordinals[future],
                 ),
             )
         )
@@ -335,10 +345,17 @@ class ValuationBatch:
         self._projected_pos = np.concatenate(
             [p for p, *_ in projected] or [np.zeros(0, dtype=np.int64)]
         ).astype(np.intp)
-        self._residuals = np.concatenate(
-            [r for _, r, _, _ in projected] or [np.zeros(0)]
+        self._residuals = np.concatenate([p[1] for p in projected] or [np.zeros(0)])
+        self._fixed = np.concatenate([p[2] for p in projected] or [np.zeros(0)])
+        # Term-rate coupons projected over a fixing window other than their period:
+        # their interest is _interest_from_window of the window's accrual.
+        self._window_ratios = np.concatenate([p[3] for p in projected] or [np.zeros(0)])
+        self._window_power = np.concatenate(
+            [p[4] for p in projected] or [np.zeros(0, dtype=bool)]
         )
-        self._fixed = np.concatenate([f for *_, f, _ in projected] or [np.zeros(0)])
+        self._on_accrual = bool(
+            np.all(self._window_ratios == 1.0) and not self._window_power.any()
+        )
         self._accrual_at = np.concatenate(
             [at(a) for *_, a in projected] or [np.zeros(0, dtype=np.int64)]
         ).astype(np.intp)
@@ -366,6 +383,14 @@ class ValuationBatch:
 
     # ── Evaluation ─────────────────────────────────────────────────────────────
 
+    def _interest(self, accruals: np.ndarray) -> np.ndarray:
+        """Interest per unit notional of every projected coupon from its window's
+        accrual: the accrual itself, unless a term-rate coupon's fixing window is not
+        its period (:func:`_interest_from_window`, as the calculator computes it)."""
+        if self._on_accrual:
+            return accruals
+        return _interest_from_window(accruals, self._window_ratios, self._window_power)
+
     def values(self) -> np.ndarray:
         """Every MTM, in the order of the instruments."""
         try:
@@ -390,9 +415,10 @@ class ValuationBatch:
             )
             flows = self._static_flows.copy()
             if self._projected_pos.size:
-                # _projected_flows: residual * accrual + fixed flows
+                # _projected_flows: residual * interest + fixed flows
                 flows[self._projected_pos] = (
-                    self._residuals * values[self._accrual_at] + self._fixed
+                    self._residuals * self._interest(values[self._accrual_at])
+                    + self._fixed
                 )
             # flows * fx * dfs (deliverable: fx = 1, which leaves flows * dfs)
             products = (flows * values[self._fx_at] * values[self._df_at]).tolist()
@@ -452,16 +478,22 @@ class ValuationBatch:
         grad = np.zeros((len(self.instruments), len(values)))
         flows = self._static_flows.copy()
         projected = self._projected_pos
+        accruals = values[self._accrual_at]
         if projected.size:
-            flows[projected] = self._residuals * values[self._accrual_at] + self._fixed
+            flows[projected] = self._residuals * self._interest(accruals) + self._fixed
         fx, df = values[self._fx_at], values[self._df_at]
         np.add.at(grad, (term_row, self._df_at), flows * fx * term_scale)
         np.add.at(grad, (term_row, self._fx_at), flows * df * term_scale)
-        if projected.size:  # flow = residual * accrual + fixed
+        if projected.size:  # flow = residual * interest(accrual) + fixed
+            slope = self._residuals
+            if not self._on_accrual:
+                slope = slope * _interest_from_window_slope(
+                    accruals, self._window_ratios, self._window_power
+                )
             np.add.at(
                 grad,
                 (term_row[projected], self._accrual_at),
-                self._residuals * fx[projected] * df[projected] * term_scale[projected],
+                slope * fx[projected] * df[projected] * term_scale[projected],
             )
         if head_row.size:
             np.add.at(

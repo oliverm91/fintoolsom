@@ -117,3 +117,69 @@ def test_put_delta_above_the_foreign_discount_factor_is_rejected(curve_date):
     foreign = flat_curve(curve_date, 0.08)
     with pytest.raises(ValueError, match="unreachable"):
         VolatilitySurface([30, 1095], [25, 90], [[0.1, 0.1], [0.1, 0.1]], foreign)
+
+
+# ── Calculator.valuate on options (B12) ─────────────────────────────────────
+
+
+def _option_market(t, domestic, foreign, spot=940.0):
+    from fintoolsom.market import FX_Rate, Market, OvernightInterestPriceIndex
+
+    icp = OvernightInterestPriceIndex("ICP", currency=Currency.CLP)
+    market = Market(
+        t=t,
+        risk_free_index=icp,
+        curves={icp: domestic, Currency.USD: foreign},
+        volatility_surfaces={USDCLP: _surface(foreign)},
+    )
+    market.add_fx_rate(t, FX_Rate(USDCLP, spot))
+    return market
+
+
+def test_valuate_reports_an_option_in_the_requested_currency(curve_date, sample_curve):
+    foreign = flat_curve(curve_date, 0.04)
+    market = _option_market(curve_date, sample_curve, foreign)
+    call = Call(1000, 930, date(2024, 9, 6), currency_pair=USDCLP)
+    in_clp = Calculator.valuate(call, market, Currency.CLP)
+    in_usd = Calculator.valuate(call, market, Currency.USD)
+    assert in_clp > 0
+    assert in_usd == pytest.approx(in_clp / 940.0, rel=1e-12)
+    assert (
+        Calculator.get_mtm_option(call, market) == in_clp
+    )  # quote currency by default
+
+
+def test_an_option_is_worth_its_intrinsic_value_on_its_maturity_date(sample_curve):
+    maturity = date(2024, 9, 6)
+    nan = float("nan")  # no volatility is read
+    itm, otm = Call(1000, 930, maturity, USDCLP), Call(1000, 950, maturity, USDCLP)
+    args = (maturity, 940.0, nan, sample_curve, sample_curve)
+    assert Calculator.get_option_mtm(itm, *args) == pytest.approx(10_000.0)
+    assert Calculator.get_option_mtm(otm, *args) == 0.0
+    assert Calculator.get_option_delta(itm, *args) == 1000
+    assert Calculator.get_option_delta(otm, *args) == 0.0
+    assert Calculator.get_option_gamma(itm, *args) == 0.0
+    assert Calculator.get_option_vega(itm, *args) == 0.0
+
+
+def test_an_expired_option_is_worth_nothing(curve_date, sample_curve):
+    foreign = flat_curve(curve_date, 0.04)
+    call = Call(1000, 900, date(2024, 7, 5), currency_pair=USDCLP)  # before t
+    market = _option_market(curve_date, sample_curve, foreign)
+    assert Calculator.valuate(call, market, Currency.CLP) == 0.0
+
+
+def test_option_rates_are_continuous_act365_of_the_curves_dfs(curve_date, sample_curve):
+    foreign = flat_curve(curve_date, 0.04)
+    call = Call(1000, 930, date(2025, 1, 8), currency_pair=USDCLP)
+    r, q = Calculator._get_option_rates(call, curve_date, sample_curve, foreign)
+    yf = (call.maturity - curve_date).days / 365
+    assert np.exp(-r * yf) == pytest.approx(
+        sample_curve.get_df(call.maturity), rel=1e-14
+    )
+    assert np.exp(-q * yf) == pytest.approx(foreign.get_df(call.maturity), rel=1e-14)
+
+
+def test_options_no_longer_carry_curve_indexes():
+    with pytest.raises(TypeError):
+        Call(1000, 930, date(2025, 1, 8), USDCLP, domestic_index=None)

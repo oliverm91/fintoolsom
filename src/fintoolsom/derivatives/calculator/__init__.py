@@ -117,7 +117,7 @@ class Calculator:
                 )
             return _swap_pv.get_swap_mtm(instrument, market, currency)
         if isinstance(instrument, Option):
-            return _options.get_mtm_option(instrument, market)
+            return _options.get_mtm_option(instrument, market, currency)
 
         raise NotImplementedError(
             f"No valuation routing implemented for instrument type {type(instrument).__name__}."

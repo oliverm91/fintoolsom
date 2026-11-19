@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 
 from ..swaps.legs import FixedLeg
 from ._swap_pv import (
@@ -68,6 +69,7 @@ def _simplified_leg_pv(leg, collateral, market: Market) -> float:
     discounted on its index curve and not yet realised; else its unpaid flows."""
     if (
         not isinstance(leg, FixedLeg)
+        and leg._projects_on_accrual
         and _nothing_realised(leg, market.t.toordinal())
         and _discounted_on_index_curve(leg, collateral, market)
     ):
@@ -78,18 +80,24 @@ def _simplified_leg_pv(leg, collateral, market: Market) -> float:
 def _non_started_leg_pv(leg, collateral, market: Market) -> float:
     """PV of a leg none of whose coupons has started, in the leg currency.
 
-    A floating leg projects every coupon over ``[start, end]`` on its index curve,
-    or is valued at par when that curve also discounts it.
+    A floating leg projects every coupon over its projection window on its index
+    curve (``[start, end]``, or a term-rate coupon's fixing window), or is valued at
+    par when that curve also discounts it and every window is the accrual period.
     """
     if isinstance(leg, FixedLeg):
         flows = leg.flows
-    elif _discounted_on_index_curve(leg, collateral, market):
+    elif leg._projects_on_accrual and _discounted_on_index_curve(
+        leg, collateral, market
+    ):
         return _par_leg_pv(leg, market)
     else:
         accruals = market._accrual_at_ordinals(
-            leg.index, leg._start_ordinals, leg._end_ordinals
+            leg.index, leg._window_start_ordinals, leg._window_end_ordinals
         )
-        flows = leg.residuals * accruals + leg.fixed_flows
+        every = np.ones(len(leg.coupons), dtype=bool)
+        flows = (
+            leg.residuals * leg._projected_interest(accruals, every) + leg.fixed_flows
+        )
     dfs = market._dfs_at_ordinals(
         leg.currency, leg._payment_ordinals, collateral=collateral
     )

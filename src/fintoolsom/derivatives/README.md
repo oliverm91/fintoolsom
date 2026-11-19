@@ -44,7 +44,12 @@ other instruments are valued one by one with `valuate`. Leg PVs are summed with
 **Projection.** Floating coupons are projected on `market.get_index_curve(index)`:
 
 - Term-rate coupon fixed on or before `t`: the published fixing over the whole
-  coupon. Otherwise: the forward accrual of the index curve.
+  coupon. Otherwise: the index curve's forward over the fixing's own window,
+  `s = fixing + spot_lag` business days to `e = index.get_maturity(s)`, accrued
+  over the coupon's `[start, end]` in the index convention, as the fixing will
+  be. On a regular period `[s, e]` is `[start, end]`; a stub or a period whose
+  end is adjusted off the index tenor still gets the index's 3M (6M, ...) rate,
+  not the curve's rate over its own length. Such a leg is not valued at par.
 - Overnight coupon already running: the realised part `[start, t]` (compounded
   daily fixings, or the ICP level ratio) times the projected part `[t, end]`.
   Coupons not yet started are fully projected.
@@ -82,7 +87,9 @@ initial exchange, and coupons paid on or before `t` are dropped.
   `market.set_curve(icp, curve.parallel_bump_bps(1))` matches it to first order.
 - Forwards: `get_forward_mtm` and `get_ndf_mtm`. Options: `get_option_mtm`,
   `get_option_delta`, `get_option_gamma`, `get_option_vega` and the strikes from
-  delta.
+  delta (Garman-Kohlhagen, rates continuous Act/365 from the curves' dfs). On its
+  maturity date an option is worth its intrinsic value (delta: the notional in
+  the money, gamma and vega 0); after it, nothing.
 
 ## Example: a 2Y CLP OIS on ICP
 
@@ -113,9 +120,10 @@ Calculator.get_leg_dv01(swap, LegSide.RECEIVE, market, Currency.CLP)  # about -1
 
 ## Notes
 
-- **Options.** `Option` still names its curves through `domestic_index` and
-  `foreign_index`. Its pricing has not been reviewed against the curve redesign:
-  treat it as work in progress.
+- **Options.** `Calculator.valuate(option, market, currency)` discounts on the
+  funding curves of the pair's quote (domestic) and base (foreign) currencies,
+  reads the pair's volatility surface, and converts the quote-currency MTM to
+  `currency` at spot.
 - **Report currency.** Reporting in a currency other than the settlement one
   converts at spot, so the market needs that pair's FX history.
 - **Curve builder.** `fintoolsom.curve_builder` solves curves with

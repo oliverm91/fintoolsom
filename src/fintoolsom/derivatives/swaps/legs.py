@@ -14,7 +14,7 @@ from ...dates import AdjustmentDateConventionBase, ScheduleGenerator
 from ...dates.date_counts import date_ordinals
 from ...dates.term import Term
 from ...market.currencies import Currency
-from ...market.index import Index, InterestIndex
+from ...market.index import Index, InterestIndex, TermRateIndex
 
 
 # Maps PaymentFrequency enum value to ScheduleGenerator frequency string.
@@ -48,6 +48,38 @@ def _zero_spread(index: InterestIndex) -> Rate:
         convention.time_fraction_base,
     )
     return Rate(basis, 0.0)
+
+
+def _interest_from_window(
+    window_accruals: np.ndarray, ratios: np.ndarray, power: np.ndarray
+) -> np.ndarray:
+    """Interest per unit notional of coupons whose rate is the index forward over a
+    projection window, from that window's accrual ``a = wf(window) - 1``.
+
+    The forward ``F`` over the window is accrued over the coupon's own period in the
+    index convention. With ``ratio = tau(period) / tau(window)`` in that convention's
+    day count, linear interest is ``F * tau(period) = a * ratio``; compounded and
+    exponential interest are ``(1 + a) ** ratio - 1`` (`power`). A coupon projected
+    over its own period has ratio 1 and is linear, so its interest is ``a`` exactly.
+
+    The calculator and :class:`~fintoolsom.derivatives.calculator.ValuationBatch`
+    both go through this function, elementwise, so they agree to the bit.
+    """
+    linear = window_accruals * ratios
+    if not power.any():
+        return linear
+    return np.where(power, np.expm1(ratios * np.log1p(window_accruals)), linear)
+
+
+def _interest_from_window_slope(
+    window_accruals: np.ndarray, ratios: np.ndarray, power: np.ndarray
+) -> np.ndarray:
+    """d :func:`_interest_from_window` / d window accrual."""
+    if not power.any():
+        return ratios
+    return np.where(
+        power, ratios * np.exp((ratios - 1) * np.log1p(window_accruals)), ratios
+    )
 
 
 @dataclass
@@ -353,6 +385,10 @@ class FloatingLeg(SwapLeg):
     *par eligible*: discounted on the curve that projects its index, its index
     interest plus amortizations sum to ``residuals[0] * df(first start)``. The
     calculator then values it from that one df plus the spreads.
+
+    Each coupon projects its index over a *projection window*: its own accrual
+    period, except for a term-rate coupon (:class:`TermRateLeg`), whose rate is the
+    index forward over the index's own tenor from its fixing.
     """
 
     _label = "Floating"
@@ -363,6 +399,14 @@ class FloatingLeg(SwapLeg):
     fixed_flows: np.ndarray = field(init=False)
     _par_eligible: bool = field(init=False, repr=False)
     _has_spread: bool = field(init=False, repr=False)
+    # Projection windows (ordinals) and the conversion of their accruals into each
+    # coupon's interest (_interest_from_window); the accrual period itself, ratio 1
+    # and linear, unless a TermRateLeg says otherwise.
+    _window_start_ordinals: np.ndarray = field(init=False, repr=False)
+    _window_end_ordinals: np.ndarray = field(init=False, repr=False)
+    _window_ratios: np.ndarray = field(init=False, repr=False)
+    _window_power: np.ndarray = field(init=False, repr=False)
+    _projects_on_accrual: bool = field(init=False, repr=False)
 
     def _terms(self) -> str:
         return (
@@ -379,6 +423,22 @@ class FloatingLeg(SwapLeg):
         self.fixed_flows = self.spreads_values + self.amortizations
         self._par_eligible = self._repays_at_par()
         self._has_spread = bool(self.spreads_values.any())
+        self._window_start_ordinals = self._start_ordinals
+        self._window_end_ordinals = self._end_ordinals
+        self._window_ratios = np.ones(len(self.coupons))
+        self._window_power = np.zeros(len(self.coupons), dtype=bool)
+        self._projects_on_accrual = True
+
+    def _projected_interest(
+        self, window_accruals: np.ndarray, mask: np.ndarray
+    ) -> np.ndarray:
+        """Interest per unit notional of the `mask` coupons from the accruals of
+        their projection windows (:func:`_interest_from_window`)."""
+        if self._projects_on_accrual:
+            return window_accruals
+        return _interest_from_window(
+            window_accruals, self._window_ratios[mask], self._window_power[mask]
+        )
 
     def _repays_at_par(self) -> bool:
         """No payment lag, a contiguous schedule and the notional fully repaid.
@@ -412,6 +472,18 @@ class TermRateLeg(FloatingLeg):
     fixing_dates : list of date
         Per-coupon rate fixing dates (usually before the accrual start).
 
+    Notes
+    -----
+    A coupon pays the index fixing of its fixing date, accrued over its own period
+    ``[start, end]`` in the index's convention. That fixing covers the index's
+    tenor from its value date: ``s = fixing + spot_lag`` business days of the index
+    calendar to ``e = index.get_maturity(s)``. Before it fixes, the coupon projects
+    the index curve's forward over ``[s, e]`` the same way, so a stub or a period
+    adjusted off the index tenor gets the index's rate, not the curve's rate over
+    its own length. On a regular period ``[s, e]`` is ``[start, end]`` and nothing
+    changes. An index without a tenor (not a ``TermRateIndex``) projects over the
+    accrual period.
+
     Warns
     -----
     UserWarning
@@ -427,6 +499,7 @@ class TermRateLeg(FloatingLeg):
     def __post_init__(self):
         super().__post_init__()
         self._fixing_ordinals = date_ordinals(self.fixing_dates)
+        self._set_projection_windows()
         calendar = getattr(self.index, "calendar", None)
         if calendar is None:
             return
@@ -438,6 +511,40 @@ class TermRateLeg(FloatingLeg):
                 UserWarning,
                 stacklevel=3,
             )
+
+    def _set_projection_windows(self) -> None:
+        """Each coupon's fixing window ``[fixing + spot_lag, + index tenor]`` and
+        the conversion of its accrual into the coupon's interest."""
+        index = self.index
+        if not isinstance(index, TermRateIndex) or not self.coupons:
+            return
+        starts = [
+            index.calendar.add_business_days(d, index.spot_lag)
+            for d in self.fixing_dates
+        ]
+        ends = [index.get_maturity(s) for s in starts]
+        window_starts, window_ends = date_ordinals(starts), date_ordinals(ends)
+        on_accrual = (window_starts == self._start_ordinals) & (
+            window_ends == self._end_ordinals
+        )
+        if on_accrual.all():
+            return
+        convention = index.rate_convention
+        day_count, base = convention.day_count_convention, convention.time_fraction_base
+        ratios = np.asarray(
+            day_count.get_time_fraction(self.start_dates, self.end_dates, base),
+            dtype=float,
+        ) / np.asarray(day_count.get_time_fraction(starts, ends, base), dtype=float)
+        self._window_start_ordinals = window_starts
+        self._window_end_ordinals = window_ends
+        # A coupon on its window keeps ratio 1 and linear: its interest is exact.
+        self._window_ratios = np.where(on_accrual, 1.0, ratios)
+        self._window_power = ~on_accrual & (
+            convention.interest_convention is not LinearInterestConvention
+        )
+        self._projects_on_accrual = False
+        # Index interest no longer telescopes to residuals[0] * df(first start).
+        self._par_eligible = False
 
     @classmethod
     def from_term(
