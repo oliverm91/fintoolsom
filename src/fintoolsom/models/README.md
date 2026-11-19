@@ -27,6 +27,7 @@ are the years to each hump: `C` peaks at `HUMP_PEAK` ≈ 1.7933, so `C(x)` peaks
 | `.get_rate(t)`, `.get_df(t)`, `.get_params()` | Both models; `get_params()` is the betas, then the humps |
 | `.calibrate_from_bonds(date, [(CLBond, Rate), ...])` | Fits every parameter to the bonds' PVs at their IRRs; returns one `CalibrationError` per bond |
 | `.calibrate_from_curve(curve)` | Fits a `PillarCurve`'s zero rates at its knots (humps by the solver, betas solved exactly for each); returns one `CalibrationError` per knot |
+| `Model.calibrate_many_from_curves(curves, global_humps=False)` | Fits many curves at once in batched numpy; returns `(models, errors)`, one model and one error list per curve |
 | `CalibrationError` | `TypedDict` `{"term": float, "error_bps": float}`: the fit at one point |
 
 ### Calibration errors
@@ -79,6 +80,40 @@ errors = ns.calibrate_from_curve(curve)
 # [{'term': 0.4986, 'error_bps': 3.78}, {'term': 1.0, 'error_bps': -3.55}, ...,
 #  {'term': 30.0, 'error_bps': 0.99}]; ns.lambda_ is about 5.09 years
 ```
+
+## Many curves
+
+`NelsonSiegel.calibrate_many_from_curves(curves)` (and the same on
+`NelsonSiegelSvensson`) is a classmethod that fits every curve at once and returns
+new models with their errors, as `calibrate_from_curve` would:
+
+```python
+models, errors = NelsonSiegelSvensson.calibrate_many_from_curves(curves)
+models, errors = NelsonSiegelSvensson.calibrate_many_from_curves(curves, global_humps=True)
+models, errors = NelsonSiegel.calibrate_many_from_curves(curves, initial_guess=[1.5])  # warm start
+```
+
+- **Pillars need not match.** Each curve keeps its own year fractions; curves are
+  padded to the longest with a mask, so they can differ in pillar dates and count.
+- **`global_humps=False` (default): humps per curve.** The same fits as a loop of
+  `calibrate_from_curve`: the hump grid is scored for every curve in one batched
+  solve, then a batched damped Newton refines every curve's humps, each stopping
+  when it converges. Its Hessian is a finite difference of the analytic gradient
+  with absolute eigenvalues: on noisy rates the Gauss-Newton J'J that
+  `least_squares` uses mispredicts the hump curvature, and plain Newton is drawn to
+  the saddle of two equal NSS humps. NSS curves whose best grid start has
+  near-equal or swapped humps are also started from humps apart; the better fit is
+  kept. A curve not converged after 100 iterations is refitted alone.
+- **`global_humps=True`: one set of humps for all curves**, each curve keeping its
+  own betas, minimising the summed squared error (Diebold-Li's fixed lambda). The
+  betas then sit on one set of loadings, so their series read as level, slope and
+  curvature on a fixed basis; each curve fits worse.
+- **Speed.** 100 daily curves of 15 pillars, each pillar moved by a random
+  ±3 days, 1bp of noise: NS 15.6 ms against 166 ms for the loop (10.6x), NSS
+  21.9 ms against 148 ms (6.8x); global humps 16.0 and 17.0 ms. At 1,000 curves
+  13.5x and 10.0x. No curve fits worse than the loop; where the single fit stops
+  early (one NSS curve in 1,000 raised, a few stopped on the equal-humps saddle),
+  the batched fit is better.
 
 ## Notes
 

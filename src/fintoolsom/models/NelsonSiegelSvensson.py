@@ -10,7 +10,7 @@ parameter count), but they share the fitting in :class:`_NelsonSiegelModel`.
 
 from dataclasses import dataclass, fields
 from datetime import date
-from typing import Callable, ClassVar, Optional, TypedDict
+from typing import Callable, ClassVar, Optional, Self, Sequence, TypedDict
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -116,6 +116,82 @@ def nss_df(
 # hump grid calibrate_from_curve starts from.
 _TOL = 1e-12
 _START_GRID_POINTS = 150
+# Batched calibration: iterations of its damped Newton before a curve falls
+# back to the one-curve fit, and the largest (grid, curves, pillars, betas) block
+# its grid start evaluates at once.
+_MAX_BATCH_ITERATIONS = 100
+# Second-to-first hump ratio under which a grid start counts as two equal (or
+# swapped) humps, and is retried from humps apart (see _retry_apart).
+_HUMPS_APART = 1.5
+_GRID_BLOCK = 2_000_000
+
+
+def _curve_points(curve: PillarCurve) -> tuple[np.ndarray, np.ndarray]:
+    """Act/365 year fractions of the curve's knots after its curve date and its
+    continuously compounded Act/365 zero rates there."""
+    pillars = [d for d in curve.knot_dates if d > curve.curve_date]
+    t = np.array([(d - curve.curve_date).days for d in pillars]) / 365
+    return t, -np.log(curve.get_dfs(pillars)) / t
+
+
+def _start_grid(low: np.ndarray, high: np.ndarray) -> np.ndarray:
+    """Geometric grid of about ``_START_GRID_POINTS`` hump vectors inside the bounds:
+    shape (G, number of humps)."""
+    n_humps = low.size
+    per_hump = max(2, round(_START_GRID_POINTS ** (1 / n_humps)))
+    axes = [np.geomspace(lo, hi, per_hump) for lo, hi in zip(low, high)]
+    return np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, n_humps)
+
+
+def _stack_curves(curves) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[int]]:
+    """The curves' pillars padded to one length: year fractions (C, N), zero rates
+    (C, N), a 0/1 mask of the real pillars (C, N) and each curve's pillar count.
+
+    Every curve keeps its own year fractions: curves need not share tenors. A
+    padded slot has t = 1 (any t > 0 keeps the loadings finite) and weight 0."""
+    points = [_curve_points(curve) for curve in curves]
+    sizes = [t.size for t, _ in points]
+    t = np.ones((len(points), max(sizes)))
+    rates = np.zeros_like(t)
+    mask = np.zeros_like(t)
+    for i, (ti, ri) in enumerate(points):
+        t[i, : ti.size], rates[i, : ti.size], mask[i, : ti.size] = ti, ri, 1.0
+    return t, rates, mask, sizes
+
+
+def _solve(gram: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Stacked solves of (..., k, k) systems for (..., k) right-hand sides, with a
+    ridge of 1e-12 of the trace: (nearly) equal NSS humps make the gram singular."""
+    ridge = 1e-12 * np.trace(gram, axis1=-2, axis2=-1)
+    gram = gram + ridge[..., None, None] * np.eye(gram.shape[-1])
+    return np.linalg.solve(gram, rhs[..., None])[..., 0]
+
+
+def _projection(
+    design: np.ndarray, rates: np.ndarray, mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Best betas of every curve for its (unmasked) design (C, N, k) and the masked
+    residual fitted minus target (C, N)."""
+    weighted = design * mask[..., None]
+    target = rates * mask
+    betas = _solve(_gram(weighted), _transposed_times(weighted, target))
+    return betas, _times(weighted, betas) - target
+
+
+# Stacked products of designs (..., n, k) by batched matmul (faster than einsum).
+def _gram(design: np.ndarray) -> np.ndarray:
+    """X'X: (..., k, k)."""
+    return design.swapaxes(-1, -2) @ design
+
+
+def _times(design: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """X b for b of shape (..., k): (..., n)."""
+    return (design @ vector[..., None])[..., 0]
+
+
+def _transposed_times(design: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """X'y for y of shape (..., n): (..., k)."""
+    return (vector[..., None, :] @ design)[..., 0, :]
 
 
 class CalibrationError(TypedDict):
@@ -209,9 +285,12 @@ class _NelsonSiegelModel:
         """:meth:`_calibration_design` at t > 0 and its derivative in each hump.
 
         With x = HUMP_PEAK · t / hump: dx/dhump = -x / hump,
-        ds/dx = (e^-x (1 + x) - 1) / x² and dh/dx = ds/dx + e^-x."""
-        design = np.empty((t.size, 2 + len(humps)))
-        design[:, 0] = 1.0
+        ds/dx = (e^-x (1 + x) - 1) / x² and dh/dx = ds/dx + e^-x. Broadcasts like
+        :meth:`_calibration_design` (t of shape (C, n) with humps of shape (C, 1)
+        gives one design per curve: (C, n, k))."""
+        shape = np.broadcast_shapes(t.shape, *(np.shape(h) for h in humps))
+        design = np.empty((*shape, 2 + len(humps)))
+        design[..., 0] = 1.0
         derivatives = []
         for j, hump in enumerate(humps):
             x = (HUMP_PEAK / hump) * t
@@ -221,10 +300,10 @@ class _NelsonSiegelModel:
             dx_dhump = -x / hump
             derivative = np.zeros_like(design)
             if j == 0:
-                design[:, 1] = slope
-                derivative[:, 1] = dslope_dx * dx_dhump
-            design[:, 2 + j] = slope - e_minus_x
-            derivative[:, 2 + j] = (dslope_dx + e_minus_x) * dx_dhump
+                design[..., 1] = slope
+                derivative[..., 1] = dslope_dx * dx_dhump
+            design[..., 2 + j] = slope - e_minus_x
+            derivative[..., 2 + j] = (dslope_dx + e_minus_x) * dx_dhump
             derivatives.append(derivative)
         return design, derivatives
 
@@ -397,9 +476,7 @@ class _NelsonSiegelModel:
         is its Act/365 year fraction, and `error_bps` the fitted zero rate minus the
         curve's, both continuously compounded Act/365.
         """
-        pillars = [d for d in curve.knot_dates if d > curve.curve_date]
-        t = np.array([(d - curve.curve_date).days for d in pillars]) / 365
-        target_rates = -np.log(curve.get_dfs(pillars)) / t
+        t, target_rates = _curve_points(curve)
 
         def gram_inverse(design: np.ndarray) -> np.ndarray:
             # Equal humps make NSS singular: then the pseudo-inverse.
@@ -457,9 +534,7 @@ class _NelsonSiegelModel:
         """Humps of the best fit on a geometric grid inside the bounds; the betas of
         every grid point come from one batched solve of the normal equations."""
         n_humps = low.size
-        per_hump = max(2, round(_START_GRID_POINTS ** (1 / n_humps)))
-        axes = [np.geomspace(lo, hi, per_hump) for lo, hi in zip(low, high)]
-        grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, n_humps)
+        grid = _start_grid(low, high)
         design = self._calibration_design(t, [grid[:, [j]] for j in range(n_humps)])
         gram = np.einsum("gnk,gnl->gkl", design, design)
         # A tiny ridge: grid points with (nearly) equal humps make NSS singular.
@@ -469,6 +544,344 @@ class _NelsonSiegelModel:
         betas = np.linalg.solve(gram, rhs[..., None])[..., 0]
         fitted = np.einsum("gnk,gk->gn", design, betas)
         return grid[np.argmin(np.sum((fitted - target_rates) ** 2, axis=1))]
+
+    # ── Batched calibration ──
+    # C curves at once, their pillars padded to N slots with a 0/1 mask (see
+    # _stack_curves): masked rows of the design and the rates are zero, so a padded
+    # slot adds nothing to any gram, residual or Jacobian.
+
+    @classmethod
+    def calibrate_many_from_curves(
+        cls,
+        curves: Sequence[PillarCurve],
+        global_humps: bool = False,
+        initial_guess: Optional[list[float]] = None,
+    ) -> tuple[list[Self], list[list[CalibrationError]]]:
+        """Fit one model per curve, as :meth:`calibrate_from_curve` on each, in
+        batched numpy.
+
+        The curves need not share pillars: each keeps its own year fractions.
+
+        With ``global_humps=False`` (default) every curve gets its own humps and
+        betas: the same fits as a loop of :meth:`calibrate_from_curve`, to solver
+        tolerance. The hump grid start is scored for every curve in one batched
+        solve, then a batched, bounded damped Newton on the variable-projection
+        error (in log humps) refines every curve's humps together, each stopping
+        when it converges. A curve still not converged after
+        ``_MAX_BATCH_ITERATIONS`` is refitted alone by :meth:`calibrate_from_curve`.
+
+        With ``global_humps=True`` all curves share one set of humps (NS: lambda_,
+        NSS: lambda_ and mu_), each curve keeping its own betas: the humps minimise
+        the sum of every curve's squared rate errors, as Diebold and Li's fixed
+        lambda. The betas then share one set of loadings over the curves, so their
+        series read as level, slope and curvature on a fixed basis; each curve fits
+        worse than with its own humps.
+
+        Parameters
+        ----------
+        curves : sequence of PillarCurve
+            Curves to fit; their zero rates at the knots after each curve date, as
+            :meth:`calibrate_from_curve`.
+        global_humps : bool, default False
+            One set of humps for every curve instead of one per curve.
+        initial_guess : list of float, optional
+            Humps in years to start every curve from (or the shared humps),
+            clipped to their bounds, instead of the grid start. Useful as a warm
+            start, e.g. the previous day's humps.
+
+        Returns
+        -------
+        tuple of (list of model, list of list of CalibrationError)
+            One fitted model per curve, in order, and its errors as
+            :meth:`calibrate_from_curve` returns them.
+
+        Raises
+        ------
+        ValueError
+            If a solver does not converge.
+        """
+        models: list[Self] = []
+        errors: list[list[CalibrationError]] = []
+        if not curves:
+            return models, errors
+        model = cls()
+        t, rates, mask, sizes = _stack_curves(curves)
+        n_curves, n_humps = t.shape[0], len(cls._HUMP_BOUNDS)
+        low, high = model._hump_bounds()
+        if initial_guess is not None:
+            start = np.asarray(initial_guess, dtype=float)
+            starts = np.broadcast_to(start, (n_curves, n_humps))
+        else:
+            grid = _start_grid(low, high)
+            sse = model._batched_grid_sse(t, rates, mask, grid)
+            start = grid[np.argmin(sse.sum(axis=1))]
+            starts = grid[np.argmin(sse, axis=0)]
+        if global_humps:
+            humps = model._fit_global_humps(t, rates, mask, start)
+            humps = np.broadcast_to(humps, (n_curves, n_humps))
+        else:
+            starts = np.clip(starts, low * 1.01, high * 0.99)
+            humps, converged = model._batched_newton(t, rates, mask, starts)
+            if initial_guess is None and n_humps > 1:
+                model._retry_apart(t, rates, mask, grid, sse, starts, humps, converged)
+            for i in np.flatnonzero(~converged):
+                single = cls()
+                single.calibrate_from_curve(
+                    curves[int(i)], initial_guess=list(humps[i])
+                )
+                humps[i] = single.get_params()[single._n_betas :]
+        design = model._calibration_design(t, [humps[:, [j]] for j in range(n_humps)])
+        betas, residual = _projection(design, rates, mask)
+        fitted = residual + rates * mask
+        for i, size in enumerate(sizes):
+            models.append(cls(*betas[i], *humps[i]))
+            errors.append(
+                [
+                    CalibrationError(
+                        term=float(t[i, j]),
+                        error_bps=1e4 * float(fitted[i, j] - rates[i, j]),
+                    )
+                    for j in range(size)
+                ]
+            )
+        return models, errors
+
+    def _retry_apart(
+        self,
+        t: np.ndarray,
+        rates: np.ndarray,
+        mask: np.ndarray,
+        grid: np.ndarray,
+        sse: np.ndarray,
+        starts: np.ndarray,
+        humps: np.ndarray,
+        converged: np.ndarray,
+    ) -> None:
+        """Refit from humps apart the curves whose grid start has two near-equal
+        or swapped humps, keeping the better fit (in place in `humps` and
+        `converged`).
+
+        Equal humps make the two curvature loadings one: the model drops to three
+        factors and the error is a flat, degenerate ridge, along which a start
+        there can slide into a worse basin, or into the swapped region where the
+        first hump is the longer. Such curves (second hump under ``_HUMPS_APART``
+        times the first) also start from their best grid point whose second hump
+        is at least that."""
+        apart = grid[:, -1] >= _HUMPS_APART * grid[:, 0]
+        near = np.flatnonzero(starts[:, -1] < _HUMPS_APART * starts[:, 0])
+        if near.size == 0 or not apart.any():
+            return
+        low, high = self._hump_bounds()
+        candidates = grid[apart]
+        others = candidates[np.argmin(sse[apart][:, near], axis=0)]
+        others = np.clip(others, low * 1.01, high * 0.99)
+        sub = (t[near], rates[near], mask[near])
+        refit, refit_converged = self._batched_newton(*sub, others)
+        before = np.sum(self._projected_residual(*sub, humps[near])[0] ** 2, axis=1)
+        after = np.sum(self._projected_residual(*sub, refit)[0] ** 2, axis=1)
+        better = after < before
+        humps[near[better]] = refit[better]
+        converged[near[better]] = refit_converged[better]
+
+    def _batched_grid_sse(
+        self, t: np.ndarray, rates: np.ndarray, mask: np.ndarray, grid: np.ndarray
+    ) -> np.ndarray:
+        """Squared error of the best betas at every grid point for every curve:
+        (G, C), in blocks of curves of at most ``_GRID_BLOCK`` design entries."""
+        n_grid, n_humps = grid.shape
+        n_curves, n_slots = t.shape
+        sse = np.empty((n_grid, n_curves))
+        block = max(1, _GRID_BLOCK // (n_grid * n_slots * (2 + n_humps)))
+        # A grid column takes few distinct humps (12 per hump for NSS): loadings
+        # are computed once per distinct hump and gathered into each grid point.
+        axes = [np.unique(grid[:, j], return_inverse=True) for j in range(n_humps)]
+        for s in range(0, n_curves, block):
+            part = slice(s, s + block)
+            design = np.empty((n_grid, *t[part].shape, 2 + n_humps))  # (G, c, N, k)
+            design[..., 0] = 1.0
+            for j, (values, at) in enumerate(axes):
+                x = (HUMP_PEAK / values[:, None, None]) * t[None, part]
+                e_minus_x = np.exp(-x)
+                slope = (1 - e_minus_x) / x
+                if j == 0:
+                    design[..., 1] = slope[at]
+                design[..., 2 + j] = (slope - e_minus_x)[at]
+            design *= mask[None, part, :, None]
+            target = rates[part] * mask[part]
+            rhs = _transposed_times(design, target)
+            betas = _solve(_gram(design), rhs)
+            # Least-squares error without forming the fit: |y|² - b'X'y.
+            sse[:, part] = np.sum(target**2, axis=-1) - np.sum(betas * rhs, axis=-1)
+        return sse
+
+    def _projected_residual(
+        self,
+        t: np.ndarray,
+        rates: np.ndarray,
+        mask: np.ndarray,
+        humps: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Variable-projection residual of every curve at its humps (C, N) and its
+        Jacobian in the humps (C, N, number of humps), as
+        :meth:`calibrate_from_curve`'s (Golub and Pereyra), batched over curves."""
+        n_humps = humps.shape[1]
+        design, derivatives = self._design_and_derivatives(
+            t, [humps[:, [j]] for j in range(n_humps)]
+        )
+        design *= mask[..., None]
+        target = rates * mask
+        gram = _gram(design)
+        betas = _solve(gram, _transposed_times(design, target))
+        residual = _times(design, betas) - target
+        columns = []
+        for derivative in derivatives:
+            derivative *= mask[..., None]
+            moved = _times(derivative, betas)
+            back = _solve(
+                gram,
+                _transposed_times(design, moved)
+                + _transposed_times(derivative, residual),
+            )
+            columns.append(moved - _times(design, back))
+        return residual, np.stack(columns, axis=-1)
+
+    def _batched_newton(
+        self,
+        t: np.ndarray,
+        rates: np.ndarray,
+        mask: np.ndarray,
+        humps0: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Each curve's humps minimising its projected squared error, in their bounds.
+
+        Damped Newton on u = log(hump) (humps span 0.25-20 years), every curve with
+        its own damping. The gradient is the analytic J'r; the Hessian is its
+        forward difference (one extra evaluation per hump), not the Gauss-Newton
+        J'J: on noisy rates the second-order term sum(r * d2r) dominates the hump
+        curvature, J'J overshoots and a Levenberg-Marquardt crawls along the
+        valley (scipy's least_squares too, the cost of a single fit). The Hessian's
+        eigenvalues are taken in absolute value (saddle-free Newton): plain Newton
+        is drawn to saddles, and two equal NSS humps are one by symmetry. Damping
+        adds a multiple of diag(J'J), so a step that does not lower the error is
+        refused and retried shorter, towards steepest descent.
+
+        Bounds by projection: a hump on a bound whose gradient points out of it is
+        held, and the step is clipped into the bounds. A curve stops when its step,
+        its relative error reduction or its projected gradient falls under
+        ``_TOL``. Only the curves still running are evaluated. Returns the humps (C,
+        number of humps) and which curves converged."""
+        low, high = (np.log(b) for b in self._hump_bounds())
+        u = np.log(humps0)
+        n_curves, n_humps = u.shape
+        eye = np.eye(n_humps)
+        damping = np.full(n_curves, 1e-6)
+        converged = np.zeros(n_curves, dtype=bool)
+        fd_step = 1e-6
+
+        def evaluate(idx: np.ndarray, u_idx: np.ndarray):
+            """Squared error, gradient J'r and diag(J'J) at log humps `u_idx`."""
+            humps = np.exp(u_idx)
+            residual, jac = self._projected_residual(
+                t[idx], rates[idx], mask[idx], humps
+            )
+            jac = jac * humps[:, None, :]
+            return (
+                np.sum(residual**2, axis=1),
+                np.einsum("cnh,cn->ch", jac, residual),
+                np.einsum("cnh,cnh->ch", jac, jac),
+            )
+
+        def hessian(idx: np.ndarray, u_idx: np.ndarray, gradient: np.ndarray):
+            """Forward difference of the gradient (stepping inwards at a bound),
+            with its eigenvalues made positive: |eigenvalue|, at least 1e-10 of the
+            largest."""
+            columns = []
+            for j in range(n_humps):
+                h = np.where(u_idx[:, j] + fd_step > high[j], -fd_step, fd_step)
+                moved = u_idx.copy()
+                moved[:, j] += h
+                columns.append((evaluate(idx, moved)[1] - gradient) / h[:, None])
+            full = np.stack(columns, axis=-1)
+            values, vectors = np.linalg.eigh(0.5 * (full + full.swapaxes(1, 2)))
+            values = np.abs(values)
+            values = np.maximum(values, 1e-10 * values.max(axis=1, keepdims=True))
+            return (vectors * values[:, None, :]) @ vectors.swapaxes(1, 2)
+
+        every = np.arange(n_curves)
+        sse, gradient, scale = evaluate(every, u)
+        curvature = hessian(every, u, gradient)
+        for _ in range(_MAX_BATCH_ITERATIONS):
+            idx = np.flatnonzero(~converged)
+            if idx.size == 0:
+                break
+            u_idx, g = u[idx], gradient[idx]
+            held = ((u_idx <= low) & (g > 0)) | ((u_idx >= high) & (g < 0))
+            free = ~held
+            system = curvature[idx] + damping[idx, None, None] * (
+                scale[idx][:, :, None] * eye
+            )
+            system = (
+                system * (free[:, :, None] & free[:, None, :]) + eye * held[:, :, None]
+            )
+            step = np.linalg.solve(system, (-g * free)[..., None])[..., 0]
+            # Shorten the step to the bounds along its direction: clipping each hump
+            # alone turns it, and can push a fit into another basin. A step blocked
+            # at once (a free hump on its bound stepping out) is clipped instead.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                room = np.where(
+                    step > 0,
+                    (high - u_idx) / step,
+                    np.where(step < 0, (low - u_idx) / step, np.inf),
+                )
+            fraction = np.minimum(1.0, room.min(axis=1))
+            fraction = np.where(fraction > 1e-3, fraction, 1.0)
+            u_new = np.clip(u_idx + fraction[:, None] * step, low, high)
+            sse_new, g_new, scale_new = evaluate(idx, u_new)
+            better = sse_new < sse[idx]
+            moved = np.max(np.abs(u_new - u_idx), axis=1)
+            reduction = sse[idx] - sse_new
+            projected_gradient = np.max(np.abs(g * free), axis=1)
+            done = (
+                (moved <= _TOL * (_TOL + np.max(np.abs(u_idx), axis=1)))
+                | (better & (reduction <= _TOL * sse[idx]))
+                | (projected_gradient <= _TOL * _TOL)
+                | (damping[idx] > 1e16)
+            )
+            accepted = idx[better]
+            u[accepted], sse[accepted] = u_new[better], sse_new[better]
+            gradient[accepted], scale[accepted] = g_new[better], scale_new[better]
+            damping[idx] = np.where(
+                better, np.maximum(damping[idx] / 10, 1e-15), damping[idx] * 10
+            )
+            converged[idx[done]] = True
+            moving = accepted[~converged[accepted]]
+            if moving.size:
+                curvature[moving] = hessian(moving, u[moving], gradient[moving])
+        return np.exp(u), converged
+
+    def _fit_global_humps(
+        self,
+        t: np.ndarray,
+        rates: np.ndarray,
+        mask: np.ndarray,
+        start: np.ndarray,
+    ) -> np.ndarray:
+        """One set of humps minimising the summed projected squared error of every
+        curve (each with its own betas): one bounded least squares on the stacked
+        residuals, as :meth:`calibrate_from_curve` on one curve."""
+        n_curves = t.shape[0]
+
+        def shared(humps: np.ndarray) -> np.ndarray:
+            return np.broadcast_to(humps, (n_curves, humps.size))
+
+        def residuals(humps: np.ndarray) -> np.ndarray:
+            return self._projected_residual(t, rates, mask, shared(humps))[0].ravel()
+
+        def jacobian(humps: np.ndarray) -> np.ndarray:
+            _, jac = self._projected_residual(t, rates, mask, shared(humps))
+            return jac.reshape(-1, humps.size)
+
+        return self._least_squares(residuals, jacobian, start, 0)
 
 
 @dataclass

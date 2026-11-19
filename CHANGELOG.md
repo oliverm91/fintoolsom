@@ -1,3 +1,9 @@
+## v1.0.0b18
+
+### Feat
+
+- **models**: `NelsonSiegel.calibrate_many_from_curves(curves, global_humps=False, initial_guess=None)` and the same on `NelsonSiegelSvensson` fit many curves at once in batched numpy and return `(models, errors)`, a new model and its `CalibrationError`s per curve. Curves need not share pillars: each keeps its own year fractions, padded to the longest with a mask. By default every curve gets its own humps, the fits of a loop of `calibrate_from_curve`: a batched hump-grid start, then a batched damped Newton on the variable-projection error, with a finite-difference Hessian of the analytic gradient made positive (absolute eigenvalues), so it neither crawls on noisy rates nor stops on the saddle of two equal NSS humps; NSS starts with near-equal humps are also tried from humps apart. On 100 daily curves of 15 pillars moved ±3 days with 1bp of noise it is 10.6x (NS) and 6.8x (NSS) faster than the loop, 13.5x and 10.0x on 1,000, and no curve fits worse (a few fit better where the single fit stops early). `global_humps=True` fits one set of humps shared by every curve (each with its own betas) minimising the summed squared error, as Diebold-Li's fixed lambda. `initial_guess` warm-starts every curve from given humps.
+
 ## v1.0.0b17
 
 ### BREAKING CHANGE
