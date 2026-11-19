@@ -1,4 +1,4 @@
-## v1.0.0b17 (Unreleased)
+## v1.0.0b17
 
 ### BREAKING CHANGE
 
