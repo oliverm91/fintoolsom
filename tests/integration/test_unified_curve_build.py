@@ -175,7 +175,8 @@ def test_existing_discount_curves_keep_the_real_quotes_repriced(real, full):
 
 
 @pytest.mark.parametrize(
-    "method", [InterpolationMethod.PiecewiseConstant, InterpolationMethod.PiecewiseLinear]
+    "method",
+    [InterpolationMethod.PiecewiseConstant, InterpolationMethod.PiecewiseLinear],
 )
 @pytest.mark.parametrize("quote_set", ["real", "real_and_term"])
 def test_date_by_date_bootstrap_matches_the_joint_solve(
@@ -231,4 +232,3 @@ def test_non_local_methods_skip_the_sweep_and_reprice_after_a_last_joint_solve(
     assert sizes[-1] == max(sizes) > 50 and sizes[-1] > sum(sizes[:-1]) / 2
     assert market.curves[ICP].interpolation_method is method
     assert max(abs(_mtm(q, market)) for q in _exact(real)) < REPRICE_TOL
-

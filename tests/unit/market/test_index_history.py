@@ -267,7 +267,9 @@ def test_overnight_price_history_add_value_matches_building_at_once():
     at_once = OvernightInterestPriceHistory(index=ICP, values=dict(known))
     dates = sorted(known)
     for order in (dates, dates[::-1], dates[2:] + dates[:2]):
-        one_by_one = OvernightInterestPriceHistory(index=ICP, values={order[0]: known[order[0]]})
+        one_by_one = OvernightInterestPriceHistory(
+            index=ICP, values={order[0]: known[order[0]]}
+        )
         for d in order[1:]:
             one_by_one.add_value(d, known[d])
         if order is dates:  # appending reproduces the constructor exactly

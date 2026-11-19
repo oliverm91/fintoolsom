@@ -18,7 +18,18 @@ def test_get_rate_falls_back_to_the_latest_past_fixing():
 
 def test_get_rate_falls_back_across_more_than_a_month_without_fixings():
     old, recent = date(2023, 5, 10), date(2023, 12, 20)
-    market = Market(t=date(2024, 3, 1), interest_rates={"X": {old: _rate(0.01), recent: _rate(0.02)}})
-    assert market.get_rate(date(2023, 12, 21), "X", use_closest_past_rate=True).rate == 0.02
-    assert market.get_rate(date(2024, 2, 28), "X", use_closest_past_rate=True).rate == 0.02
-    assert market.get_rate(date(2023, 12, 19), "X", use_closest_past_rate=True).rate == 0.01
+    market = Market(
+        t=date(2024, 3, 1),
+        interest_rates={"X": {old: _rate(0.01), recent: _rate(0.02)}},
+    )
+    assert (
+        market.get_rate(date(2023, 12, 21), "X", use_closest_past_rate=True).rate
+        == 0.02
+    )
+    assert (
+        market.get_rate(date(2024, 2, 28), "X", use_closest_past_rate=True).rate == 0.02
+    )
+    assert (
+        market.get_rate(date(2023, 12, 19), "X", use_closest_past_rate=True).rate
+        == 0.01
+    )

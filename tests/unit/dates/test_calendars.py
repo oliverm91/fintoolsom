@@ -257,7 +257,12 @@ def test_eur_indices_use_the_target2_calendar():
     for d in (date(2025, 5, 29), date(2025, 6, 9), date(2025, 10, 3)):
         assert not estr.calendar.is_holiday(d), d
     # TARGET2 closing days.
-    for d in (date(2025, 4, 18), date(2025, 4, 21), date(2025, 5, 1), date(2025, 12, 26)):
+    for d in (
+        date(2025, 4, 18),
+        date(2025, 4, 21),
+        date(2025, 5, 1),
+        date(2025, 12, 26),
+    ):
         assert estr.calendar.is_holiday(d), d
     assert estr.calendar.add_business_days(date(2025, 4, 17), 2) == date(2025, 4, 23)
 

@@ -111,7 +111,9 @@ def test_the_default_spread_values_the_leg_as_any_zero_spread(builder, index):
     )
 
 
-@pytest.mark.parametrize("index, base", [(CAMARA, 360), (SONIA, 365)], ids=["360", "365"])
+@pytest.mark.parametrize(
+    "index, base", [(CAMARA, 360), (SONIA, 365)], ids=["360", "365"]
+)
 def test_a_bump_of_the_default_spread_accrues_simple_interest_in_the_index_basis(
     index, base
 ):

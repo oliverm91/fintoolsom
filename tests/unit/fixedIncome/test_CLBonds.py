@@ -108,7 +108,9 @@ def test_coupons_accessors():
         100 * 0.04 * 90 / 360
     )
     assert coupons.get_accrue_rate().rate == pytest.approx(0.04)
-    assert list(coupons.get_remaining_flows(E)) == [102]  # the coupon ending on E is gone
+    assert list(coupons.get_remaining_flows(E)) == [
+        102
+    ]  # the coupon ending on E is gone
     boundary = coupons.get_current_coupon(E)  # a boundary belongs to the next coupon
     assert (boundary.start_date, boundary.end_date) == (E, date(2025, 1, 1))
 
@@ -166,7 +168,9 @@ def test_amortizing_coupons_factory_repays_the_notional():
     ids=["coupons", "currency", "notional"],
 )
 def test_bond_validates_its_inputs(kwargs, error):
-    args = dict(coupons=clbond_factory.two_coupon_coupons(), currency="clp", notional=100)
+    args = dict(
+        coupons=clbond_factory.two_coupon_coupons(), currency="clp", notional=100
+    )
     with pytest.raises(error):
         CLBond(**(args | kwargs))
 
@@ -216,7 +220,9 @@ def test_z_spread_reprices_the_irr_value_on_the_bumped_curve(
     irr = rate(0.06)
     z_spread = sample_bond.get_z_spread(curve_date, irr, sample_curve)
     bumped = sample_curve.parallel_bump_bps(z_spread)
-    assert sample_bond.get_present_value_zc(curve_date, bumped) == pytest.approx(sample_bond.get_present_value(curve_date, irr), abs=1e-4)
+    assert sample_bond.get_present_value_zc(curve_date, bumped) == pytest.approx(
+        sample_bond.get_present_value(curve_date, irr), abs=1e-4
+    )
 
 
 def test_duration_is_below_maturity_and_dv01_uses_the_modified_duration():
@@ -263,8 +269,12 @@ def test_a_bond_on_coupons_in_another_base_is_the_same_bond():
     bond = CLBond(scaled, base_100.currency, base_100.notional)
     t, irr = date(2026, 6, 24), rate(0.05)
     assert bond.tera.rate == base_100.tera.rate
-    assert list(bond.flows_amount) == pytest.approx(list(base_100.flows_amount), rel=1e-14)
-    assert list(bond.coupons.flows) == pytest.approx(list(base_100.coupons.flows), rel=1e-14)
+    assert list(bond.flows_amount) == pytest.approx(
+        list(base_100.flows_amount), rel=1e-14
+    )
+    assert list(bond.coupons.flows) == pytest.approx(
+        list(base_100.coupons.flows), rel=1e-14
+    )
     assert bond.get_present_value(t, irr) == pytest.approx(
         base_100.get_present_value(t, irr), rel=1e-14
     )
@@ -331,9 +341,9 @@ def test_a_zero_coupon_duration_on_any_curve_is_its_maturity():
     t = date(2024, 7, 8)
     bond = clbond_factory.bullet_clbond(start=t, n_coupons=1, coupon_amount=0.0)
     maturity = (bond.get_maturity_date() - t).days / 365
-    assert bond.get_duration_from_curve(t, curve_factory.sample_curve()) == pytest.approx(
-        maturity, rel=1e-12
-    )
+    assert bond.get_duration_from_curve(
+        t, curve_factory.sample_curve()
+    ) == pytest.approx(maturity, rel=1e-12)
 
 
 def test_a_matured_bond_has_no_duration_on_a_curve():

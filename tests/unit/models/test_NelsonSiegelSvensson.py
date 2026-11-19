@@ -238,11 +238,16 @@ def test_calibrate_from_bonds_converges_on_a_long_second_hump():
     nss.calibrate_from_bonds(calibration_date, bonds_irr_list)
 
     ts = np.array(
-        [(b.get_maturity_date() - calibration_date).days / 365 for b, _ in bonds_irr_list]
+        [
+            (b.get_maturity_date() - calibration_date).days / 365
+            for b, _ in bonds_irr_list
+        ]
     )
     assert nss.lambda_ == pytest.approx(1.5, abs=1e-4)
     assert nss.mu_ == pytest.approx(12.0, abs=1e-3)
-    assert np.max(np.abs(nss.get_rate(ts) - _svensson_rate(ts, betas, 1.5, 12.0))) < 1e-9
+    assert (
+        np.max(np.abs(nss.get_rate(ts) - _svensson_rate(ts, betas, 1.5, 12.0))) < 1e-9
+    )
 
 
 def test_calibrate_from_bonds_leaves_the_callers_list_in_order():
@@ -380,7 +385,9 @@ def test_design_derivatives_match_central_differences(model):
 def _coupon_bonds(model):
     """Ten bullet bonds, 1 to 30 years, priced on `model` and quoted at their IRRs."""
     calibration_date = date(2024, 7, 8)
-    curve = ModelCurve(calibration_date, model, calibration_date + timedelta(days=11500))
+    curve = ModelCurve(
+        calibration_date, model, calibration_date + timedelta(days=11500)
+    )
     bonds = []
     for years in (1, 2, 3, 5, 7, 10, 12, 15, 20, 30):
         bond = clbond_factory.bullet_clbond(
@@ -541,7 +548,9 @@ def test_bond_errors_are_irr_differences_at_the_fitted_curve_duration():
         flows = bond.coupons.get_remaining_flows(calibration_date)
         ts = np.array([(d - calibration_date).days / 365 for d in dates])
         pvs = flows * curve.get_dfs(dates)
-        assert error["term"] == pytest.approx(float(np.sum(ts * pvs) / np.sum(pvs)), rel=1e-12)
+        assert error["term"] == pytest.approx(
+            float(np.sum(ts * pvs) / np.sum(pvs)), rel=1e-12
+        )
         assert error["term"] == pytest.approx(
             bond.get_duration_from_curve(calibration_date, curve), rel=1e-12
         )
@@ -560,5 +569,7 @@ def test_a_zero_coupon_bond_duration_is_its_maturity():
     calibration_date = date(2024, 7, 8)
     bonds = _bonds_irr_list(calibration_date)
     errors = NelsonSiegel().calibrate_from_bonds(calibration_date, bonds)
-    maturities = [(b.get_maturity_date() - calibration_date).days / 365 for b, _ in bonds]
+    maturities = [
+        (b.get_maturity_date() - calibration_date).days / 365 for b, _ in bonds
+    ]
     assert [e["term"] for e in errors] == pytest.approx(maturities, rel=1e-12)

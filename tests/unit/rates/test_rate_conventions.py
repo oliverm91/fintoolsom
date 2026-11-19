@@ -39,7 +39,9 @@ _RATE = {
 # ── Interest conventions ────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("convention, name", [(LIN, "lin"), (COMP, "comp"), (EXP, "exp")])
+@pytest.mark.parametrize(
+    "convention, name", [(LIN, "lin"), (COMP, "comp"), (EXP, "exp")]
+)
 def test_interest_conventions_have_short_names(convention, name):
     assert convention.__str__() == name
 
@@ -47,7 +49,15 @@ def test_interest_conventions_have_short_names(convention, name):
 @pytest.mark.parametrize("convention", CONVENTIONS)
 @pytest.mark.parametrize(
     "rate_value, tf",
-    [(0.05, 0.5), (0.04, 2), (0.03, 1.5), (0.035, 1.25), (0.02, 10), (0.0, 3), (-0.01, 1)],
+    [
+        (0.05, 0.5),
+        (0.04, 2),
+        (0.03, 1.5),
+        (0.035, 1.25),
+        (0.02, 10),
+        (0.0, 3),
+        (-0.01, 1),
+    ],
 )
 def test_df_from_rate_follows_its_formula_and_inverts(convention, rate_value, tf):
     df = convention.get_df_from_rate(rate_value, tf)
@@ -59,7 +69,15 @@ def test_df_from_rate_follows_its_formula_and_inverts(convention, rate_value, tf
 @pytest.mark.parametrize("convention", CONVENTIONS)
 @pytest.mark.parametrize(
     "df, tf",
-    [(0.99, 70 / 360), (0.995, 0.25), (0.97, 0.75), (0.8, 5), (1.0, 4), (1.01, 2), (1.02, 3)],
+    [
+        (0.99, 70 / 360),
+        (0.995, 0.25),
+        (0.97, 0.75),
+        (0.8, 5),
+        (1.0, 4),
+        (1.01, 2),
+        (1.02, 3),
+    ],
 )
 def test_rate_from_df_follows_its_formula(convention, df, tf):
     value = convention.get_rate_from_df(df, tf)
@@ -127,7 +145,14 @@ _FACTORIES = {"lin": lin_act360, "comp": comp_act365, "exp": exp_act365}
 
 @pytest.mark.parametrize(
     "source, target",
-    [("lin", "comp"), ("comp", "lin"), ("comp", "exp"), ("exp", "comp"), ("lin", "exp"), ("exp", "lin")],
+    [
+        ("lin", "comp"),
+        ("comp", "lin"),
+        ("comp", "exp"),
+        ("exp", "comp"),
+        ("lin", "exp"),
+        ("exp", "lin"),
+    ],
 )
 @pytest.mark.parametrize("days", [25, 120, 365])
 def test_convert_rate_convention_keeps_the_wealth_factor_and_round_trips(
