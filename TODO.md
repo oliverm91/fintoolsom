@@ -5,3 +5,11 @@
 - Add UF products
 - Bring back projection curves? Interpolate projection rate which has a term tied to its index. Thought for TermRateIndexes... what happens if need to project 3M rate starting in 1 W?
   - Maybe not, but ability to add a short term rate to a term curve. Example: SOFR O/N as short rate for building TERMSOFR 3M curve.
+- FX spot lag in valuation (V4). The quoted spot `S` of a pair is the price for exchange on its spot date `s = pair.get_spot_date(t)` (USD/CLP T+2 offshore, T+1 by the current `FX_SPOT_LAGS` table), not on `t`. Today `Market` treats the FX of `t` as value `t`.
+  - Current: CLP PV of a USD flow `N` on date `d` is `N * df_USD(d) * S`.
+  - Correct, for any `d`: `PV_CLP = N * df_USD(d) / df_USD(s) * S * df_CLP(s)`. Move the USD flow from `d` to `s` on the USD curve, convert at `S` on `s`, discount the CLP from `s` to today. Equivalently convert at the forward anchored on spot, `F(d) = S * [df_USD(d) / df_CLP(d)] / [df_USD(s) / df_CLP(s)]`, and discount in CLP: `N * F(d) * df_CLP(d)`.
+  - Flow after spot (e.g. `d = t+5`): `df_USD(d) / df_USD(s) < 1`, the USD is discounted back to spot.
+  - Flow before spot (e.g. `d = t+1`): `df_USD(d) / df_USD(s) > 1`, the USD grows forward to spot; this is the tom rate (spot minus one day of points). With `d = t` it is the cash rate.
+  - Current over correct is `df_USD(s) / df_CLP(s) ~ 1 + (r_CLP - r_USD) * lag / 365`, the same for every `d`. Example: N = 1M USD, S = 950, r_CLP 6%, r_USD 4.9% (continuous Act/365), T+2: correct 949,305,300 CLP at t+5 and 949,815,200 at t+1; current 949,362,600 and 949,872,500; about -57,200 CLP (0.6bp of notional) both. Forward-points calibration absorbs most of it into the USD curve level.
+  - Also shows as one lag of carry on the notional of a spot-start deliverable swap with `initial_exchange=True`, which should be worth about 0 at inception.
+  - To do: anchor `Market.convert_value_currency` and the future-FX projection (`get_future_fx_rate`, `_future_fx_rates_at_ordinals`) on `pair.get_spot_date(t)` with the formula above; check forwards, NDFs, options and `ValuationBatch` (values to the bit, gradient gains the `df(s)` terms); rebuild the curve-builder tests (USD curves calibrated from forward points will move slightly).
