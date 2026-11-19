@@ -1,3 +1,9 @@
+## v1.0.0b19
+
+### Feat
+
+- **models**: `NelsonSiegel.calibrate_many_from_bonds(bond_sets, initial_guess=None)` and the same on `NelsonSiegelSvensson` fit one model per `(calibration_date, [(bond, irr), ...])` set in batched numpy and return `(models, errors)`, as `calibrate_from_bonds` on each. Sets may differ in date, bond count and flows, and quotes may be in any rate convention. It starts from the best hump-grid point (with its betas) on a pseudo-curve of each bond's zero rate at its duration, refines every set with a batched damped Gauss-Newton on all parameters (log humps, steps capped at 0.5 in log hump, every set with its own damping; a set not converged in 200 iterations is refitted alone), and solves the error IRRs in one batched Newton over every bond. On sets of 10 bullet bonds (1-30 years, 1bp of IRR noise) it is 3.6x (NS) and 2.9x (NSS) faster than a loop on 50 sets, 3.4x and 2.7x on 100. NS fits match the loop's; NSS fits are better on average (mean rms 0.740 vs 0.754bp on 100 sets, 11 sets better and 2 worse, where the start leads to another local minimum), and the loop fails on 2 of those 100 sets.
+
 ## v1.0.0b18
 
 ### Feat

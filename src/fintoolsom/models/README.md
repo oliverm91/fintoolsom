@@ -28,6 +28,7 @@ are the years to each hump: `C` peaks at `HUMP_PEAK` ≈ 1.7933, so `C(x)` peaks
 | `.calibrate_from_bonds(date, [(CLBond, Rate), ...])` | Fits every parameter to the bonds' PVs at their IRRs; returns one `CalibrationError` per bond |
 | `.calibrate_from_curve(curve)` | Fits a `PillarCurve`'s zero rates at its knots (humps by the solver, betas solved exactly for each); returns one `CalibrationError` per knot |
 | `Model.calibrate_many_from_curves(curves, global_humps=False)` | Fits many curves at once in batched numpy; returns `(models, errors)`, one model and one error list per curve |
+| `Model.calibrate_many_from_bonds([(date, [(CLBond, Rate), ...]), ...])` | Fits many bond sets at once in batched numpy; returns `(models, errors)`, one model and one error list per set |
 | `CalibrationError` | `TypedDict` `{"term": float, "error_bps": float}`: the fit at one point |
 
 ### Calibration errors
@@ -114,6 +115,44 @@ models, errors = NelsonSiegel.calibrate_many_from_curves(curves, initial_guess=[
   13.5x and 10.0x. No curve fits worse than the loop; where the single fit stops
   early (one NSS curve in 1,000 raised, a few stopped on the equal-humps saddle),
   the batched fit is better.
+
+## Many bond sets
+
+`calibrate_many_from_bonds(bond_sets)` fits one model per
+`(calibration_date, [(bond, irr), ...])` set, with the residuals and objective of
+`calibrate_from_bonds`:
+
+```python
+models, errors = NelsonSiegelSvensson.calibrate_many_from_bonds(
+    [(date_1, bonds_1), (date_2, bonds_2), ...]
+)
+```
+
+- **Sets may differ** in date, bond count and flows (padded with zero flows), and
+  quotes may be in any rate convention.
+- **Start.** The best point of the hump grid, with its betas, on a pseudo-curve of
+  each bond's zero rate at its duration (the PV-weighted continuous zero rate of
+  its flows at its own IRR), scored for every set at once. The single fit starts
+  from fixed humps, so on multi-modal fits (10 noisy NSS bonds often are) the two
+  can end in different local minima. `initial_guess=` starts every set from given
+  parameters instead.
+- **Solver.** A batched damped Gauss-Newton on all parameters, humps in log with
+  steps of at most 0.5 in log hump (an undamped first step can throw the first
+  hump onto its lower bound, where huge opposite betas fit worse). A set not
+  converged after 200 iterations is refitted alone by `calibrate_from_bonds`.
+- **Errors.** The IRRs at the fitted PVs come from one batched Newton solve over
+  every bond, in each quote's convention.
+- **Speed.** Sets of 10 semiannual bullets (1-30 years) on drifting NSS curves,
+  quoted with 1bp of IRR noise, against a loop of `calibrate_from_bonds`:
+
+  | | 50 sets | 100 sets |
+  | --- | --- | --- |
+  | NS | 51.6 ms vs 187 ms (3.6x) | 113 ms vs 383 ms (3.4x) |
+  | NSS | 117 ms vs 343 ms (2.9x) | 313 ms vs 859 ms (2.7x) |
+
+  NS fits match the loop (one set better). NSS fits better on average (mean rms
+  0.718 vs 0.737bp on 50 sets, 0.740 vs 0.754bp on 100): 6 and 11 sets better, 2
+  and 2 worse (up to 0.08 and 1.3bp), the loop also failing on 2 of the 100.
 
 ## Notes
 

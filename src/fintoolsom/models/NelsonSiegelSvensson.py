@@ -10,7 +10,15 @@ parameter count), but they share the fitting in :class:`_NelsonSiegelModel`.
 
 from dataclasses import dataclass, fields
 from datetime import date
-from typing import Callable, ClassVar, Optional, Self, Sequence, TypedDict
+from typing import (
+    Callable,
+    ClassVar,
+    NamedTuple,
+    Optional,
+    Self,
+    Sequence,
+    TypedDict,
+)
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -123,6 +131,10 @@ _MAX_BATCH_ITERATIONS = 100
 # Second-to-first hump ratio under which a grid start counts as two equal (or
 # swapped) humps, and is retried from humps apart (see _retry_apart).
 _HUMPS_APART = 1.5
+# Batched bond calibration: iterations of its Gauss-Newton before a set falls back
+# to the one-set fit (also the IRR solves' cap), and the largest step of a log hump.
+_MAX_BOND_ITERATIONS = 200
+_MAX_LOG_HUMP_STEP = 0.5
 _GRID_BLOCK = 2_000_000
 
 
@@ -176,6 +188,112 @@ def _projection(
     target = rates * mask
     betas = _solve(_gram(weighted), _transposed_times(weighted, target))
     return betas, _times(weighted, betas) - target
+
+
+class _StackedBonds(NamedTuple):
+    """Bond sets padded to B bonds of F flows each (see :func:`_stack_bond_sets`)."""
+
+    t: np.ndarray  # (S, B·F) Act/365 year fractions of the flows, 1 when padded
+    flows: np.ndarray  # (S, B·F) remaining flows, 0 when padded
+    market_pvs: np.ndarray  # (S, B) PV at the quoted IRR, 0 for a padded bond
+    quote_tf: np.ndarray  # (S, B, F) year fractions in each quote's day count
+    quote_rates: np.ndarray  # (S, B) quoted IRRs
+    conventions: np.ndarray  # (S, B) quote interest conventions, None when padded
+    sizes: list[int]  # bonds per set
+    n_flows: int  # F
+
+
+def _stack_bond_sets(bond_sets) -> _StackedBonds:
+    """The remaining flows of every bond of every set, padded: their Act/365 year
+    fractions from the set's calibration date (as :meth:`calibrate_from_bonds`),
+    their year fractions in the quote's day count, and the PV at the quote."""
+    rows = []
+    for calibration_date, bonds in bond_sets:
+        set_rows = []
+        for bond, irr in bonds:
+            dates = bond.coupons.get_remaining_end_dates(calibration_date)
+            convention = irr.rate_convention
+            set_rows.append(
+                (
+                    np.array([(d - calibration_date).days for d in dates]) / 365,
+                    np.asarray(
+                        bond.coupons.get_remaining_flows(calibration_date), dtype=float
+                    ),
+                    np.asarray(
+                        convention.day_count_convention.get_time_fraction(
+                            calibration_date, dates, convention.time_fraction_base
+                        ),
+                        dtype=float,
+                    ),
+                    irr.rate,
+                    convention.interest_convention,
+                    bond.get_present_value(calibration_date, irr),
+                )
+            )
+        rows.append(set_rows)
+    sizes = [len(set_rows) for set_rows in rows]
+    n_sets, n_bonds = len(rows), max(sizes)
+    n_flows = max(row[0].size for set_rows in rows for row in set_rows)
+    t = np.ones((n_sets, n_bonds, n_flows))
+    flows = np.zeros_like(t)
+    quote_tf = np.ones_like(t)
+    market_pvs = np.zeros((n_sets, n_bonds))
+    quote_rates = np.zeros_like(market_pvs)
+    conventions = np.full((n_sets, n_bonds), None, dtype=object)
+    for s, set_rows in enumerate(rows):
+        for b, (ti, fi, qi, rate, convention, pv) in enumerate(set_rows):
+            t[s, b, : ti.size], flows[s, b, : fi.size] = ti, fi
+            quote_tf[s, b, : qi.size] = qi
+            quote_rates[s, b], conventions[s, b], market_pvs[s, b] = (
+                rate,
+                convention,
+                pv,
+            )
+    return _StackedBonds(
+        t.reshape(n_sets, -1),
+        flows.reshape(n_sets, -1),
+        market_pvs,
+        quote_tf,
+        quote_rates,
+        conventions,
+        sizes,
+        n_flows,
+    )
+
+
+def _quote_dfs(stacked: _StackedBonds, rates: np.ndarray) -> np.ndarray:
+    """Discount factors of every flow at `rates` (S, B), each bond in its quote's
+    convention: (S, B, F), 1 for a padded bond."""
+    dfs = np.ones_like(stacked.quote_tf)
+    for convention in {c for c in stacked.conventions.ravel() if c is not None}:
+        at = stacked.conventions == convention
+        dfs[at] = 1 / convention.get_wf_from_rate(
+            rates[at][:, None], stacked.quote_tf[at]
+        )
+    return dfs
+
+
+def _batched_irrs(stacked: _StackedBonds, target_pvs: np.ndarray) -> np.ndarray:
+    """The IRR of every bond, in its quote's convention, at which its remaining
+    flows are worth `target_pvs` (S, B): Newton from the quoted IRRs with a central
+    difference slope, all bonds at once."""
+    shape = stacked.market_pvs.shape + (stacked.n_flows,)
+    flows = stacked.flows.reshape(shape)
+    rates = stacked.quote_rates.copy()
+    bump = 1e-6
+    for _ in range(_MAX_BOND_ITERATIONS):
+        pv = (flows * _quote_dfs(stacked, rates)).sum(-1)
+        slope = (
+            (flows * _quote_dfs(stacked, rates + bump)).sum(-1)
+            - (flows * _quote_dfs(stacked, rates - bump)).sum(-1)
+        ) / (2 * bump)
+        step = np.divide(
+            pv - target_pvs, slope, out=np.zeros_like(pv), where=slope != 0
+        )
+        rates -= step
+        if np.max(np.abs(step)) < 1e-14:
+            break
+    return rates
 
 
 # Stacked products of designs (..., n, k) by batched matmul (faster than einsum).
@@ -882,6 +1000,229 @@ class _NelsonSiegelModel:
             return jac.reshape(-1, humps.size)
 
         return self._least_squares(residuals, jacobian, start, 0)
+
+    # ── Batched bond calibration ──
+    # S sets of bonds at once, padded to B bonds of F flows (see _stack_bond_sets):
+    # a padded flow is 0 and a padded bond has market PV 0, so they add nothing.
+
+    @classmethod
+    def calibrate_many_from_bonds(
+        cls,
+        bond_sets: Sequence[tuple[date, list[tuple[CLBond, Rate]]]],
+        initial_guess: Optional[list[float]] = None,
+    ) -> tuple[list[Self], list[list[CalibrationError]]]:
+        """Fit one model per set of bonds, as :meth:`calibrate_from_bonds` on each,
+        in batched numpy.
+
+        Each set is ``(calibration_date, [(bond, irr), ...])``; sets may differ in
+        date, bond count and flows. The residuals, Jacobian and objective are those
+        of :meth:`calibrate_from_bonds`. What differs is the start and the solver:
+
+        * Start: by default the best point of the hump grid, with its betas, on a
+          pseudo-curve of each bond's zero rate at its duration (the PV-weighted
+          continuous zero rate of its flows at its own IRR), scored for every set
+          in one batched solve. A single fit starts from fixed humps instead; with
+          several local minima, as 10 noisy NSS bonds often have, the two can end
+          in different ones.
+        * Solver: a batched damped Gauss-Newton on all parameters (humps in log,
+          each step at most ``_MAX_LOG_HUMP_STEP`` in log hump), every set with
+          its own damping, stopping when it converges. A set still not converged
+          after ``_MAX_BOND_ITERATIONS`` is refitted alone by
+          :meth:`calibrate_from_bonds` from where it stopped.
+        * Errors: the IRRs at the fitted PVs come from one batched Newton solve
+          over every bond, in each quote's convention.
+
+        Parameters
+        ----------
+        bond_sets : sequence of (date, list of (CLBond, Rate))
+            Calibration date and quoted bonds of each fit.
+        initial_guess : list of float, optional
+            Parameters in :meth:`get_params` order to start every set from
+            (humps clipped to their bounds), instead of the grid start.
+
+        Returns
+        -------
+        tuple of (list of model, list of list of CalibrationError)
+            One fitted model per set, in order, and its errors as
+            :meth:`calibrate_from_bonds` returns them, in the order of its bonds.
+
+        Raises
+        ------
+        ValueError
+            If a set's fallback fit does not converge.
+        """
+        models: list[Self] = []
+        errors: list[list[CalibrationError]] = []
+        if not bond_sets:
+            return models, errors
+        model = cls()
+        stacked = _stack_bond_sets(bond_sets)
+        n_betas = model._n_betas
+        low, high = model._hump_bounds()
+        if initial_guess is not None:
+            start = np.asarray(initial_guess, dtype=float)
+            params = np.tile(start, (len(bond_sets), 1))
+        else:
+            params = model._bond_grid_start(stacked)
+        params[:, n_betas:] = np.clip(params[:, n_betas:], low * 1.01, high * 0.99)
+        params, converged = model._batched_bond_gauss_newton(stacked, params)
+        for s in np.flatnonzero(~converged):
+            calibration_date, bonds = bond_sets[int(s)]
+            single = cls()
+            single.calibrate_from_bonds(
+                calibration_date, bonds, initial_guess=list(params[s])
+            )
+            params[s] = single.get_params()
+        residual, flow_pvs = model._bond_pvs(stacked, np.arange(len(bond_sets)), params)
+        model_pvs = residual + stacked.market_pvs
+        shape = stacked.market_pvs.shape + (stacked.n_flows,)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            durations = (flow_pvs * stacked.t).reshape(shape).sum(-1) / model_pvs
+        model_irrs = _batched_irrs(stacked, model_pvs)
+        for s, size in enumerate(stacked.sizes):
+            models.append(cls(*params[s]))
+            errors.append(
+                [
+                    CalibrationError(
+                        term=float(durations[s, b]),
+                        error_bps=1e4
+                        * float(model_irrs[s, b] - stacked.quote_rates[s, b]),
+                    )
+                    for b in range(size)
+                ]
+            )
+        return models, errors
+
+    def _bond_pvs(
+        self,
+        stacked: "_StackedBonds",
+        idx: np.ndarray,
+        params: np.ndarray,
+        jac: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Model PV minus market PV of every bond of the sets `idx` (s, B), and either
+        each flow's model PV (s, B·F) or, with `jac`, the Jacobian of the residuals
+        in the parameters (s, B, P): :meth:`calibrate_from_bonds`'s, batched."""
+        n_betas = self._n_betas
+        betas, humps = params[:, :n_betas], params[:, n_betas:]
+        t, flows = stacked.t[idx], stacked.flows[idx]
+        columns = [humps[:, [j]] for j in range(humps.shape[1])]
+        if jac:
+            design, derivatives = self._design_and_derivatives(t, columns)
+        else:
+            design, derivatives = self._calibration_design(t, columns), []
+        flow_pvs = np.exp(-_times(design, betas) * t) * flows
+        shape = (len(idx), stacked.market_pvs.shape[1], stacked.n_flows)
+        residual = flow_pvs.reshape(shape).sum(-1) - stacked.market_pvs[idx]
+        if not jac:
+            return residual, flow_pvs
+        rate_slopes = np.concatenate(
+            [design, *(d @ betas[..., None] for d in derivatives)], axis=-1
+        )
+        jacobian = ((-flow_pvs * t)[..., None] * rate_slopes).reshape(*shape, -1)
+        return residual, jacobian.sum(axis=2)
+
+    def _bond_grid_start(self, stacked: "_StackedBonds") -> np.ndarray:
+        """Each set's best grid humps and their betas on its bonds' pseudo-curve: a
+        bond's PV-weighted continuous zero rate at its own IRR, sum(pv · -log df) /
+        sum(pv · t), at its Macaulay duration at that IRR. Exact for a compounded or
+        continuous Act/365 quote, whose zero rate is flat."""
+        shape = stacked.market_pvs.shape + (stacked.n_flows,)
+        dfs = _quote_dfs(stacked, stacked.quote_rates)
+        flow_pvs = stacked.flows.reshape(shape) * dfs
+        t = stacked.t.reshape(shape)
+        weight = (flow_pvs * t).sum(-1)
+        present = weight > 0
+        safe = np.where(present, weight, 1.0)
+        duration = np.where(
+            present, weight / np.where(present, flow_pvs.sum(-1), 1.0), 1.0
+        )
+        rates = np.where(present, (flow_pvs * -np.log(dfs)).sum(-1) / safe, 0.0)
+        mask = present.astype(float)
+        low, high = self._hump_bounds()
+        grid = _start_grid(low, high)
+        sse = self._batched_grid_sse(duration, rates, mask, grid)
+        humps = grid[np.argmin(sse, axis=0)]
+        design = self._calibration_design(
+            duration, [humps[:, [j]] for j in range(humps.shape[1])]
+        )
+        betas, _ = _projection(design, rates, mask)
+        return np.concatenate([betas, humps], axis=1)
+
+    def _batched_bond_gauss_newton(
+        self, stacked: "_StackedBonds", params0: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Each set's parameters minimising its squared PV errors, humps in their
+        bounds: damped Gauss-Newton on v = [betas, log humps], every set with its
+        own damping (a multiple of diag(J'J)). A step moves a log hump by at most
+        ``_MAX_LOG_HUMP_STEP``: an undamped first step can throw the first hump onto
+        its lower bound, where huge opposite slope and curvature betas fit worse.
+        Bounds by projection, as :meth:`_batched_newton`; the same stopping tests.
+        Returns the parameters (S, P) and which sets converged."""
+        n_betas = self._n_betas
+        low, high = (np.log(b) for b in self._hump_bounds())
+        lower = np.concatenate((np.full(n_betas, -np.inf), low))
+        upper = np.concatenate((np.full(n_betas, np.inf), high))
+        v = params0.copy()
+        v[:, n_betas:] = np.log(v[:, n_betas:])
+        n_sets, n_params = v.shape
+        eye = np.eye(n_params)
+        damping = np.full(n_sets, 1e-3)
+        converged = np.zeros(n_sets, dtype=bool)
+
+        def to_params(v_idx: np.ndarray) -> np.ndarray:
+            params = v_idx.copy()
+            params[:, n_betas:] = np.exp(v_idx[:, n_betas:])
+            return params
+
+        def evaluate(idx: np.ndarray, v_idx: np.ndarray):
+            params = to_params(v_idx)
+            residual, jac = self._bond_pvs(stacked, idx, params, jac=True)
+            jac[..., n_betas:] *= params[:, None, n_betas:]
+            return (
+                np.sum(residual**2, axis=1),
+                np.einsum("sbp,sb->sp", jac, residual),
+                jac.swapaxes(1, 2) @ jac,
+            )
+
+        sse, gradient, normal = evaluate(np.arange(n_sets), v)
+        for _ in range(_MAX_BOND_ITERATIONS):
+            idx = np.flatnonzero(~converged)
+            if idx.size == 0:
+                break
+            v_idx, g = v[idx], gradient[idx]
+            held = ((v_idx <= lower) & (g > 0)) | ((v_idx >= upper) & (g < 0))
+            free = ~held
+            scale = np.diagonal(normal[idx], axis1=1, axis2=2)
+            system = normal[idx] + damping[idx, None, None] * (scale[:, :, None] * eye)
+            system = (
+                system * (free[:, :, None] & free[:, None, :]) + eye * held[:, :, None]
+            )
+            step = np.linalg.solve(system, (-g * free)[..., None])[..., 0]
+            largest = np.max(np.abs(step[:, n_betas:]), axis=1)
+            step *= np.minimum(1.0, _MAX_LOG_HUMP_STEP / np.maximum(largest, 1e-300))[
+                :, None
+            ]
+            v_new = np.clip(v_idx + step, lower, upper)
+            sse_new, g_new, normal_new = evaluate(idx, v_new)
+            better = sse_new < sse[idx]
+            moved = np.max(np.abs(v_new - v_idx), axis=1)
+            reduction = sse[idx] - sse_new
+            projected_gradient = np.max(np.abs(g * free), axis=1)
+            done = (
+                (moved <= _TOL * (_TOL + np.max(np.abs(v_idx), axis=1)))
+                | (better & (reduction <= _TOL * sse[idx]))
+                | (projected_gradient <= _TOL * _TOL)
+                | (damping[idx] > 1e16)
+            )
+            accepted = idx[better]
+            v[accepted], sse[accepted] = v_new[better], sse_new[better]
+            gradient[accepted], normal[accepted] = g_new[better], normal_new[better]
+            damping[idx] = np.where(
+                better, np.maximum(damping[idx] / 3, 1e-15), damping[idx] * 4
+            )
+            converged[idx[done]] = True
+        return to_params(v), converged
 
 
 @dataclass
