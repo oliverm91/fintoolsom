@@ -72,8 +72,12 @@ published UF date for CLF/CLP. Fixings on or before `L` are read from the histor
 (the FX fixing of a date) convert amounts without building a `CurrencyPair`.
 
 Every coupon's amortization is paid with that coupon, so a bullet leg only repays
-its notional at the end and an amortizing leg repays it along the way. There is no
-initial exchange, and coupons paid on or before `t` are dropped.
+its notional at the end and an amortizing leg repays it along the way. Coupons paid
+on or before `t` are dropped. A deliverable swap built with
+`Swap(..., is_deliverable=True, initial_exchange=True)` also exchanges the
+notionals on the first start date: each leg pays its first residual, in its own
+currency, discounted like its other flows, until that date is on or before `t`. A
+non-deliverable swap with `initial_exchange=True` raises `ValueError`.
 
 ## Risk
 

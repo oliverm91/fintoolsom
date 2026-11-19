@@ -149,8 +149,9 @@ Keep these in mind when building coupons by hand:
 - **Dates are used exactly as given.** Coupons aren't adjusted for business days, so
   pass dates that are already adjusted. A `TermRateLeg` warns on creation if a payment
   date is a holiday of its index's calendar.
-- **There is no initial notional exchange.** Only the repayments in `amortization`
-  are paid.
+- **The initial notional exchange is the swap's.** Legs only pay the repayments in
+  `amortization`; `Swap(initial_exchange=True)`, for deliverable swaps only, adds
+  each leg's first residual paid on its first start date.
 - **A floating leg uses the leg's `spread`.** The `spread` on each coupon is not used
   in valuation, so one floating leg can't vary its spread by coupon. A fixed leg can
   vary `rate` by coupon.

@@ -303,8 +303,9 @@ def get_swap_mtm(swap: Swap, market: Market, currency: Currency) -> float:
     its own currency is valued there; otherwise (non-deliverable swap, or a
     UF leg, always paid in CLP) every flow is converted at its FX fixing and
     discounted in the settlement currency. Each leg PV is then converted to
-    `currency` at spot. Only the final notional exchange (the last coupon's
-    amortization) is valued; there is no initial exchange.
+    `currency` at spot. The final notional exchange is the last coupon's
+    amortization; a deliverable swap with ``initial_exchange`` also pays each
+    leg's first residual on its first start date (:func:`_initial_exchange_pv`).
 
     Parameters
     ----------
@@ -350,4 +351,24 @@ def get_leg_pv(swap: Swap, side: LegSide, market: Market, currency: Currency) ->
     leg = swap.leg(side)
     settlement = swap.leg_settlement_currency(leg)
     pv = _leg_pv_non_deliverable(leg, swap.collateral_index, market, settlement)
+    if swap.initial_exchange:  # deliverable: settlement is the leg currency
+        pv = _with_initial_exchange(pv, leg, swap.collateral_index, market)
     return market.convert_value_currency(pv, settlement, currency)
+
+
+def _initial_exchange_pv(leg, collateral, market: Market) -> float | None:
+    """PV, in the leg currency, of the leg paying its first residual on its first
+    start date (a deliverable swap's initial exchange); None once that date is on or
+    before ``market.t``: paid, like a coupon."""
+    start = leg._start_ordinals[:1]
+    if start.size == 0 or start[0] <= market.t.toordinal():
+        return None
+    df = market._dfs_at_ordinals(leg.currency, start, collateral=collateral)[0]
+    return -float(leg.residuals[0]) * df
+
+
+def _with_initial_exchange(pv: float, leg, collateral, market: Market) -> float:
+    """`pv` plus the leg's unpaid initial exchange. ``ValuationBatch`` adds it the
+    same way, after the leg's flows, so the two agree to the bit."""
+    exchange = _initial_exchange_pv(leg, collateral, market)
+    return pv if exchange is None else float(pv + exchange)

@@ -25,6 +25,7 @@ from ._swap_pv import (
     _nothing_realised,
     _par_leg_pv,
     _sum_products,
+    _with_initial_exchange,
 )
 
 if TYPE_CHECKING:
@@ -56,12 +57,14 @@ def get_simplified_swap_mtm(
         PV of the received leg minus PV of the paid leg, in `currency`.
     """
     collateral = swap.collateral_index
-    receive, pay = swap.receive_leg, swap.pay_leg
-    return market.convert_value_currency(
-        _simplified_leg_pv(receive, collateral, market), receive.currency, currency
-    ) - market.convert_value_currency(
-        _simplified_leg_pv(pay, collateral, market), pay.currency, currency
-    )
+
+    def leg_pv(leg) -> float:
+        pv = _simplified_leg_pv(leg, collateral, market)
+        if swap.initial_exchange:
+            pv = _with_initial_exchange(pv, leg, collateral, market)
+        return market.convert_value_currency(pv, leg.currency, currency)
+
+    return leg_pv(swap.receive_leg) - leg_pv(swap.pay_leg)
 
 
 def _simplified_leg_pv(leg, collateral, market: Market) -> float:
@@ -139,9 +142,11 @@ def get_non_started_swap_mtm(
             f"valued on {market.t}, after it starts: use a SimplifiedSwap or a Swap."
         )
     collateral = swap.collateral_index
-    receive, pay = swap.receive_leg, swap.pay_leg
-    return market.convert_value_currency(
-        _non_started_leg_pv(receive, collateral, market), receive.currency, currency
-    ) - market.convert_value_currency(
-        _non_started_leg_pv(pay, collateral, market), pay.currency, currency
-    )
+
+    def leg_pv(leg) -> float:
+        pv = _non_started_leg_pv(leg, collateral, market)
+        if swap.initial_exchange:
+            pv = _with_initial_exchange(pv, leg, collateral, market)
+        return market.convert_value_currency(pv, leg.currency, currency)
+
+    return leg_pv(swap.receive_leg) - leg_pv(swap.pay_leg)

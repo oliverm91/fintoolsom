@@ -60,7 +60,8 @@ Fill the market with fixings and spot, list the quotes in any order, and call
 `build_curves`. The builder works out which pillar each quote pins, so you don't
 assign them. Besides the two types below there are `IRBasisQuote`,
 `CrossCurrencyFixedFloatQuote`, `CrossCurrencyFloatFloatQuote` and
-`ForwardPriceQuote`.
+`ForwardPriceQuote`. An FX forward quote starts its term from the pair's spot
+date (`CurrencyPair.spot_lag`: T+1 for USD/CLP) unless it is given `spot_lag`.
 
 ```python
 from datetime import date

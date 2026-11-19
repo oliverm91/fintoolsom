@@ -276,10 +276,20 @@ def test_forward_price_quote_from_a_term_fixes_after_spot_and_pays_a_day_later()
     term = Term(1, TermUnit.M, ADJ_CLP)
     quote = ForwardPriceQuote(USDCLP, 950.0, True, term=term, quote_date=VAL_DATE)
     ndf = quote.get_instrument()
-    spot = ADJ_CLP.calendar.add_business_days(VAL_DATE, 2)
+    spot = ADJ_CLP.calendar.add_business_days(VAL_DATE, 1)  # USD/CLP spots T+1
+    assert quote.spot_lag == USDCLP.spot_lag == 1
     assert isinstance(ndf, NDF)
     assert ndf.fixing_date == term.advance(spot)
     assert ndf.payment_date == ADJ_CLP.calendar.add_business_days(ndf.fixing_date, 1)
+
+
+def test_an_explicit_spot_lag_overrides_the_pairs():
+    term = Term(1, TermUnit.M, ADJ_CLP)
+    quote = ForwardPriceQuote(
+        USDCLP, 950.0, True, term=term, quote_date=VAL_DATE, spot_lag=2
+    )
+    spot = ADJ_CLP.calendar.add_business_days(VAL_DATE, 2)
+    assert quote.get_instrument().fixing_date == term.advance(spot)
 
 
 def test_forward_price_quote_with_a_payment_date_is_deliverable():
@@ -362,7 +372,9 @@ def _clp_irs(**kw):
     from fintoolsom.market.quotes import IRSQuote
 
     cl = adj_convention(Ccy.CLP)
-    leg = dict(currency=CLP, payment_frequency=PaymentFrequency.SEMIANNUAL, adj_convention=cl)
+    leg = dict(
+        currency=CLP, payment_frequency=PaymentFrequency.SEMIANNUAL, adj_convention=cl
+    )
     return IRSQuote(
         QuotedSide.RECEIVE,
         Term(1, TermUnit.Y, cl),
@@ -406,8 +418,12 @@ def test_a_cross_currency_quote_defaults_to_the_joint_calendar():
         QuotedSide.RECEIVE,
         Term(2, TermUnit.Y, cl),
         quote_date=VAL_DATE,
-        receive_leg=FloatingLegSpec(CLP, PaymentFrequency.SEMIANNUAL, cl, index=ICP, spread=SPREAD),
-        pay_leg=FloatingLegSpec(USD, PaymentFrequency.SEMIANNUAL, cl, index=SOFR, spread=SPREAD),
+        receive_leg=FloatingLegSpec(
+            CLP, PaymentFrequency.SEMIANNUAL, cl, index=ICP, spread=SPREAD
+        ),
+        pay_leg=FloatingLegSpec(
+            USD, PaymentFrequency.SEMIANNUAL, cl, index=SOFR, spread=SPREAD
+        ),
     )
     assert quote.adj_convention.calendar is get_joint_calendar("CL", "US")
     assert repr(quote.adj_convention.calendar) == "Calendar(CL + US)"

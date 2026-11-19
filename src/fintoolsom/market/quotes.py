@@ -118,11 +118,13 @@ class _ForwardQuote(InstrumentQuote):
         default=None
     )  # set → NDF, None → deliverable Forward
     term: Term | None = field(default=None)
-    spot_lag: int = field(default=2)
+    spot_lag: int | None = field(default=None)  # None: the pair's spot lag
     payment_lag: int = field(default=1)
 
     def __post_init__(self):
         pair = self.currency_pair
+        if self.spot_lag is None:
+            self.spot_lag = pair.spot_lag
         if self._effective_fixing_date() is None and not (
             pair.base_currency.is_deliverable and pair.quote_currency.is_deliverable
         ):
@@ -321,8 +323,10 @@ class ForwardPriceQuote(_ForwardQuote):
         Tenor from the spot date (keyword-only).
     quote_date : date
         Quote date (keyword-only).
-    spot_lag : int, default 2
-        Business days from `quote_date` to spot (keyword-only).
+    spot_lag : int, optional
+        Business days from `quote_date` to spot (keyword-only); None, the default,
+        takes the pair's :attr:`CurrencyPair.spot_lag` (T+1 for USD/CLP and
+        USD/CAD, else T+2).
     payment_lag : int, default 1
         Business days from fixing to payment (keyword-only).
     """

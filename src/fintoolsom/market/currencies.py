@@ -11,6 +11,7 @@ from .localities import Locality
 
 class CurrencyName(Enum):
     USD = "USD"
+    CAD = "CAD"
     EUR = "EUR"
     GBP = "GBP"
     JPY = "JPY"
@@ -37,6 +38,7 @@ class CurrencyName(Enum):
 
 _CURRENCY_LOCALITY_MAP: dict[CurrencyName, Locality] = {
     CurrencyName.USD: Locality.US,
+    CurrencyName.CAD: Locality.CA,
     CurrencyName.EUR: Locality.EU,
     CurrencyName.GBP: Locality.GB,
     CurrencyName.JPY: Locality.JP,
@@ -83,6 +85,7 @@ class Currency:
     # One constant per CurrencyName, assigned after the class (they are instances
     # of it). Declared here so type checkers know them.
     USD: ClassVar["Currency"]
+    CAD: ClassVar["Currency"]
     EUR: ClassVar["Currency"]
     GBP: ClassVar["Currency"]
     JPY: ClassVar["Currency"]
@@ -140,6 +143,7 @@ class Currency:
 
 
 Currency.USD = Currency(CurrencyName.USD)
+Currency.CAD = Currency(CurrencyName.CAD)
 Currency.EUR = Currency(CurrencyName.EUR)
 Currency.GBP = Currency(CurrencyName.GBP)
 Currency.JPY = Currency(CurrencyName.JPY)
@@ -164,6 +168,19 @@ Currency.PEN = Currency(CurrencyName.PEN)
 # The UF is a CLP unit of account: UF flows are paid in CLP at the UF of their fixing.
 Currency.CLF = Currency(CurrencyName.CLF, settles_in=Currency.CLP)
 
+# Spot lag of an FX pair: business days, on the joint calendar of both currencies,
+# from the trade date to the value date of a spot deal. Keyed by the two currencies
+# in either order; a pair not listed spots at DEFAULT_FX_SPOT_LAG. Add or change an
+# entry to set another market convention.
+DEFAULT_FX_SPOT_LAG = 2
+FX_SPOT_LAGS: dict[frozenset[Currency], int] = {
+    frozenset((Currency.USD, Currency.CLP)): 1,
+    frozenset((Currency.USD, Currency.CAD)): 1,
+    frozenset((Currency.EUR, Currency.USD)): 2,
+    frozenset((Currency.GBP, Currency.USD)): 2,
+    frozenset((Currency.USD, Currency.JPY)): 2,
+}
+
 
 @dataclass(slots=True)
 class CurrencyPair:
@@ -186,6 +203,33 @@ class CurrencyPair:
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def spot_lag(self) -> int:
+        """Business days from the trade date to the spot value date: the pair's
+        entry in :data:`FX_SPOT_LAGS` (either order), else
+        :data:`DEFAULT_FX_SPOT_LAG`. USD/CLP and USD/CAD spot at T+1."""
+        key = frozenset((self.base_currency, self.quote_currency))
+        return FX_SPOT_LAGS.get(key, DEFAULT_FX_SPOT_LAG)
+
+    def get_spot_date(self, trade_date: date) -> date:
+        """Spot value date of a deal traded on `trade_date`: `spot_lag` business
+        days later on the joint calendar of both currencies' localities.
+
+        Parameters
+        ----------
+        trade_date : date
+
+        Returns
+        -------
+        date
+        """
+        from ..dates.calendars import get_joint_calendar
+
+        calendar = get_joint_calendar(
+            self.base_currency.locality.value, self.quote_currency.locality.value
+        )
+        return calendar.add_business_days(trade_date, self.spot_lag)
 
     def __hash__(self) -> int:
         return hash(self.name)

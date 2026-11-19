@@ -1,7 +1,8 @@
 """Convenience constructors for swap legs.
 
 Every builder makes a bullet leg: constant notional, repaid with the final coupon
-(the final notional exchange; no initial exchange is modelled). Common parameters:
+(the final notional exchange; the initial one is ``Swap(initial_exchange=True)``,
+for deliverable swaps). Common parameters:
 
 notional : float
     Constant notional.

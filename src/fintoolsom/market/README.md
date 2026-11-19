@@ -8,7 +8,7 @@ pricing (`derivatives`) and curve building (`curve_builder`) read from.
 
 | Module | Contents |
 |---|---|
-| `currencies.py` | `Currency` (`Currency.USD`, `Currency.CLF`, ...), `CurrencyPair`, `FX_Rate`, `FX_RateData` (FX history of a pair) |
+| `currencies.py` | `Currency` (`Currency.USD`, `Currency.CLF`, ...), `CurrencyPair` (with its `spot_lag`), `FX_Rate`, `FX_RateData` (FX history of a pair), `FX_SPOT_LAGS` |
 | `localities.py` | `Locality`: the country whose calendar a currency uses |
 | `index.py` | Index definitions: `OvernightRateIndex` (SOFR), `TermRateIndex` (Term SOFR, TAB), `OvernightInterestPriceIndex` (ICP) |
 | `index_history.py` | Fixings: `OvernightRateHistory`, `TermRateHistory`, `OvernightInterestPriceHistory` (levels, gaps filled geometrically) |
@@ -54,6 +54,25 @@ market.get_dfs(Currency.CLP, dates, collateral=sofr)  # CLP_ICP * SOFR / USD_ICP
   under ICP raises a `ValueError`.
 - `set_curve` rejects values that are not a `Curve` and keys that are neither an
   `Index` nor a `Currency`.
+
+## FX spot lag
+
+A pair's `spot_lag` is its market convention: business days from the trade date to
+the value date of a spot deal, on the joint calendar of both currencies.
+`pair.get_spot_date(trade_date)` applies it.
+
+| Pair | `spot_lag` |
+| --- | --- |
+| USD/CLP, USD/CAD | 1 |
+| EUR/USD, GBP/USD, USD/JPY | 2 |
+| any other pair (`DEFAULT_FX_SPOT_LAG`) | 2 |
+
+The lag is looked up in `FX_SPOT_LAGS`, keyed by the two currencies in either order,
+so `CLP/USD` is T+1 too; add or change an entry to set another convention. It is not
+a dataclass field, so pairs stay equal and hash by their name. FX forward quotes
+(`ForwardPriceQuote`, `ForwardPointsQuote`) default `spot_lag` to the pair's.
+Valuation still reads the FX of date `t` as spot; the lag sets the dates quotes
+build, not how FX is projected.
 
 ## UF
 

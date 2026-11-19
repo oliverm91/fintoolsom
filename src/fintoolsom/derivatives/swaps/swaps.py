@@ -54,20 +54,34 @@ class Swap(SwapBase):
         when both legs share a currency. A leg in a unit of account that cannot
         be delivered (the UF, ``CLF``) makes the swap non-deliverable: settle it
         in ``CLP`` with `payment_currency`.
+    initial_exchange : bool, default False
+        Exchange the notionals on the first start date as well as at maturity:
+        each leg pays its first residual, in its own currency, on its first start
+        date (the receive leg pays it, the pay leg receives it). Physical swaps
+        only. The final exchange is the last coupon's amortization either way.
+        Once the start date is on or before the valuation date, the exchange is
+        paid and drops out, like a paid coupon.
 
     Raises
     ------
     ValueError
         If a non-deliverable cross-currency swap has no `payment_currency`, a
-        deliverable swap has one or has a leg in a non-deliverable currency, or
-        `payment_currency` cannot be delivered.
+        deliverable swap has one or has a leg in a non-deliverable currency,
+        `payment_currency` cannot be delivered, or `initial_exchange` is set on a
+        non-deliverable swap.
     """
 
     receive_leg: SwapLeg
     pay_leg: SwapLeg
     is_deliverable: bool = False
+    initial_exchange: bool = False
 
     def __post_init__(self):
+        if self.initial_exchange and not self.is_deliverable:
+            raise ValueError(
+                "initial_exchange is only for deliverable (physically settled) swaps: "
+                "a non-deliverable swap does not exchange its notionals at the start."
+            )
         if self.is_deliverable and self.payment_currency is not None:
             raise ValueError(
                 "A deliverable swap settles each leg in its own currency: payment_currency must be None."
@@ -101,6 +115,8 @@ class Swap(SwapBase):
     def __str__(self) -> str:
         if self.is_deliverable:
             mode = "deliverable"
+            if self.initial_exchange:
+                mode += ", initial exchange"
         elif self.payment_currency is not None:
             mode = f"non-deliverable, settles {self.payment_currency}"
         else:

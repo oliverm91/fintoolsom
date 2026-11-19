@@ -91,13 +91,15 @@ class _Uncompiled(Exception):
 
 class _Leg:
     """One compiled leg: its terms ``flow * fx * df`` are ``[start, stop)`` of the
-    batch's products, plus the head ``residual_0 * df(start_0)`` of a par leg; its PV
+    batch's products, plus the head ``residual_0 * df(start_0)`` of a par leg, then
+    its unpaid initial exchange ``-residual_0 * df(start_0)`` (``exchange``); its PV
     is converted to the reporting currency at ``spot``."""
 
-    __slots__ = ("start", "stop", "head", "spot")
+    __slots__ = ("start", "stop", "head", "spot", "exchange")
 
     def __init__(self, start: int, stop: int, head: int | None, spot: float):
         self.start, self.stop, self.head, self.spot = start, stop, head, spot
+        self.exchange: int | None = None
 
 
 class _Ndf:
@@ -138,6 +140,7 @@ class ValuationBatch:
         self._terms: list = []  # (flows, fx refs, df refs) per leg, before freezing
         self._projected: list = []  # (positions in the flows, residuals, fixed, refs)
         self._heads: list = []  # (residual_0, df ref) per par leg
+        self._exchanges: list = []  # (-residual_0, df ref) per unpaid initial exchange
         self._compiled: list = []  # (position, plan) per compiled instrument
         self._fallback: list = []  # positions left to Calculator.valuate
         self._n_terms = 0
@@ -155,14 +158,16 @@ class ValuationBatch:
             len(self._terms),
             len(self._projected),
             len(self._heads),
+            len(self._exchanges),
             self._n_terms,
             {key: (len(s.chunks), s.size) for key, s in self._sources.items()},
         )
 
     def _rollback(self, checkpoint: tuple) -> None:
         """Drop what a failed compilation added."""
-        n_terms, n_projected, n_heads, self._n_terms, sources = checkpoint
+        n_terms, n_projected, n_heads, n_exchanges, self._n_terms, sources = checkpoint
         del self._terms[n_terms:], self._projected[n_projected:], self._heads[n_heads:]
+        del self._exchanges[n_exchanges:]
         for key in [k for k in self._sources if k not in sources]:
             del self._sources[key]
         for key, (n_chunks, size) in sources.items():
@@ -201,10 +206,25 @@ class ValuationBatch:
             raise _Uncompiled
         receive, pay = instrument.receive_leg, instrument.pay_leg
         collateral = instrument.collateral_index
-        return tuple(
-            self._compile_leg(leg, collateral, instrument.leg_settlement_currency(leg))
-            for leg in (receive, pay)
-        )
+        legs = []
+        for leg in (receive, pay):
+            plan = self._compile_leg(
+                leg, collateral, instrument.leg_settlement_currency(leg)
+            )
+            if instrument.initial_exchange:
+                plan.exchange = self._compile_exchange(leg, collateral)
+            legs.append(plan)
+        return tuple(legs)
+
+    def _compile_exchange(self, leg, collateral) -> int | None:
+        """_swap_pv._initial_exchange_pv, its static part: the position of the leg's
+        unpaid initial exchange, or None once paid."""
+        start = leg._start_ordinals[:1]
+        if start.size == 0 or start[0] <= self.market.t.toordinal():
+            return None
+        discount = self._source("discount", leg.currency, collateral)
+        self._exchanges.append((-float(leg.residuals[0]), self._ref(discount, start)))
+        return len(self._exchanges) - 1
 
     def _compile_leg(self, leg, collateral, settlement) -> _Leg:
         """_swap_pv._leg_pv_non_deliverable, its static part."""
@@ -359,6 +379,10 @@ class ValuationBatch:
         self._accrual_at = np.concatenate(
             [at(a) for *_, a in projected] or [np.zeros(0, dtype=np.int64)]
         ).astype(np.intp)
+        self._exchange_amounts = np.array([a for a, _ in self._exchanges], dtype=float)
+        self._exchange_at = np.concatenate(
+            [at(d) for _, d in self._exchanges] or [np.zeros(0, dtype=np.int64)]
+        ).astype(np.intp)
         self._head_residuals = np.array([r for r, _ in self._heads], dtype=float)
         self._head_at = np.concatenate(
             [at(d) for _, d in self._heads] or [np.zeros(0, dtype=np.int64)]
@@ -379,7 +403,7 @@ class ValuationBatch:
             + [np.zeros(1)]
         )
         self._gradient_rows = None
-        del self._terms, self._projected, self._heads
+        del self._terms, self._projected, self._heads, self._exchanges
 
     # ── Evaluation ─────────────────────────────────────────────────────────────
 
@@ -423,6 +447,7 @@ class ValuationBatch:
             # flows * fx * dfs (deliverable: fx = 1, which leaves flows * dfs)
             products = (flows * values[self._fx_at] * values[self._df_at]).tolist()
             heads = (self._head_residuals * values[self._head_at]).tolist()
+            exchanges = (self._exchange_amounts * values[self._exchange_at]).tolist()
             fsum = math.fsum
             for k, plan in self._compiled:
                 if isinstance(plan, _Ndf):
@@ -434,6 +459,8 @@ class ValuationBatch:
                     if leg.head is not None:
                         head = heads[leg.head]
                         pv = head + pv if leg.stop > leg.start else head
+                    if leg.exchange is not None:
+                        pv = pv + exchanges[leg.exchange]
                     mtm.append(pv * leg.spot)
                 out[k] = mtm[0] - mtm[1]
         if self._fallback:
@@ -474,7 +501,9 @@ class ValuationBatch:
         """
         if self._gradient_rows is None:
             self._gradient_rows = self._gradient_layout()
-        term_row, term_scale, head_row, head_scale = self._gradient_rows
+        term_row, term_scale, head_row, head_scale, exchange_row, exchange_scale = (
+            self._gradient_rows
+        )
         grad = np.zeros((len(self.instruments), len(values)))
         flows = self._static_flows.copy()
         projected = self._projected_pos
@@ -499,6 +528,12 @@ class ValuationBatch:
             np.add.at(
                 grad, (head_row, self._head_at), self._head_residuals * head_scale
             )
+        if exchange_row.size:
+            np.add.at(
+                grad,
+                (exchange_row, self._exchange_at),
+                self._exchange_amounts * exchange_scale,
+            )
         for k, plan in self._compiled:
             if not isinstance(plan, _Ndf) or plan.a is None:
                 continue
@@ -509,11 +544,14 @@ class ValuationBatch:
         return grad
 
     def _gradient_layout(self) -> tuple:
-        """Instrument row and ``sign * spot`` of every term and par head."""
+        """Instrument row and ``sign * spot`` of every term, par head and initial
+        exchange."""
         term_row = np.zeros(self._static_flows.size, dtype=np.intp)
         term_scale = np.zeros(self._static_flows.size)
         head_row = np.zeros(self._head_residuals.size, dtype=np.intp)
         head_scale = np.zeros(self._head_residuals.size)
+        exchange_row = np.zeros(self._exchange_amounts.size, dtype=np.intp)
+        exchange_scale = np.zeros(self._exchange_amounts.size)
         for k, plan in self._compiled:
             if isinstance(plan, _Ndf):
                 continue
@@ -523,7 +561,10 @@ class ValuationBatch:
                 if leg.head is not None:
                     head_row[leg.head] = k
                     head_scale[leg.head] = sign * leg.spot
-        return term_row, term_scale, head_row, head_scale
+                if leg.exchange is not None:
+                    exchange_row[leg.exchange] = k
+                    exchange_scale[leg.exchange] = sign * leg.spot
+        return term_row, term_scale, head_row, head_scale, exchange_row, exchange_scale
 
 
 def _ndf_value(plan: _Ndf, values: np.ndarray) -> float:

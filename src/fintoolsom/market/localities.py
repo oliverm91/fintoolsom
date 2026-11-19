@@ -6,6 +6,7 @@ class Locality(Enum):
     financial-market calendar of the holidays library (EUR: TARGET2, ``"XECB"``)."""
 
     US = "US"
+    CA = "CA"
     EU = "XECB"  # TARGET2, not one euro country's public holidays
     GB = "GB"
     JP = "JP"
