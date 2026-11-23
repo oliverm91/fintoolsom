@@ -181,7 +181,9 @@ def _single(cls, sets):
     out = []
     for cal, bonds in sets:
         model = cls()
-        out.append((model, model.calibrate_from_bonds(cal, bonds)))
+        out.append(
+            (model, model.calibrate_from_bonds(cal, bonds, duration_weighted=False))
+        )
     return out
 
 

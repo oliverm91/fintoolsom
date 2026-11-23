@@ -1,3 +1,22 @@
+## v1.0.0b20
+
+### BREAKING CHANGE
+
+- **models**: `calibrate_from_bonds` fits the bonds' IRR errors by default: each residual is divided by the bond's dPV/dIRR at its quote (`duration_weighted=True`), so every bond weighs the same per bp of IRR instead of per point of PV, which weighed it by its duration. Fits and `error_bps` change; the one-hump model's short bonds gain the most (on a set of 10 coupon bonds the first bond's error is 17.8bp with the PV fit). `duration_weighted=False` is the previous fit, identical to the last digit. `calibrate_many_from_bonds` still fits PV differences, as `duration_weighted=False`.
+
+### Feat
+
+- **models**: `NelsonSiegel.calibrate_from_instruments(calibration_date, bonds_irr_list=(), deposits_irr_list=(), initial_guess=None, duration_weighted=True)` and the same on `NelsonSiegelSvensson` fit bonds `(CLBond, Rate)` and deposits `(Deposit, Rate)` in one stack of flows, as `calibrate_from_bonds` (which is now this with bonds only). A deposit is one flow of 100 at its payment date, so its `payment` is only scale and both kinds weigh on one base; its IRR is priced in its own `Rate`'s convention. It returns one `CalibrationError` per instrument, bonds first, then deposits, each in the order given; a deposit's `term` is its year fraction. Deposits anchor the short end that bonds leave free: with bonds of 2 years and more, the 30-182 day rates are fitted within 5bp instead of drifting.
+- **models**: `calibrate_from_bonds` and `calibrate_from_instruments` take `duration_weighted` (default `True`), documented in their docstrings: the residual is the PV difference divided by dPV/dIRR (a central 1 bp bump at the quote, fixed during the fit), the first-order IRR error; the Jacobian is scaled row by row, so it stays analytic.
+
+### Fix
+
+- **models**: `calibrate_from_bonds` raises a `ValueError` naming the bond when it has no flows after the calibration date (it matured before it), and when the list is empty, instead of dividing 0 by 0 in the errors.
+
+### Tests
+
+- **models**: `calibrate_from_curve`, `calibrate_many_from_curves` and `calibrate_from_bonds(duration_weighted=False)` are frozen against results captured before the change, and compared at the time: identical to the last digit, calibration times within noise (NS bonds 1.25 vs 1.20 ms, curve 1.47 vs 1.41 ms; NSS bonds 13.3 vs 13.7 ms, curve 1.36 vs 1.46 ms, 30 curves 10.9 vs 11.7 ms).
+
 ## v1.0.0b19
 
 ### Feat

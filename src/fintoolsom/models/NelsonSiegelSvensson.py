@@ -24,6 +24,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from ..fixedIncome.CLBonds import CLBond
+from ..fixedIncome.Deposits import Deposit
 from ..rates.PillarCurve import PillarCurve
 from ..rates.Rates import Rate
 
@@ -322,6 +323,78 @@ class CalibrationError(TypedDict):
     error_bps: float
 
 
+class _Instrument(NamedTuple):
+    """One calibration instrument as a stack of flows: its remaining flows at their
+    Act/365 year fractions, the quote it is fitted to, and how to price and invert
+    it (PV at a rate, IRR at a PV) in the quote's convention."""
+
+    ts: np.ndarray
+    flows: np.ndarray
+    maturity: date
+    irr: Rate
+    pv: Callable[[Rate], float]
+    irr_from_pv: Callable[[float], Rate]
+
+
+def _bond_instrument(calibration_date: date, bond: CLBond, irr: Rate) -> _Instrument:
+    end_dates = bond.coupons.get_remaining_end_dates(calibration_date)
+    if not end_dates:
+        raise ValueError(
+            f"Bond has no flows after the calibration date {calibration_date}: "
+            f"it matured on {bond.get_maturity_date()}."
+        )
+    return _Instrument(
+        ts=np.array([(ed - calibration_date).days / 365 for ed in end_dates]),
+        flows=bond.coupons.get_remaining_flows(calibration_date),
+        maturity=bond.get_maturity_date(),
+        irr=irr,
+        pv=lambda rate: bond.get_present_value(calibration_date, rate),
+        irr_from_pv=lambda pv: bond.get_irr_from_present_value(
+            calibration_date, pv, irr.rate_convention, initial_guess=irr.rate
+        ),
+    )
+
+
+def _deposit_instrument(
+    calibration_date: date, deposit: Deposit, irr: Rate
+) -> _Instrument:
+    """A deposit as one flow of 100 at its payment date (its `payment` is scale)."""
+    payment_date = deposit.payment_date
+    if payment_date <= calibration_date:
+        raise ValueError(
+            f"Deposit {deposit.nemo!r} pays on {payment_date}, on or before the "
+            f"calibration date {calibration_date}."
+        )
+    convention = irr.rate_convention
+
+    def pv(rate: Rate) -> float:
+        return 100 * float(rate.get_discount_factor(calibration_date, payment_date))
+
+    def irr_from_pv(value: float) -> Rate:
+        tf = convention.day_count_convention.get_time_fraction(
+            calibration_date, payment_date, convention.time_fraction_base
+        )
+        rate = convention.interest_convention.get_rate_from_df(value / 100, tf)
+        return Rate(convention, float(rate))
+
+    return _Instrument(
+        ts=np.array([(payment_date - calibration_date).days / 365]),
+        flows=np.array([100.0]),
+        maturity=payment_date,
+        irr=irr,
+        pv=pv,
+        irr_from_pv=irr_from_pv,
+    )
+
+
+def _pv_per_irr(instrument: _Instrument, bump: float = 1e-4) -> float:
+    """dPV/dIRR at the instrument's quote: a central difference of `bump` (1 bp)."""
+    convention, rate = instrument.irr.rate_convention, instrument.irr.rate
+    up = instrument.pv(Rate(convention, rate + bump))
+    down = instrument.pv(Rate(convention, rate - bump))
+    return (up - down) / (2 * bump)
+
+
 class _NelsonSiegelModel:
     """Rate, discount factors and calibration shared by the Nelson-Siegel family.
 
@@ -474,55 +547,103 @@ class _NelsonSiegelModel:
         calibration_date: date,
         bonds_irr_list: list[tuple[CLBond, Rate]],
         initial_guess: Optional[list[float]] = None,
+        duration_weighted: bool = True,
     ) -> list[CalibrationError]:
         """Fit every parameter to the bonds' present values at their IRRs.
 
-        Least squares on one residual per bond: the model's PV of its remaining
-        flows minus its PV at its IRR. The betas sit inside the discount factors'
-        exponential, so all parameters are fitted jointly, with the analytic
-        Jacobian dPV/dp = -Σ flow · t · df · dr(t)/dp.
+        :meth:`calibrate_from_instruments` with bonds only; see it for the fit and
+        what it returns (one :class:`CalibrationError` per bond, in the order
+        given). Raises ``ValueError`` if the list is empty, a bond has no flows
+        after `calibration_date`, or the solver does not converge.
+
+        `duration_weighted=True` (the default) fits the bonds' IRR errors: each
+        residual is the PV difference divided by the bond's dPV/dIRR, so every bond
+        weighs the same per bp of IRR. `duration_weighted=False` fits the PV
+        differences (per 100 of notional), which weighs a bond by its duration and
+        is what this method fitted before the weighting existed.
+        """
+        return self.calibrate_from_instruments(
+            calibration_date,
+            bonds_irr_list=bonds_irr_list,
+            initial_guess=initial_guess,
+            duration_weighted=duration_weighted,
+        )
+
+    def calibrate_from_instruments(
+        self,
+        calibration_date: date,
+        bonds_irr_list: Sequence[tuple[CLBond, Rate]] = (),
+        deposits_irr_list: Sequence[tuple[Deposit, Rate]] = (),
+        initial_guess: Optional[list[float]] = None,
+        duration_weighted: bool = True,
+    ) -> list[CalibrationError]:
+        """Fit every parameter to the present values of bonds and deposits at their
+        IRRs, all in one stack of flows.
+
+        Least squares on one residual per instrument: the model's PV of its
+        remaining flows minus its PV at its IRR. A bond's flows are its remaining
+        coupons (base 100 of notional); a deposit is one flow of 100 at its payment
+        date, so its `payment` does not matter and both kinds weigh on one scale. A
+        deposit's IRR is in whatever convention its `Rate` carries. The betas sit
+        inside the discount factors' exponential, so all parameters are fitted
+        jointly, with the analytic Jacobian dPV/dp = -Σ flow · t · df · dr(t)/dp.
+
+        `duration_weighted` (default ``True``) divides each residual by the
+        instrument's dPV/dIRR at its quote (a central 1 bp bump, fixed during the
+        fit), so the fit minimises the squared IRR errors, to first order, and a
+        30-day deposit weighs as much per bp as a 10-year bond. With ``False`` the
+        residuals are PV differences, which weighs an instrument by its duration:
+        long bonds dominate and the short end absorbs the error in bp, and a
+        deposit hardly counts.
 
         `initial_guess` is in :meth:`get_params` order (betas, then humps in years),
         clipped to the hump bounds. By default b0 is the average IRR, b1 the average
-        of the three shortest IRRs minus b0, and the other parameters start at the
-        model's defaults. Raises ``ValueError`` if the solver does not converge.
+        of the three shortest IRRs (by maturity, bonds and deposits together) minus
+        b0, and the other parameters start at the model's defaults. Raises
+        ``ValueError`` if there are no instruments, a bond has no flows after
+        `calibration_date` or a deposit pays on or before it, or the solver does
+        not converge.
 
-        Returns one :class:`CalibrationError` per bond, in the order given: `term`
-        is its duration on the fitted curve, Σ t · flow · df / PV (Macaulay with the
-        curve's dfs), and `error_bps` the IRR that prices the bond at its fitted PV
+        Returns one :class:`CalibrationError` per instrument, bonds first and then
+        deposits, each in the order given: `term` is its duration on the fitted
+        curve, Σ t · flow · df / PV (Macaulay with the curve's dfs; a deposit's
+        year fraction), and `error_bps` the IRR that prices it at its fitted PV
         minus its quoted IRR, in the quote's convention.
         """
-        mkt_pvs = np.array(
-            [
-                bond.get_present_value(calibration_date, irr)
-                for bond, irr in bonds_irr_list
-            ]
-        )
-        bond_t_flows_lst = [
-            (
-                np.array(
-                    [
-                        (ed - calibration_date).days / 365
-                        for ed in bond.coupons.get_remaining_end_dates(calibration_date)
-                    ]
-                ),
-                bond.coupons.get_remaining_flows(calibration_date),
-            )
-            for bond, _ in bonds_irr_list
+        instruments = [
+            _bond_instrument(calibration_date, bond, irr)
+            for bond, irr in bonds_irr_list
+        ] + [
+            _deposit_instrument(calibration_date, deposit, irr)
+            for deposit, irr in deposits_irr_list
         ]
-        bonds_ts, bonds_flows = zip(*bond_t_flows_lst)
-        flat_flows = np.concatenate(bonds_flows)
-        flat_ts = np.concatenate(bonds_ts)
-        n_bonds = len(bonds_ts)
-        bond_index = np.repeat(np.arange(n_bonds), [len(ts) for ts in bonds_ts])
-        # Sums each bond's flows: (bonds, flows), one matrix product per evaluation.
-        to_bonds = (bond_index == np.arange(n_bonds)[:, None]).astype(float)
+        if not instruments:
+            raise ValueError("Nothing to calibrate: no bonds and no deposits given.")
+        mkt_pvs = np.array([inst.pv(inst.irr) for inst in instruments])
+        flat_flows = np.concatenate([inst.flows for inst in instruments])
+        flat_ts = np.concatenate([inst.ts for inst in instruments])
+        n_instruments = len(instruments)
+        instrument_index = np.repeat(
+            np.arange(n_instruments), [len(inst.ts) for inst in instruments]
+        )
+        # Sums each instrument's flows: (instruments, flows), one matrix product per
+        # evaluation.
+        to_instruments = (instrument_index == np.arange(n_instruments)[:, None]).astype(
+            float
+        )
         n_betas = self._n_betas
+        # 1e4 / |dPV/dIRR|: a PV difference becomes bp of IRR, to first order.
+        weights = (
+            np.array([1e4 / abs(_pv_per_irr(inst)) for inst in instruments])
+            if duration_weighted
+            else None
+        )
 
         def residuals(params: np.ndarray) -> np.ndarray:
             design = self._calibration_design(flat_ts, params[n_betas:])
             flows_pvs = np.exp(-(design @ params[:n_betas]) * flat_ts) * flat_flows
-            return to_bonds @ flows_pvs - mkt_pvs
+            diff = to_instruments @ flows_pvs - mkt_pvs
+            return diff if weights is None else weights * diff
 
         def jacobian(params: np.ndarray) -> np.ndarray:
             betas = params[:n_betas]
@@ -531,14 +652,12 @@ class _NelsonSiegelModel:
             )
             dpv_dr = -np.exp(-(design @ betas) * flat_ts) * flat_flows * flat_ts
             dr_dparams = np.column_stack([design, *(d @ betas for d in derivatives)])
-            return to_bonds @ (dpv_dr[:, None] * dr_dparams)
+            jac = to_instruments @ (dpv_dr[:, None] * dr_dparams)
+            return jac if weights is None else weights[:, None] * jac
 
         if initial_guess is None:
-            by_maturity = sorted(
-                bonds_irr_list,
-                key=lambda bond_irr: bond_irr[0].get_maturity_date(),
-            )
-            irrs = [irr.rate for _, irr in by_maturity]
+            by_maturity = sorted(instruments, key=lambda inst: inst.maturity)
+            irrs = [inst.irr.rate for inst in by_maturity]
             b0 = sum(irrs) / len(irrs)
             short_term_irrs = irrs[:3]
             b1 = sum(short_term_irrs) / len(short_term_irrs) - b0
@@ -550,22 +669,15 @@ class _NelsonSiegelModel:
 
         design = self._calibration_design(flat_ts, params[n_betas:])
         flows_pvs = np.exp(-(design @ params[:n_betas]) * flat_ts) * flat_flows
-        model_pvs = to_bonds @ flows_pvs
-        durations = (to_bonds @ (flows_pvs * flat_ts)) / model_pvs
+        model_pvs = to_instruments @ flows_pvs
+        durations = (to_instruments @ (flows_pvs * flat_ts)) / model_pvs
         errors: list[CalibrationError] = []
-        for (bond, irr), model_pv, duration in zip(
-            bonds_irr_list, model_pvs, durations
-        ):
-            model_irr = bond.get_irr_from_present_value(
-                calibration_date,
-                float(model_pv),
-                irr.rate_convention,
-                initial_guess=irr.rate,
-            )
+        for inst, model_pv, duration in zip(instruments, model_pvs, durations):
+            model_irr = inst.irr_from_pv(float(model_pv))
             errors.append(
                 CalibrationError(
                     term=float(duration),
-                    error_bps=1e4 * (float(model_irr.rate) - irr.rate),
+                    error_bps=1e4 * (float(model_irr.rate) - inst.irr.rate),
                 )
             )
         return errors
@@ -1070,7 +1182,10 @@ class _NelsonSiegelModel:
             calibration_date, bonds = bond_sets[int(s)]
             single = cls()
             single.calibrate_from_bonds(
-                calibration_date, bonds, initial_guess=list(params[s])
+                calibration_date,
+                bonds,
+                initial_guess=list(params[s]),
+                duration_weighted=False,
             )
             params[s] = single.get_params()
         residual, flow_pvs = model._bond_pvs(stacked, np.arange(len(bond_sets)), params)
