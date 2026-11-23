@@ -334,6 +334,7 @@ class _Instrument(NamedTuple):
     irr: Rate
     pv: Callable[[Rate], float]
     irr_from_pv: Callable[[float], Rate]
+    flow_dfs: Callable[[Rate], np.ndarray]
 
 
 def _bond_instrument(calibration_date: date, bond: CLBond, irr: Rate) -> _Instrument:
@@ -348,6 +349,9 @@ def _bond_instrument(calibration_date: date, bond: CLBond, irr: Rate) -> _Instru
         flows=bond.coupons.get_remaining_flows(calibration_date),
         maturity=bond.get_maturity_date(),
         irr=irr,
+        flow_dfs=lambda rate: np.asarray(
+            rate.get_discount_factor(calibration_date, end_dates)
+        ),
         pv=lambda rate: bond.get_present_value(calibration_date, rate),
         irr_from_pv=lambda pv: bond.get_irr_from_present_value(
             calibration_date, pv, irr.rate_convention, initial_guess=irr.rate
@@ -382,9 +386,28 @@ def _deposit_instrument(
         flows=np.array([100.0]),
         maturity=payment_date,
         irr=irr,
+        flow_dfs=lambda rate: np.array(
+            [float(rate.get_discount_factor(calibration_date, payment_date))]
+        ),
         pv=pv,
         irr_from_pv=irr_from_pv,
     )
+
+
+def _pseudo_curve(instruments: Sequence[_Instrument]) -> tuple[np.ndarray, np.ndarray]:
+    """Each instrument as one point of a zero curve: its PV-weighted continuous zero
+    rate at its own IRR, sum(pv * -log df) / sum(pv * t), at its Macaulay duration at
+    that IRR, sum(pv * t) / sum(pv). Exact for a deposit and for a compounded or
+    continuous Act/365 quote, whose zero rate is flat; an approximation for a coupon
+    bond. Returns (durations, rates)."""
+    durations, rates = [], []
+    for inst in instruments:
+        dfs = inst.flow_dfs(inst.irr)
+        pvs = inst.flows * dfs
+        weight = float(np.sum(pvs * inst.ts))
+        durations.append(weight / float(np.sum(pvs)))
+        rates.append(float(np.sum(pvs * -np.log(dfs))) / weight)
+    return np.array(durations), np.array(rates)
 
 
 def _pv_per_irr(instrument: _Instrument, bump: float = 1e-4) -> float:
@@ -518,6 +541,17 @@ class _NelsonSiegelModel:
         hump at 0.45, where the objective is flat enough for the fit to stop short
         of the bound. The fit can still end on a bound. Raises ``ValueError`` if the
         solver does not converge."""
+        if x0.size == n_free:  # humps fixed outside: only free parameters, no bounds
+            result = least_squares(
+                residuals,
+                x0,
+                jac=jacobian,  # type: ignore[arg-type]
+                x_scale="jac",
+                ftol=_TOL,
+                xtol=_TOL,
+                gtol=_TOL,
+            )
+            return self._converged(result)
         low, high = self._hump_bounds()
         humps0 = np.clip(x0[n_free:], low * 1.01, high * 0.99)
         lower = np.concatenate((np.full(n_free, -np.inf), low))
@@ -535,6 +569,22 @@ class _NelsonSiegelModel:
             )
         return self._converged(result)
 
+    def _checked_humps(self, humps: Sequence[float]) -> np.ndarray:
+        """`humps` as an array, after checking there is one per hump of the model and
+        each is within its calibration bounds."""
+        values = np.asarray(humps, dtype=float)
+        low, high = self._hump_bounds()
+        if values.shape != low.shape:
+            raise ValueError(
+                f"{type(self).__name__} has {low.size} hump(s), got {values.size}."
+            )
+        if not np.all((values >= low) & (values <= high)):
+            raise ValueError(
+                f"humps {values.tolist()} must be within "
+                f"{[(float(a), float(b)) for a, b in zip(low, high)]}."
+            )
+        return values
+
     def _converged(self, result) -> np.ndarray:
         if not result.success:
             raise ValueError(
@@ -548,6 +598,8 @@ class _NelsonSiegelModel:
         bonds_irr_list: list[tuple[CLBond, Rate]],
         initial_guess: Optional[list[float]] = None,
         duration_weighted: bool = True,
+        humps: Optional[Sequence[float]] = None,
+        estimate_humps: bool = False,
     ) -> list[CalibrationError]:
         """Fit every parameter to the bonds' present values at their IRRs.
 
@@ -561,12 +613,17 @@ class _NelsonSiegelModel:
         weighs the same per bp of IRR. `duration_weighted=False` fits the PV
         differences (per 100 of notional), which weighs a bond by its duration and
         is what this method fitted before the weighting existed.
+
+        `humps` and `estimate_humps` choose how the humps are found, as in
+        :meth:`calibrate_from_instruments`.
         """
         return self.calibrate_from_instruments(
             calibration_date,
             bonds_irr_list=bonds_irr_list,
             initial_guess=initial_guess,
             duration_weighted=duration_weighted,
+            humps=humps,
+            estimate_humps=estimate_humps,
         )
 
     def calibrate_from_instruments(
@@ -576,6 +633,8 @@ class _NelsonSiegelModel:
         deposits_irr_list: Sequence[tuple[Deposit, Rate]] = (),
         initial_guess: Optional[list[float]] = None,
         duration_weighted: bool = True,
+        humps: Optional[Sequence[float]] = None,
+        estimate_humps: bool = False,
     ) -> list[CalibrationError]:
         """Fit every parameter to the present values of bonds and deposits at their
         IRRs, all in one stack of flows.
@@ -596,13 +655,33 @@ class _NelsonSiegelModel:
         long bonds dominate and the short end absorbs the error in bp, and a
         deposit hardly counts.
 
+        The humps are found in one of three ways:
+
+        - `humps` (one per hump of the model, in years, within its calibration
+          bounds) are used as given and only the betas are fitted.
+        - Otherwise, with `estimate_humps=True`, the humps are estimated from the
+          shape of the instruments' curve and then held fixed while the betas are
+          fitted to the PVs. Each instrument is a point of a zero curve (its
+          PV-weighted continuous zero rate at its IRR, at its duration at that
+          IRR; exact for a deposit, an approximation for a coupon bond) and the
+          humps are those of :meth:`calibrate_from_curve` on those points, whose
+          betas also start the fit. They are not the optimum of the joint problem,
+          and close to it only as far as the pseudo-curve is to the bonds' zero
+          rates. It needs at least as many instruments as parameters to be
+          meaningful, and raises ``ValueError`` if that fit does not converge.
+        - Otherwise (the default) the humps are fitted jointly with the betas.
+
+        `humps` wins over `estimate_humps` if both are given.
+
         `initial_guess` is in :meth:`get_params` order (betas, then humps in years),
-        clipped to the hump bounds. By default b0 is the average IRR, b1 the average
-        of the three shortest IRRs (by maturity, bonds and deposits together) minus
-        b0, and the other parameters start at the model's defaults. Raises
-        ``ValueError`` if there are no instruments, a bond has no flows after
-        `calibration_date` or a deposit pays on or before it, or the solver does
-        not converge.
+        clipped to the hump bounds; with the humps fixed only its betas are used.
+        By default b0 is the average IRR, b1 the average of the three shortest IRRs
+        (by maturity, bonds and deposits together) minus b0, and the other
+        parameters start at the model's defaults (with `estimate_humps`, at the
+        betas of the pseudo-curve fit). Raises ``ValueError`` if there are no
+        instruments, a bond has no flows after `calibration_date` or a deposit pays
+        on or before it, `humps` do not match the model, or the solver does not
+        converge.
 
         Returns one :class:`CalibrationError` per instrument, bonds first and then
         deposits, each in the order given: `term` is its duration on the fitted
@@ -655,16 +734,43 @@ class _NelsonSiegelModel:
             jac = to_instruments @ (dpv_dr[:, None] * dr_dparams)
             return jac if weights is None else weights[:, None] * jac
 
+        fixed_humps: Optional[np.ndarray] = None
+        pseudo_betas: Optional[np.ndarray] = None
+        if humps is not None:
+            fixed_humps = self._checked_humps(humps)
+        elif estimate_humps:
+            pseudo_t, pseudo_rates = _pseudo_curve(instruments)
+            pseudo_betas, fixed_humps = self._fit_points(
+                pseudo_t, pseudo_rates, None, None
+            )
+
         if initial_guess is None:
-            by_maturity = sorted(instruments, key=lambda inst: inst.maturity)
-            irrs = [inst.irr.rate for inst in by_maturity]
-            b0 = sum(irrs) / len(irrs)
-            short_term_irrs = irrs[:3]
-            b1 = sum(short_term_irrs) / len(short_term_irrs) - b0
-            initial_guess = [b0, b1, *self._default_params()[2:]]
+            if pseudo_betas is not None:
+                initial_guess = [*pseudo_betas, *fixed_humps]  # type: ignore[misc]
+            else:
+                by_maturity = sorted(instruments, key=lambda inst: inst.maturity)
+                irrs = [inst.irr.rate for inst in by_maturity]
+                b0 = sum(irrs) / len(irrs)
+                short_term_irrs = irrs[:3]
+                b1 = sum(short_term_irrs) / len(short_term_irrs) - b0
+                initial_guess = [b0, b1, *self._default_params()[2:]]
 
         x0 = np.asarray(initial_guess, dtype=float)
-        params = self._least_squares(residuals, jacobian, x0, n_betas)
+        if fixed_humps is None:
+            params = self._least_squares(residuals, jacobian, x0, n_betas)
+        else:
+            held = fixed_humps
+
+            def beta_residuals(betas: np.ndarray) -> np.ndarray:
+                return residuals(np.concatenate((betas, held)))
+
+            def beta_jacobian(betas: np.ndarray) -> np.ndarray:
+                return jacobian(np.concatenate((betas, held)))[:, :n_betas]
+
+            betas = self._least_squares(
+                beta_residuals, beta_jacobian, x0[:n_betas], n_betas
+            )
+            params = np.concatenate((betas, held))
         self._set_params(params)
 
         design = self._calibration_design(flat_ts, params[n_betas:])
@@ -686,6 +792,7 @@ class _NelsonSiegelModel:
         self,
         curve: PillarCurve,
         initial_guess: Optional[list[float]] = None,
+        humps: Optional[Sequence[float]] = None,
     ) -> list[CalibrationError]:
         """Fit the model to the curve's continuously compounded Act/365 zero rates at
         its knots after the curve date.
@@ -702,11 +809,33 @@ class _NelsonSiegelModel:
         points, solved in one batched linear solve), which keeps two-hump fits out
         of local minima. Raises ``ValueError`` if the solver does not converge.
 
+        `humps`, one per hump of the model in years and within its calibration
+        bounds, fixes them: only the betas are fitted, in one linear solve with no
+        solver, and `initial_guess` is not used. Raises ``ValueError`` if they do not
+        match the model.
+
         Returns one :class:`CalibrationError` per knot after the curve date: `term`
         is its Act/365 year fraction, and `error_bps` the fitted zero rate minus the
         curve's, both continuously compounded Act/365.
         """
         t, target_rates = _curve_points(curve)
+        betas, fitted_humps = self._fit_points(t, target_rates, initial_guess, humps)
+        self._set_params([*betas, *fitted_humps])
+        fitted_rates = self._calibration_design(t, fitted_humps) @ betas
+        return [
+            CalibrationError(term=float(term), error_bps=1e4 * float(fitted - target))
+            for term, fitted, target in zip(t, fitted_rates, target_rates)
+        ]
+
+    def _fit_points(
+        self,
+        t: np.ndarray,
+        target_rates: np.ndarray,
+        initial_guess: Optional[list[float]],
+        humps: Optional[Sequence[float]],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Betas and humps fitted to continuous Act/365 zero rates at year fractions
+        `t`, as :meth:`calibrate_from_curve` does; given `humps` only the betas."""
 
         def gram_inverse(design: np.ndarray) -> np.ndarray:
             # Equal humps make NSS singular: then the pseudo-inverse.
@@ -715,6 +844,11 @@ class _NelsonSiegelModel:
                 return np.linalg.inv(gram)
             except np.linalg.LinAlgError:
                 return np.linalg.pinv(gram)
+
+        if humps is not None:
+            fixed = self._checked_humps(humps)
+            design = self._calibration_design(t, fixed)
+            return gram_inverse(design) @ (design.T @ target_rates), fixed
 
         def residuals(humps: np.ndarray) -> np.ndarray:
             design = self._calibration_design(t, humps)
@@ -744,15 +878,9 @@ class _NelsonSiegelModel:
             x0 = self._grid_start(t, target_rates, *self._hump_bounds())
         else:
             x0 = np.asarray(initial_guess, dtype=float)
-        humps = self._least_squares(residuals, jacobian, x0, 0)
-        design = self._calibration_design(t, humps)
-        betas = gram_inverse(design) @ (design.T @ target_rates)
-        self._set_params([*betas, *humps])
-        fitted_rates = design @ betas
-        return [
-            CalibrationError(term=float(term), error_bps=1e4 * float(fitted - target))
-            for term, fitted, target in zip(t, fitted_rates, target_rates)
-        ]
+        fitted_humps = self._least_squares(residuals, jacobian, x0, 0)
+        design = self._calibration_design(t, fitted_humps)
+        return gram_inverse(design) @ (design.T @ target_rates), fitted_humps
 
     def _grid_start(
         self,

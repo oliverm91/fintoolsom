@@ -25,9 +25,9 @@ are the years to each hump: `C` peaks at `HUMP_PEAK` ≈ 1.7933, so `C(x)` peaks
 | `NelsonSiegel(b0, b1, b2, lambda_)` | One hump, calibrated in 0.25-20 years |
 | `NelsonSiegelSvensson(b0, b1, b2, b3, lambda_, mu_)` | Two humps, calibrated in 0.25-3 and 2-20 years |
 | `.get_rate(t)`, `.get_df(t)`, `.get_params()` | Both models; `get_params()` is the betas, then the humps |
-| `.calibrate_from_bonds(date, [(CLBond, Rate), ...], duration_weighted=True)` | Fits every parameter to the bonds' PVs at their IRRs; returns one `CalibrationError` per bond |
-| `.calibrate_from_instruments(date, bonds_irr_list=[(CLBond, Rate), ...], deposits_irr_list=[(Deposit, Rate), ...], duration_weighted=True)` | The same with bonds and deposits in one stack of flows (a deposit is one flow of 100 at its payment date); returns one `CalibrationError` per instrument, bonds first |
-| `.calibrate_from_curve(curve)` | Fits a `PillarCurve`'s zero rates at its knots (humps by the solver, betas solved exactly for each); returns one `CalibrationError` per knot |
+| `.calibrate_from_bonds(date, [(CLBond, Rate), ...], duration_weighted=True, humps=None, estimate_humps=False)` | Fits every parameter to the bonds' PVs at their IRRs; returns one `CalibrationError` per bond |
+| `.calibrate_from_instruments(date, bonds_irr_list=[(CLBond, Rate), ...], deposits_irr_list=[(Deposit, Rate), ...], duration_weighted=True, humps=None, estimate_humps=False)` | The same with bonds and deposits in one stack of flows (a deposit is one flow of 100 at its payment date); returns one `CalibrationError` per instrument, bonds first |
+| `.calibrate_from_curve(curve, humps=None)` | Fits a `PillarCurve`'s zero rates at its knots (humps by the solver, betas solved exactly for each); returns one `CalibrationError` per knot |
 | `Model.calibrate_many_from_curves(curves, global_humps=False)` | Fits many curves at once in batched numpy; returns `(models, errors)`, one model and one error list per curve |
 | `Model.calibrate_many_from_bonds([(date, [(CLBond, Rate), ...]), ...])` | Fits many bond sets at once in batched numpy; returns `(models, errors)`, one model and one error list per set |
 | `CalibrationError` | `TypedDict` `{"term": float, "error_bps": float}`: the fit at one point |
@@ -173,6 +173,14 @@ models, errors = NelsonSiegelSvensson.calibrate_many_from_bonds(
     bond; `False` fits PV differences, which weighs an instrument by its
     duration (long bonds dominate, the short end takes the error in bp).
     `calibrate_many_from_bonds` fits PV differences, as `duration_weighted=False`.
+  - Humps in `calibrate_from_bonds` and `calibrate_from_instruments`: `humps=[...]`
+    (years, within the calibration bounds) are kept and only the betas are fitted;
+    otherwise `estimate_humps=True` estimates them from the shape of the
+    instruments' pseudo-curve (each one's zero rate at its duration, fitted as
+    `calibrate_from_curve` does), holds them and fits the betas to the PVs; by
+    default humps and betas are fitted jointly. The estimated humps are close to,
+    not at, the joint optimum. `calibrate_from_curve(curve, humps=...)` fits the
+    betas in one linear solve.
   - `calibrate_from_curve`: variable projection. Each evaluation solves the betas
     exactly for the humps it is given, so the solver only moves the humps and the
     betas always belong to them (Golub-Pereyra Jacobian). It starts from the best

@@ -303,3 +303,131 @@ def test_no_instruments_raises():
         NelsonSiegel().calibrate_from_instruments(TODAY)
     with pytest.raises(ValueError, match="Nothing to calibrate"):
         NelsonSiegel().calibrate_from_bonds(TODAY, [])
+
+
+# ── humps: given, estimated from the curve shape, or fitted with the betas ──
+
+
+def _true_humps(cls):
+    return TRUE_PARAMS[4 : 4 + len(cls()._HUMP_BOUNDS)]
+
+
+def test_given_humps_are_kept_and_only_the_betas_are_fitted():
+    cal = TODAY
+    model = NelsonSiegelSvensson()
+    errors = model.calibrate_from_instruments(
+        cal,
+        bonds_irr_list=_exact_bonds(cal),
+        deposits_irr_list=_deposits(cal),
+        humps=[1.2, 9.0],
+    )
+    assert model.get_params()[4:] == [1.2, 9.0]
+    assert model.get_params() == pytest.approx(TRUE_PARAMS, rel=1e-6)
+    assert max(abs(e["error_bps"]) for e in errors) < 0.05
+
+
+def test_given_humps_fit_bonds_alone_too_and_a_wrong_hump_fits_worse():
+    cal, bonds = _bond_sets(6)[0]
+    rms = {}
+    for hump in (1.5, 0.3):
+        model = NelsonSiegel()
+        errors = model.calibrate_from_bonds(cal, bonds, humps=[hump])
+        assert model.get_params()[-1] == hump
+        rms[hump] = float(np.sqrt(np.mean([e["error_bps"] ** 2 for e in errors])))
+    free = NelsonSiegel().calibrate_from_bonds(cal, bonds)
+    free_rms = float(np.sqrt(np.mean([e["error_bps"] ** 2 for e in free])))
+    assert free_rms <= min(rms.values()) + 1e-9
+
+
+@pytest.mark.parametrize("cls", [NelsonSiegel, NelsonSiegelSvensson])
+def test_estimated_humps_are_close_to_the_joint_fit(cls):
+    cal = TODAY
+    bonds, deposits = _exact_bonds(cal), _deposits(cal)
+    joint, estimated = cls(), cls()
+    joint.calibrate_from_instruments(cal, bonds, deposits)
+    errors = estimated.calibrate_from_instruments(
+        cal, bonds, deposits, estimate_humps=True
+    )
+    ts = np.array([0.1, 0.5, 1, 3, 7, 12, 20])
+    assert estimated.get_rate(ts) == pytest.approx(joint.get_rate(ts), abs=1e-3)
+    # Held humps: within the bounds, and the betas fitted to the PVs, not the curve.
+    low, high = estimated._hump_bounds()
+    humps = np.array(estimated.get_params()[-low.size :])
+    assert np.all((humps >= low) & (humps <= high))
+    assert max(abs(e["error_bps"]) for e in errors) < 5
+
+
+def test_estimated_humps_do_not_depend_on_the_betas_start():
+    # The humps come from the pseudo-curve, so an initial_guess only moves the betas.
+    cal = TODAY
+    bonds, deposits = _exact_bonds(cal), _deposits(cal)
+    a, b = NelsonSiegelSvensson(), NelsonSiegelSvensson()
+    a.calibrate_from_instruments(cal, bonds, deposits, estimate_humps=True)
+    b.calibrate_from_instruments(
+        cal,
+        bonds,
+        deposits,
+        estimate_humps=True,
+        initial_guess=[0.04, 0.0, 0.0, 0.0, 9, 9],
+    )
+    assert a.get_params()[4:] == b.get_params()[4:]
+    assert a.get_params() == pytest.approx(b.get_params(), rel=1e-5)
+
+
+def test_given_humps_win_over_estimate_humps():
+    cal = TODAY
+    bonds, deposits = _exact_bonds(cal), _deposits(cal)
+    model = NelsonSiegelSvensson()
+    model.calibrate_from_instruments(
+        cal, bonds, deposits, humps=[1.0, 5.0], estimate_humps=True
+    )
+    assert model.get_params()[4:] == [1.0, 5.0]
+
+
+def test_the_default_still_fits_humps_with_the_betas():
+    cal, bonds = _bond_sets(6)[0]
+    default, explicit = NelsonSiegel(), NelsonSiegel()
+    default.calibrate_from_bonds(cal, bonds)
+    explicit.calibrate_from_bonds(cal, bonds, humps=None, estimate_humps=False)
+    assert default.get_params() == explicit.get_params()
+
+
+@pytest.mark.parametrize("cls", [NelsonSiegel, NelsonSiegelSvensson])
+def test_curve_fit_with_given_humps_is_the_free_fit_at_its_humps(cls):
+    curve = _curves(3)[0]
+    free, fixed = cls(), cls()
+    free.calibrate_from_curve(curve)
+    humps = free.get_params()[-len(cls()._HUMP_BOUNDS) :]
+    errors = fixed.calibrate_from_curve(curve, humps=humps)
+    assert fixed.get_params() == pytest.approx(free.get_params(), rel=1e-8)
+    assert fixed.get_params()[-len(humps) :] == humps
+    assert len(errors) == len([d for d in curve.knot_dates if d > curve.curve_date])
+
+
+def test_curve_fit_with_given_humps_is_never_better_than_the_free_fit():
+    curve = _curves(3)[0]
+
+    def rms(errors) -> float:
+        return float(np.sqrt(np.mean([e["error_bps"] ** 2 for e in errors])))
+
+    free = NelsonSiegelSvensson().calibrate_from_curve(curve)
+    given = NelsonSiegelSvensson().calibrate_from_curve(curve, humps=[0.5, 12.0])
+    assert rms(free) <= rms(given)
+
+
+@pytest.mark.parametrize(
+    "cls, humps",
+    [
+        (NelsonSiegel, [1.0, 2.0]),
+        (NelsonSiegelSvensson, [1.0]),
+        (NelsonSiegel, [0.1]),
+        (NelsonSiegel, [25.0]),
+        (NelsonSiegelSvensson, [4.0, 5.0]),  # the first hump is calibrated in 0.25-3
+    ],
+)
+def test_humps_that_do_not_match_the_model_raise(cls, humps):
+    cal, bonds = _bond_sets(6)[0]
+    with pytest.raises(ValueError, match="hump"):
+        cls().calibrate_from_bonds(cal, bonds, humps=humps)
+    with pytest.raises(ValueError, match="hump"):
+        cls().calibrate_from_curve(_curves(3)[0], humps=humps)
