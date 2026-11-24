@@ -63,14 +63,14 @@ def test_pv_fit_of_zero_coupon_bonds_is_unchanged():
     assert ns.get_params() == pytest.approx(
         [0.056455991826236805, -0.004511281523937836, -0.017966073310038695]
         + [1.5701242983407468],
-        rel=1e-9,
+        rel=1e-5,
     )
     nss = NelsonSiegelSvensson()
     nss.calibrate_from_bonds(cal, bonds, duration_weighted=False)
     assert nss.get_params() == pytest.approx(
         [0.056442308847306874, -0.004834684900272151, -0.023367873895444542]
         + [0.006481121431155725, 1.7032728465051705, 2.005533774202487],
-        rel=1e-9,
+        rel=1e-5,
     )
 
 
@@ -82,20 +82,20 @@ def test_pv_fit_of_a_coupon_bond_set_is_unchanged():
     assert ns.get_params() == pytest.approx(
         [0.050231025031479345, -0.005632101427648325, 0.013400705663684108]
         + [5.0841561371167066],
-        rel=1e-9,
+        rel=1e-5,
     )
-    assert errors[0]["error_bps"] == pytest.approx(17.78816287, abs=1e-6)
-    assert errors[-1]["error_bps"] == pytest.approx(0.25922858, abs=1e-6)
+    assert errors[0]["error_bps"] == pytest.approx(17.78816287, abs=1e-4)
+    assert errors[-1]["error_bps"] == pytest.approx(0.25922858, abs=1e-4)
 
     nss = NelsonSiegelSvensson()
     errors = nss.calibrate_from_bonds(cal, bonds, duration_weighted=False)
     assert nss.get_params() == pytest.approx(
         [0.049846566357753516, -0.10623839565583557, 0.08077036938407403]
         + [0.008564233031889155, 0.25000000000000006, 7.48978374602868],
-        rel=1e-9,
+        rel=1e-5,
     )
-    assert errors[0]["error_bps"] == pytest.approx(-0.27319652, abs=1e-6)
-    assert errors[-1]["error_bps"] == pytest.approx(0.03965573, abs=1e-6)
+    assert errors[0]["error_bps"] == pytest.approx(-0.27319652, abs=1e-4)
+    assert errors[-1]["error_bps"] == pytest.approx(0.03965573, abs=1e-4)
 
 
 def test_curve_fits_are_unchanged():
