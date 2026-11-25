@@ -147,3 +147,29 @@ The build is split in private modules, driven by `builder._CurveBuilder`.
   Rebuilding from bumped quotes is the alternative for a quote-level risk view.
 - **Not built.** No synthetic numeraire curves (such as `CLP_SOFR`) and no
   discounting on term indexes.
+
+## Building from bonds and deposits (`build_curve_from_instruments`)
+
+Bootstraps a standalone `PillarCurve` from `(CLBond | Deposit, Rate)` pairs, with one
+pillar per instrument maturity (at least 2 instruments, distinct maturities, in any
+order):
+
+```python
+from fintoolsom.curve_builder import build_curve_from_instruments
+from fintoolsom.rates import InterpolationMethod
+
+curve = build_curve_from_instruments(
+    curve_date,
+    [(deposit_30d, rate_30d), (bond_2y, irr_2y), (bond_5y, irr_5y)],
+    interp_method=InterpolationMethod.PiecewiseConstant,  # default
+)
+```
+
+A `Deposit` is valued as a single flow of 100 at its payment date in its `Rate`
+convention; a `CLBond` is valued at its base-100 PV. `PiecewiseConstant` is
+bootstrapped sequentially (closed form per single-flow segment, Newton-Raphson per
+multi-flow bond segment); non-piecewise-constant methods warm-start from the
+piecewise-constant forwards and solve jointly with `scipy.optimize.root` (`hybr`).
+Raises `InsufficientQuotesError` for fewer than 2 instruments, `ValueError` for
+matured instruments or duplicate maturities, and `RepricingError` if any base-100 PV
+residual exceeds `reprice_tol` (`1e-6` by default).

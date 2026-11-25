@@ -360,20 +360,64 @@ class CLBond:
             z_spread (int): the z-spread in basis points.
         """
         irr_value = self.get_present_value(date, irr)
+        remaining_end_dates = self.coupons.get_remaining_end_dates(date)
+        remaining_flows = self.coupons.get_remaining_flows(date)
+        base_dfs = zc_curve.get_dfs(remaining_end_dates)
+        base_pvs = base_dfs * remaining_flows
         if initial_guess is None:
-            current_zc_value = self.get_present_value_zc(date, zc_curve)
+            current_zc_value = float(base_pvs.sum())
             dv01 = self.get_dv01(date, irr)
             initial_guess = (
                 (self.notional / 100) * (irr_value - current_zc_value) / dv01
             )
 
-        # Every Newton step reads a bumped copy at a few dates: skip its daily grid.
-        if isinstance(zc_curve, PillarCurve) and zc_curve.precalculate:
+        # Fast exact path: parallel_bump_bps multiplies dfs by exp(-bp * 1e-4 * tau)
+        # for all curves except HermiteCubicSpline (interpolates in df) or flows
+        # strictly inside a non-continuous spot_rate stub.
+        use_fast_path = not (
+            isinstance(zc_curve, PillarCurve)
+            and (
+                zc_curve.interpolation_method
+                is rates.InterpolationMethod.HermiteCubicSpline
+                or (
+                    zc_curve.spot_rate is not None
+                    and any(d < zc_curve.knot_dates[0] for d in remaining_end_dates)
+                )
+            )
+        )
+        if use_fast_path:
+            taus = (
+                np.array(
+                    [(d - zc_curve.curve_date).days for d in remaining_end_dates],
+                    dtype=float,
+                )
+                / 365.0
+            )
+            scale = 1e-4
+
+            def bp_val(bp_bump: float) -> float:
+                return (
+                    float((base_pvs * np.exp(-bp_bump * scale * taus)).sum())
+                    - irr_value
+                )
+
+            def bp_deriv(bp_bump: float) -> float:
+                return float(
+                    -(scale * taus * base_pvs * np.exp(-bp_bump * scale * taus)).sum()
+                )
+
+            return newton(bp_val, initial_guess, fprime=bp_deriv, maxiter=maxiter)
+
+        # Fallback: evaluate bumped copies directly without precalculating daily grids.
+        if zc_curve.precalculate:
             zc_curve = replace(zc_curve, precalculate=False)
 
         def bp_bump_curve_value(bp_bump: float) -> float:
             bumped = zc_curve.parallel_bump_bps(float(bp_bump))
-            return self.get_present_value_zc(date, bumped) - irr_value
+            return (
+                float((bumped.get_dfs(remaining_end_dates) * remaining_flows).sum())
+                - irr_value
+            )
 
         result = newton(bp_bump_curve_value, initial_guess, maxiter=maxiter)
         return result

@@ -1,13 +1,26 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
-from dateutil.relativedelta import relativedelta
+from datetime import date, timedelta
 
 from .calendars import get_calendar
 from .adjustments import AdjustmentDateConventionBase, ModifiedFollowingConvention
 
 _def_cal = get_calendar()
 _def_adj_conv = ModifiedFollowingConvention(_def_cal)
+_MONTH_DAYS = (0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def _add_months(t: date, months: int) -> date:
+    """Add `months` calendar months to `t`, clamping the day to the target month's end."""
+    total = t.year * 12 + (t.month - 1) + months
+    year, month0 = divmod(total, 12)
+    month = month0 + 1
+    max_day = (
+        29
+        if month == 2 and (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0))
+        else _MONTH_DAYS[month]
+    )
+    return date(year, month, t.day if t.day <= max_day else max_day)
 
 
 @dataclass(slots=True)
@@ -52,13 +65,18 @@ class Tenor:
                 f"Last letter of str_tenor must be of D, W, M or Y. Got {self.tenor_unit}"
             )
 
-        if self.tenor_unit != "d":
+        if self.tenor_unit in ("m", "y"):
             step = self._rel_mapper["multiplier"] * self.tenor_value
-            forward_step = relativedelta(**{self._rel_mapper["kwarg"]: step})
-            backward_step = relativedelta(**{self._rel_mapper["kwarg"]: -step})
 
             def f(t: date, forward: bool = True, periods: int = 1) -> date:
-                return t + (forward_step if forward else backward_step) * periods
+                return _add_months(t, step * periods if forward else -step * periods)
+        elif self.tenor_unit == "w":
+            step = 7 * self.tenor_value
+
+            def f(t: date, forward: bool = True, periods: int = 1) -> date:
+                return t + timedelta(
+                    days=step * periods if forward else -step * periods
+                )
 
         self._get_umaturity_func = f  # TEST THAT F LIVES AFTER INIT
 

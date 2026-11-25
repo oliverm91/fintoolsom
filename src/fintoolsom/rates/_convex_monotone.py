@@ -74,25 +74,88 @@ def convex_monotone_forward(knots: np.ndarray, averages: np.ndarray) -> PPoly:
     """
     at_knots = _forwards_at_knots(np.diff(knots), averages)
     n_segments = len(averages)
-    breaks = np.empty(2 * n_segments + 1)
-    coefficients = np.empty((3, 2 * n_segments))
-    breaks[-1] = knots[-1]
-    segments = zip(
-        knots[:-1].tolist(),
-        knots[1:].tolist(),
-        at_knots[:-1].tolist(),
-        at_knots[1:].tolist(),
-        averages.tolist(),
-    )
-    for i, (start, end, f0, f1, average) in enumerate(segments):
+    knots_l = knots.tolist()
+    at_l = at_knots.tolist()
+    avg_l = averages.tolist()
+
+    breaks = [0.0] * (2 * n_segments + 1)
+    c0 = [0.0] * (2 * n_segments)
+    c1 = [0.0] * (2 * n_segments)
+    c2 = [0.0] * (2 * n_segments)
+    breaks[-1] = knots_l[-1]
+
+    q = QUADRATICITY
+    one_minus_q = 1.0 - q
+
+    for i in range(n_segments):
+        start = knots_l[i]
+        end = knots_l[i + 1]
+        average = avg_l[i]
+        g0 = at_l[i] - average
+        g1 = at_l[i + 1] - average
         width = end - start
-        eta, left, right = _segment_polynomials(f0 - average, f1 - average)
-        breaks[2 * i : 2 * i + 2] = start, start + eta * width
-        coefficients[:, 2 * i] = _around(left + [0.0, 0.0, average], 0.0, width)
-        coefficients[:, 2 * i + 1] = _around(right + [0.0, 0.0, average], eta, width)
+
+        qa = 3.0 * (g0 + g1)
+        qb = -(4.0 * g0 + 2.0 * g1)
+        qc = g0
+
+        if (abs(g0) < _FLAT_TOLERANCE and abs(g1) < _FLAT_TOLERANCE) or (
+            (g0 > 0.0 and -2.0 * g0 <= g1 <= -0.5 * g0)
+            or (g0 < 0.0 and -0.5 * g0 <= g1 <= -2.0 * g0)
+        ):
+            eta = 0.5
+            la, lb, lc = qa, qb, qc + average
+            ra, rb, rc = qa, qb, qc + average
+        else:
+            eta, vertex = _shape(g0, g1)
+            if g0 != vertex:
+                kl = (g0 - vertex) / (eta * eta)
+                pla, plb, plc = kl, -2.0 * kl * eta, kl * eta * eta + vertex
+            else:
+                pla, plb, plc = 0.0, 0.0, vertex
+            reach_r = 1.0 - eta
+            if g1 != vertex:
+                kr = (g1 - vertex) / (reach_r * reach_r)
+                pra, prb, prc = kr, -2.0 * kr * eta, kr * eta * eta + vertex
+            else:
+                pra, prb, prc = 0.0, 0.0, vertex
+            la = q * qa + one_minus_q * pla
+            lb = q * qb + one_minus_q * plb
+            lc = q * qc + one_minus_q * plc + average
+            ra = q * qa + one_minus_q * pra
+            rb = q * qb + one_minus_q * prb
+            rc = q * qc + one_minus_q * prc + average
+
+        j = 2 * i
+        breaks[j] = start
+        breaks[j + 1] = start + eta * width
+
+        inv_w = 1.0 / width
+        inv_w2 = inv_w * inv_w
+        c0[j] = la * inv_w2
+        c1[j] = lb * inv_w
+        c2[j] = lc
+
+        c0[j + 1] = ra * inv_w2
+        c1[j + 1] = (2.0 * ra * eta + rb) * inv_w
+        c2[j + 1] = (ra * eta + rb) * eta + rc
+
     # A shape's inner break can round onto the end of its segment.
-    keep = np.diff(breaks) > 0
-    return PPoly(coefficients[:, keep], np.append(breaks[:-1][keep], breaks[-1]))
+    keep_b: list[float] = []
+    keep_c0: list[float] = []
+    keep_c1: list[float] = []
+    keep_c2: list[float] = []
+    for k in range(2 * n_segments):
+        if breaks[k + 1] > breaks[k]:
+            keep_b.append(breaks[k])
+            keep_c0.append(c0[k])
+            keep_c1.append(c1[k])
+            keep_c2.append(c2[k])
+    keep_b.append(breaks[-1])
+
+    coeffs = np.array([keep_c0, keep_c1, keep_c2], dtype=float)
+    x = np.array(keep_b, dtype=float)
+    return PPoly.construct_fast(coeffs, x)
 
 
 def _forwards_at_knots(widths: np.ndarray, averages: np.ndarray) -> np.ndarray:

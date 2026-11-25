@@ -1,3 +1,22 @@
+## v1.0.0b21
+
+### Feat
+
+- **curve_builder**: `build_curve_from_instruments(curve_date, instruments, *, interp_method=InterpolationMethod.PiecewiseConstant, reprice_tol=1e-6)` bootstraps a `PillarCurve` from `Sequence[tuple[CLBond | Deposit, Rate]]` (in any order, at least 2 instruments with distinct maturities after `curve_date`). Each instrument pins one pillar at its maturity: deposits as a single flow of 100 in their `Rate`'s convention, bonds at their base-100 PV. `PiecewiseConstant` is solved sequentially (closed form for single-flow segments, Newton-Raphson for coupon bonds) and seeds a joint `hybr` solve for all other `PillarCurve` interpolation methods (`PiecewiseLinear`, `CubicSpline`, `HermiteCubicSpline`, `ConvexMonotone`), returning a curve with precalculated daily discount factors.
+
+### Fix
+
+- **models**: `NelsonSiegel` / `NelsonSiegelSvensson` `_fit_points` solves via thin SVD with rank truncation instead of `inv(X'X)`, preventing precision loss when two NSS humps are close together (from >240 bp error down to `< 1e-6` bp on a flat 5% curve with `humps=[2.5, 2.50000001]`). `calibrate_many_from_curves` and `calibrate_many_from_bonds` guard zero-curvature and singular systems (with `lstsq` fallback), fixing `LinAlgError: Singular matrix` on flat 0% curves/bonds or `b3 = 0` warm starts.
+- **fixedIncome**: `CLBond.get_irr_from_amount` now exits the linear refinement loop immediately on an exact match (`newton_result_i == amount`), rounds each step to 6 decimals, and falls back to the smooth `get_irr_from_present_value` solve when secant `newton` stalls on rounded amount plateaus.
+- **fixedIncome**: `get_irr` scales its stopping tolerance by cash-flow/PV magnitude (`max(target_error, 1e-13 * scale)`) so large notionals (>= 1e6) no longer fail below float64 ULP, damps Newton steps to keep `1 + irr > 0` (avoiding spurious roots `< -1.0`), validates `initial_guess > -1.0` and matching lengths (`zip(..., strict=True)`), and avoids `UnboundLocalError` for `max_iterations = 0`.
+- **market**: `Currency(CurrencyName.CLF)` now resolves its default settlement currency (`Currency.CLP`) in `Currency.__init__`, keeping `is_deliverable == False` consistently with `Currency.CLF`. `IRSQuote.get_instrument` and `IRBasisQuote.get_instrument` pass `.settlement_currency` as `payment_currency`, allowing single-currency UF (`Currency.CLF`) swaps to build without raising `ValueError`.
+
+### Perf
+
+- **dates**: `Tenor` (`schedules.py`) and `Term.advance` (`term.py`) replace `dateutil.relativedelta` with integer calendar arithmetic (`_add_months` and `timedelta`), making schedule generation 5.0× faster (22.5 → 4.5 ms for 200 10Y semiannual schedules) and cutting `build_curves(PiecewiseConstant)` on the notebooks quote set by 18.6% (39.2 → 31.9 ms), `CubicSpline` by 13.0% (72.2 → 62.8 ms), and `HermiteCubicSpline` by 8.5% (99.7 → 91.2 ms) with bit-identical curves.
+- **rates**: `convex_monotone_forward` (`_convex_monotone.py`) replaces per-segment 3-element NumPy arrays with scalar Python float arithmetic and `PPoly.construct_fast`, speeding it up 5.3× (120.8 → 22.9 ms for 500 29-segment fits) and cutting `build_curves(ConvexMonotone)` on the notebooks quote set by 51.2% (124.7 → 60.9 ms, 2.05× faster; forward differences `<= 1.1e-11` bp).
+- **fixedIncome**: `CLBond.get_z_spread` precomputes base discount factors and year fractions once and runs Newton with an analytic derivative instead of rebuilding a bumped curve copy per iteration (keeping the copy fallback for `HermiteCubicSpline` and flows inside a `spot_rate` stub), speeding it up 2.7× on `PiecewiseConstant` (42.8 → 16.0 ms for 200 calls) and 19.1× on `ConvexMonotone` (308.6 → 16.1 ms) with `< 5e-13` bp difference.
+
 ## v1.0.0b20
 
 ### BREAKING CHANGE

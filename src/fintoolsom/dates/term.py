@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from enum import Enum
 
-from dateutil.relativedelta import relativedelta
-
 from .adjustments import AdjustmentDateConventionBase
+from .schedules import _add_months
 
 
 class TermUnit(Enum):
@@ -32,11 +31,11 @@ class Term:
     def advance(self, from_date: date) -> date:
         """Return from_date + this tenor, adjusted by adj_convention."""
         if self.unit == TermUnit.W:
-            raw = from_date + relativedelta(weeks=self.value)
+            raw = from_date + timedelta(days=7 * self.value)
         elif self.unit == TermUnit.M:
-            raw = from_date + relativedelta(months=self.value)
+            raw = _add_months(from_date, self.value)
         elif self.unit == TermUnit.Y:
-            raw = from_date + relativedelta(years=self.value)
+            raw = _add_months(from_date, 12 * self.value)
         else:  # D
             raw = self.adj_convention.calendar.add_business_days(from_date, self.value)
         return self.adj_convention.adjust(raw)
