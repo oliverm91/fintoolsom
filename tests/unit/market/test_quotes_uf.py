@@ -97,3 +97,60 @@ def test_non_ndf_forward_quote_with_clf_is_rejected(pair):
         ForwardPriceQuote(
             pair, 38_150.25, True, quote_date=T, payment_date=date(2025, 1, 10)
         )
+
+
+def test_uf_irs_and_basis_quotes_build_swaps_settling_in_clp():
+    from fintoolsom.dates import ModifiedFollowingConvention, Term, TermUnit
+    from fintoolsom.market import (
+        FixedLegSpec,
+        FloatingLegSpec,
+        IRBasisQuote,
+        IRSQuote,
+        OvernightInterestPriceIndex,
+        PaymentFrequency,
+        QuotedSide,
+    )
+    from fintoolsom.rates import Rate, RateConvention
+
+    cl = ModifiedFollowingConvention("CL")
+    uf_idx_a = OvernightInterestPriceIndex("ICP_UF_A", currency=CLF)
+    uf_idx_b = OvernightInterestPriceIndex("ICP_UF_B", currency=CLF)
+
+    for side in (QuotedSide.RECEIVE, QuotedSide.PAY):
+        irs = IRSQuote(
+            quoted_side=side,
+            term=Term(2, TermUnit.Y, cl),
+            adj_convention=cl,
+            quote_date=T,
+            collateral_index=RISKLESS,
+            fixed_leg=FixedLegSpec(
+                CLF, PaymentFrequency.SEMIANNUAL, cl, Rate(RateConvention(), 0.02)
+            ),
+            floating_leg=FloatingLegSpec(
+                CLF,
+                PaymentFrequency.SEMIANNUAL,
+                cl,
+                uf_idx_a,
+                Rate(RateConvention(), 0.0),
+            ),
+        ).get_instrument()
+        assert irs.payment_currency == CLP
+
+    basis = IRBasisQuote(
+        quoted_side=QuotedSide.RECEIVE,
+        term=Term(2, TermUnit.Y, cl),
+        adj_convention=cl,
+        quote_date=T,
+        collateral_index=RISKLESS,
+        receive_leg=FloatingLegSpec(
+            CLF, PaymentFrequency.SEMIANNUAL, cl, uf_idx_a, Rate(RateConvention(), 0.0)
+        ),
+        pay_leg=FloatingLegSpec(
+            CLF,
+            PaymentFrequency.SEMIANNUAL,
+            cl,
+            uf_idx_b,
+            Rate(RateConvention(), 0.001),
+        ),
+    ).get_instrument()
+    assert basis.payment_currency == CLP

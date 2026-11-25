@@ -112,7 +112,9 @@ class Currency:
     def __init__(self, name: CurrencyName, settles_in: "Currency | None" = None):
         self.name = name
         self.locality: Locality = _CURRENCY_LOCALITY_MAP[name]
-        self.settles_in = settles_in
+        self.settles_in = (
+            _CURRENCY_SETTLEMENT_MAP.get(name) if settles_in is None else settles_in
+        )
 
     @property
     def value(self) -> str:
@@ -142,6 +144,8 @@ class Currency:
         return self.name.value
 
 
+_CURRENCY_SETTLEMENT_MAP: dict[CurrencyName, Currency] = {}
+
 Currency.USD = Currency(CurrencyName.USD)
 Currency.CAD = Currency(CurrencyName.CAD)
 Currency.EUR = Currency(CurrencyName.EUR)
@@ -166,7 +170,8 @@ Currency.SEK = Currency(CurrencyName.SEK)
 Currency.NOK = Currency(CurrencyName.NOK)
 Currency.PEN = Currency(CurrencyName.PEN)
 # The UF is a CLP unit of account: UF flows are paid in CLP at the UF of their fixing.
-Currency.CLF = Currency(CurrencyName.CLF, settles_in=Currency.CLP)
+_CURRENCY_SETTLEMENT_MAP[CurrencyName.CLF] = Currency.CLP
+Currency.CLF = Currency(CurrencyName.CLF)
 
 # Spot lag of an FX pair: business days, on the joint calendar of both currencies,
 # from the trade date to the value date of a spot deal. Keyed by the two currencies

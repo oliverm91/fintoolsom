@@ -17,6 +17,10 @@ CLF, CLP, USD = Currency.CLF, Currency.CLP, Currency.USD
 def test_clf_is_a_non_deliverable_currency_settled_in_clp():
     assert not CLF.is_deliverable and CLF.settlement_currency is CLP
     assert CLP.is_deliverable and CLP.settlement_currency is CLP
+    constructed = Currency(CurrencyName.CLF)
+    assert constructed == CLF
+    assert not constructed.is_deliverable
+    assert constructed.settlement_currency is CLP
 
 
 def test_every_currency_name_has_a_declared_constant():

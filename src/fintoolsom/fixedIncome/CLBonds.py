@@ -694,7 +694,18 @@ class CLBond:
                 - amount
             ) / div_value
 
-        irr_value = newton(objective_function, x0=initial_guess, tol=tol, maxiter=100)
+        target_pv = amount / ((self.notional / 100.0) * fx)
+        try:
+            irr_value = newton(
+                objective_function, x0=initial_guess, tol=tol, maxiter=100
+            )
+        except RuntimeError:
+            irr_value = self.get_irr_from_present_value(
+                date,
+                target_pv,
+                irr_rate_convention,
+                initial_guess=initial_guess,
+            ).rate
         rate_value = round(irr_value, 6)
         newton_result = self._get_amount_value_rate_value(
             date, rate_value, irr_rate_convention, fx=fx
@@ -703,14 +714,16 @@ class CLBond:
         if newton_result != amount:
             direction = 1 if newton_result > amount else -1
             while True:
-                rate_value += 0.000001 * direction
+                rate_value = round(rate_value + 0.000001 * direction, 6)
                 newton_result_i = self._get_amount_value_rate_value(
                     date, rate_value, irr_rate_convention, fx=fx
                 )
+                if newton_result_i == amount:
+                    break
                 direction_i = 1 if newton_result_i > amount else -1
                 if direction_i != direction:
                     if abs(newton_result_i - amount) > abs(newton_result - amount):
-                        rate_value -= 0.000001 * direction
+                        rate_value = round(rate_value - 0.000001 * direction, 6)
                     break
                 else:
                     newton_result = newton_result_i

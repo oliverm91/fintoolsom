@@ -548,17 +548,18 @@ class IRSQuote(_SwapQuote):
             maturity_date=mat,
             payment_lag=self.floating_leg.payment_lag,
         )
+        payment_ccy = self.fixed_leg.currency.settlement_currency
         if self.quoted_side == QuotedSide.RECEIVE:
             return Swap(
                 receive_leg=fixed,
                 pay_leg=floating,
-                payment_currency=self.fixed_leg.currency,
+                payment_currency=payment_ccy,
                 collateral_index=self.collateral_index,
             )
         return Swap(
             receive_leg=floating,
             pay_leg=fixed,
-            payment_currency=self.fixed_leg.currency,
+            payment_currency=payment_ccy,
             collateral_index=self.collateral_index,
         )
 
@@ -635,7 +636,7 @@ class IRBasisQuote(_SwapQuote):
         return Swap(
             receive_leg=_build(self.receive_leg),
             pay_leg=_build(self.pay_leg),
-            payment_currency=self.receive_leg.currency,
+            payment_currency=self.receive_leg.currency.settlement_currency,
             collateral_index=self.collateral_index,
         )
 

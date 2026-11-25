@@ -68,10 +68,16 @@ def get_irr(
     """
 
     future_flows = [
-        (dt, cf) for dt, cf in zip(dates, cash_flows) if dt > valuation_date
+        (dt, cf)
+        for dt, cf in zip(dates, cash_flows, strict=True)
+        if dt > valuation_date
     ]
     if len(future_flows) == 0:
         raise ValueError("No cash flows after valuation date")
+    if initial_guess <= -1.0:
+        raise ValueError(
+            f"initial_guess must be greater than -1.0; got {initial_guess}."
+        )
     dates, cash_flows = zip(*future_flows)
 
     cash_flows = np.array(cash_flows, dtype=np.float64)
@@ -79,16 +85,25 @@ def get_irr(
         [(dt - valuation_date).days / base for dt in dates], dtype=np.float64
     )
 
-    irr = initial_guess
+    scale = max(1.0, abs(float(pv)), float(np.sum(np.abs(cash_flows))))
+    tol = max(target_error, 1e-13 * scale)
+    irr = float(initial_guess)
+    npv = float("nan")
     for _ in range(max_iterations):
         df_no_exp = 1.0 / (1.0 + irr)
         pvs = cash_flows * np.power(df_no_exp, terms)
-        npv = pvs.sum() - pv  # Error in valuation
-        if abs(npv) < target_error:
+        npv = float(pvs.sum() - pv)  # Error in valuation
+        if abs(npv) <= tol:
             return float(irr)
 
-        delta = -np.dot(terms, pvs * df_no_exp)  # Derivative of NPV w.r.t. irr
-        irr -= npv / delta  # Newton-Raphson step: -f(x)/f'(x)
+        delta = float(-np.dot(terms, pvs * df_no_exp))  # Derivative of NPV w.r.t. irr
+        if delta == 0.0 or not np.isfinite(delta):
+            break
+        next_irr = irr - npv / delta  # Newton-Raphson step: -f(x)/f'(x)
+        # Keep 1 + irr strictly positive: damp any step that crosses the -1.0 singularity.
+        if next_irr <= -1.0:
+            next_irr = -1.0 + 0.5 * (1.0 + irr)
+        irr = next_irr
 
     raise RuntimeError(
         f"IRR calculation did not converge after {max_iterations} iterations. Final NPV error: {npv}"

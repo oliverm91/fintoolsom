@@ -837,40 +837,44 @@ class _NelsonSiegelModel:
         """Betas and humps fitted to continuous Act/365 zero rates at year fractions
         `t`, as :meth:`calibrate_from_curve` does; given `humps` only the betas."""
 
-        def gram_inverse(design: np.ndarray) -> np.ndarray:
-            # Equal humps make NSS singular: then the pseudo-inverse.
-            gram = design.T @ design
-            try:
-                return np.linalg.inv(gram)
-            except np.linalg.LinAlgError:
-                return np.linalg.pinv(gram)
+        def solve_svd(design: np.ndarray):
+            """Thin SVD of `design` with rank truncation for collinear humps.
+
+            Avoids forming normal equations ``X'X``, whose squared condition number
+            loses precision when two NSS humps are close together.
+            """
+            u, s, vt = np.linalg.svd(design, full_matrices=False)
+            cutoff = max(design.shape) * np.finfo(float).eps * (s[0] if s.size else 0.0)
+            keep = s > cutoff
+            return u[:, keep], s[keep], vt[keep, :]
+
+        def fit_betas(design: np.ndarray) -> np.ndarray:
+            u, s, vt = solve_svd(design)
+            return vt.T @ ((u.T @ target_rates) / s)
 
         if humps is not None:
             fixed = self._checked_humps(humps)
             design = self._calibration_design(t, fixed)
-            return gram_inverse(design) @ (design.T @ target_rates), fixed
+            return fit_betas(design), fixed
 
         def residuals(humps: np.ndarray) -> np.ndarray:
             design = self._calibration_design(t, humps)
-            return (
-                design @ (gram_inverse(design) @ (design.T @ target_rates))
-                - target_rates
-            )
+            return design @ fit_betas(design) - target_rates
 
         def jacobian(humps: np.ndarray) -> np.ndarray:
-            # r = X b - y with b = G⁻¹ X'y, G = X'X, P = X G⁻¹ X'. For each hump:
-            # dr/dhump = (I - P) dX b - X G⁻¹ dX' r.
+            # r = X b - y with b = X⁺ y, P = X X⁺ = U U'. For each hump:
+            # dr/dhump = (I - P) dX b - (X⁺)' dX' r, where (X⁺)' = U Σ⁻¹ V'.
             design, derivatives = self._design_and_derivatives(t, humps)
-            inverse = gram_inverse(design)
-            betas = inverse @ (design.T @ target_rates)
+            u, s, vt = solve_svd(design)
+            betas = vt.T @ ((u.T @ target_rates) / s)
             residual = design @ betas - target_rates
             columns = []
             for derivative in derivatives:
                 moved = derivative @ betas
                 columns.append(
                     moved
-                    - design @ (inverse @ (design.T @ moved))
-                    - design @ (inverse @ (derivative.T @ residual))
+                    - u @ (u.T @ moved)
+                    - u @ ((vt @ (derivative.T @ residual)) / s)
                 )
             return np.column_stack(columns)
 
@@ -880,7 +884,7 @@ class _NelsonSiegelModel:
             x0 = np.asarray(initial_guess, dtype=float)
         fitted_humps = self._least_squares(residuals, jacobian, x0, 0)
         design = self._calibration_design(t, fitted_humps)
-        return gram_inverse(design) @ (design.T @ target_rates), fitted_humps
+        return fit_betas(design), fitted_humps
 
     def _grid_start(
         self,
@@ -1162,7 +1166,8 @@ class _NelsonSiegelModel:
             full = np.stack(columns, axis=-1)
             values, vectors = np.linalg.eigh(0.5 * (full + full.swapaxes(1, 2)))
             values = np.abs(values)
-            values = np.maximum(values, 1e-10 * values.max(axis=1, keepdims=True))
+            vmax = values.max(axis=1, keepdims=True)
+            values = np.where(vmax > 0, np.maximum(values, 1e-10 * vmax), 1.0)
             return (vectors * values[:, None, :]) @ vectors.swapaxes(1, 2)
 
         every = np.arange(n_curves)
@@ -1175,13 +1180,22 @@ class _NelsonSiegelModel:
             u_idx, g = u[idx], gradient[idx]
             held = ((u_idx <= low) & (g > 0)) | ((u_idx >= high) & (g < 0))
             free = ~held
+            diag_scale = np.where(scale[idx] > 0, scale[idx], 1.0)
             system = curvature[idx] + damping[idx, None, None] * (
-                scale[idx][:, :, None] * eye
+                diag_scale[:, :, None] * eye
             )
             system = (
                 system * (free[:, :, None] & free[:, None, :]) + eye * held[:, :, None]
             )
-            step = np.linalg.solve(system, (-g * free)[..., None])[..., 0]
+            try:
+                step = np.linalg.solve(system, (-g * free)[..., None])[..., 0]
+            except np.linalg.LinAlgError:
+                step = np.array(
+                    [
+                        np.linalg.lstsq(s_mat, rhs, rcond=None)[0]
+                        for s_mat, rhs in zip(system, -g * free)
+                    ]
+                )
             # Shorten the step to the bounds along its direction: clipping each hump
             # alone turns it, and can push a fit into another basin. A step blocked
             # at once (a free hump on its bound stepping out) is clipped instead.
@@ -1437,11 +1451,22 @@ class _NelsonSiegelModel:
             held = ((v_idx <= lower) & (g > 0)) | ((v_idx >= upper) & (g < 0))
             free = ~held
             scale = np.diagonal(normal[idx], axis1=1, axis2=2)
-            system = normal[idx] + damping[idx, None, None] * (scale[:, :, None] * eye)
+            diag_scale = np.where(scale > 0, scale, 1.0)
+            system = normal[idx] + damping[idx, None, None] * (
+                diag_scale[:, :, None] * eye
+            )
             system = (
                 system * (free[:, :, None] & free[:, None, :]) + eye * held[:, :, None]
             )
-            step = np.linalg.solve(system, (-g * free)[..., None])[..., 0]
+            try:
+                step = np.linalg.solve(system, (-g * free)[..., None])[..., 0]
+            except np.linalg.LinAlgError:
+                step = np.array(
+                    [
+                        np.linalg.lstsq(s_mat, rhs, rcond=None)[0]
+                        for s_mat, rhs in zip(system, -g * free)
+                    ]
+                )
             largest = np.max(np.abs(step[:, n_betas:]), axis=1)
             step *= np.minimum(1.0, _MAX_LOG_HUMP_STEP / np.maximum(largest, 1e-300))[
                 :, None

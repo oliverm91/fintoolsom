@@ -302,6 +302,26 @@ def test_irr_from_amount_round_trips_in_the_default_or_a_given_convention():
     assert bond.get_amount_value(t, given) == linear
 
 
+def test_get_irr_from_amount_round_trips_small_notional_and_short_maturity():
+    btu = clbond_factory.btu0190930()
+    t = date(2026, 6, 24)
+    amt_lin = btu.get_amount_value(t, rate(0.0727, lin_act360()), fx=1.0)
+    irr_lin = btu.get_irr_from_amount(
+        t, amt_lin, irr_rate_convention=lin_act360(), fx=1.0
+    )
+    assert btu.get_amount_value(t, irr_lin, fx=1.0) == amt_lin
+
+    amt_comp = btu.get_amount_value(t, rate(0.0305), fx=1.0)
+    irr_comp = btu.get_irr_from_amount(t, amt_comp, fx=1.0)
+    assert btu.get_amount_value(t, irr_comp, fx=1.0) == amt_comp
+
+    btp = clbond_factory.btp0470930()
+    t_near = date(2030, 8, 2)
+    amt_near = btp.get_amount_value(t_near, rate(0.071))
+    irr_near = btp.get_irr_from_amount(t_near, amt_near)
+    assert btp.get_amount_value(t_near, irr_near) == amt_near
+
+
 # ── Duration on a curve ─────────────────────────────────────────────────────
 
 

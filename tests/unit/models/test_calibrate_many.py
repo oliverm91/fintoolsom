@@ -249,3 +249,48 @@ def test_a_warm_start_reaches_the_same_bond_fits():
 
 def test_no_bond_sets_give_no_models():
     assert NelsonSiegel.calibrate_many_from_bonds([]) == ([], [])
+
+
+def test_zero_rate_curves_and_bonds_do_not_crash_with_singular_matrix():
+    knots = [TODAY, *(TODAY + timedelta(days=round(365 * y)) for y in (1, 2, 5, 10))]
+    zero_curve = PillarCurve(
+        TODAY, knots, [0.0] * (len(knots) - 1), InterpolationMethod.PiecewiseConstant
+    )
+    for cls in (NelsonSiegel, NelsonSiegelSvensson):
+        models, errors = cls.calibrate_many_from_curves([zero_curve])
+        assert len(models) == 1
+        assert max(abs(e["error_bps"]) for e in errors[0]) < 1e-6
+
+    zero_bonds = [
+        (
+            clbond_factory.bullet_clbond(
+                start=TODAY, n_coupons=2 * y, coupon_amount=1.0
+            ),
+            Rate(comp_act365(), 0.0),
+        )
+        for y in (1, 2, 3, 5, 7, 10)
+    ]
+    for cls in (NelsonSiegel, NelsonSiegelSvensson):
+        models, errors = cls.calibrate_many_from_bonds([(TODAY, zero_bonds)])
+        assert len(models) == 1
+        assert max(abs(e["error_bps"]) for e in errors[0]) < 1e-6
+
+    sets = _bond_sets(2)
+    models, errors = NelsonSiegelSvensson.calibrate_many_from_bonds(
+        sets, initial_guess=[0.05, -0.01, 0.02, 0.0, 1.5, 8.0]
+    )
+    assert len(models) == 2
+    assert all(np.isfinite(m.get_params()).all() for m in models)
+
+
+def test_nss_close_humps_on_flat_curve_stays_accurate():
+    knots = [
+        TODAY,
+        *(TODAY + timedelta(days=round(365 * y)) for y in (0.5, 1, 2, 5, 10, 20)),
+    ]
+    flat = PillarCurve(
+        TODAY, knots, [0.05] * (len(knots) - 1), InterpolationMethod.PiecewiseConstant
+    )
+    nss = NelsonSiegelSvensson()
+    errors = nss.calibrate_from_curve(flat, humps=[2.5, 2.50000001])
+    assert max(abs(e["error_bps"]) for e in errors) < 1e-6
